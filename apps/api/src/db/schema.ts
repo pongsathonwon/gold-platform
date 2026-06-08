@@ -1,11 +1,5 @@
-import { pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { users } from "./schema/user.js";
 
-export const users = pgTable("users", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-
+export { users };
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
