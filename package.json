@@ -10,7 +10,9 @@
     "type-check": "turbo type-check",
     "db:generate": "turbo db:generate",
     "db:migrate": "turbo db:migrate",
-    "db:studio": "turbo db:studio"
+    "db:studio": "turbo db:studio",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
   },
   "devDependencies": {
     "turbo": "^2.5.4",
