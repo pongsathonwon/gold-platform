@@ -2,9 +2,9 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { env } from "./lib/env.js";
-import { authRouter } from "./routes/auth.js";
-import { usersRouter } from "./routes/users.js";
+import { env } from "./infrastructure/env.js";
+import { authRouter } from "./infrastructure/http/routes/auth.routes.js";
+import { usersRouter } from "./infrastructure/http/routes/users.routes.js";
 
 const app = new Hono()
   .use(logger())
@@ -12,7 +12,6 @@ const app = new Hono()
   .route("/auth", authRouter)
   .route("/users", usersRouter);
 
-// Export the app type for the Hono RPC client
 export type AppType = typeof app;
 
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
