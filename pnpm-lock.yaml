@@ -17,6 +17,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@gold-platform/types':
+        specifier: workspace:*
+        version: link:../../packages/types
       '@hono/node-server':
         specifier: ^1.13.8
         version: 1.19.14(hono@4.12.23)
@@ -54,6 +57,9 @@ importers:
       '@gold-platform/api':
         specifier: workspace:*
         version: link:../api
+      '@gold-platform/types':
+        specifier: workspace:*
+        version: link:../../packages/types
       '@tanstack/react-query':
         specifier: ^5.75.8
         version: 5.101.0(react@19.2.7)
@@ -82,6 +88,16 @@ importers:
       vite:
         specifier: ^6.3.5
         version: 6.4.3(@types/node@22.19.20)(tsx@4.22.4)
+
+  packages/types:
+    dependencies:
+      zod:
+        specifier: ^3.24.4
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
 
 packages:
 

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@gold-platform/api": "workspace:*",
+    "@gold-platform/types": "workspace:*",
     "@tanstack/react-query": "^5.75.8",
     "hono": "^4.7.11",
     "react": "^19.1.0",

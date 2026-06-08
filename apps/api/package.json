@@ -20,6 +20,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@gold-platform/types": "workspace:*",
     "@hono/node-server": "^1.13.8",
     "@hono/zod-validator": "^0.4.3",
     "drizzle-orm": "^0.44.1",

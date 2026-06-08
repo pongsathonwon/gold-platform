@@ -1,14 +1,9 @@
 import { zValidator } from "@hono/zod-validator";
+import { createUserSchema } from "@gold-platform/types";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { z } from "zod";
 import { db } from "../db/index.js";
 import { users } from "../db/schema.js";
-
-const createUserSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().email(),
-});
 
 export const usersRouter = new Hono()
   .get("/", async (c) => {

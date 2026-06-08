@@ -30,7 +30,8 @@ pnpm install
 ### 2. Configure environment
 
 ```bash
-cp .env.example apps/api/.env
+cp apps/api/.env.example apps/api/.env
+cp apps/web/.env.example apps/web/.env
 ```
 
 Edit `apps/api/.env` if needed (defaults match the Docker Compose setup):
@@ -38,6 +39,12 @@ Edit `apps/api/.env` if needed (defaults match the Docker Compose setup):
 ```env
 DATABASE_URL=postgres://postgres:password@localhost:5432/gold_platform
 PORT=3000
+```
+
+`apps/web/.env`:
+
+```env
+VITE_API_URL=http://localhost:3000
 ```
 
 ### 3. Start PostgreSQL
@@ -81,13 +88,19 @@ gold-platform/
 │   │   │   ├── routes/
 │   │   │   │   └── users.ts   # Example CRUD routes
 │   │   │   └── index.ts       # Entry point — exports AppType
+│   │   ├── .env.example
 │   │   └── drizzle.config.ts
 │   └── web/                   # React frontend
+│       ├── src/
+│       │   ├── api/
+│       │   │   └── client.ts  # Hono RPC typed client
+│       │   └── components/
+│       │       └── UserList.tsx
+│       └── .env.example
+├── packages/
+│   └── types/                  # Shared Zod schemas + inferred types
 │       └── src/
-│           ├── api/
-│           │   └── client.ts  # Hono RPC typed client
-│           └── components/
-│               └── UserList.tsx
+│           └── index.ts
 ├── docker-compose.yml
 ├── pnpm-workspace.yaml
 ├── turbo.json
@@ -107,7 +120,10 @@ pnpm --filter @gold-platform/api add -D <package>   # dev dep
 pnpm --filter @gold-platform/web add <package>
 pnpm --filter @gold-platform/web add -D <package>
 
-# Add to both
+# Add a shared dep to packages/types
+pnpm --filter @gold-platform/types add <package>
+
+# Add to both apps
 pnpm --filter @gold-platform/api --filter @gold-platform/web add <package>
 ```
 
@@ -163,9 +179,36 @@ pnpm --filter @gold-platform/api --filter @gold-platform/web add <package>
 
 ---
 
+## Shared Types (`packages/types`)
+
+Zod schemas that are used by **both** the API and the web live in `@gold-platform/types`. This avoids duplication and keeps validation logic in one place.
+
+```ts
+// packages/types/src/index.ts
+export const createUserSchema = z.object({ ... });
+export type CreateUserInput = z.infer<typeof createUserSchema>;
+```
+
+**API** — uses it for request validation:
+
+```ts
+import { createUserSchema } from "@gold-platform/types";
+.post("/", zValidator("json", createUserSchema), async (c) => { ... })
+```
+
+**Web** — uses the same schema for form validation:
+
+```ts
+import { createUserSchema, type CreateUserInput } from "@gold-platform/types";
+```
+
+> Only put schemas here if both apps need them. DB-specific types (Drizzle `$inferSelect`) stay in the API.
+
+---
+
 ## Adding a New Route
 
-1. Create `apps/api/src/routes/your-resource.ts`
-2. Define the router with typed validators
+1. Add shared Zod schemas to `packages/types/src/index.ts` if the web will need them
+2. Create `apps/api/src/routes/your-resource.ts` and import schemas from `@gold-platform/types`
 3. Mount it in `apps/api/src/index.ts` via `.route("/your-resource", yourRouter)`
 4. The web client picks up the new routes automatically via `AppType`
