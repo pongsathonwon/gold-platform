@@ -2,12 +2,12 @@
 
 Full-stack monorepo with end-to-end type safety.
 
-| Layer     | Stack                              |
-| --------- | ---------------------------------- |
-| Backend   | Hono + Drizzle ORM + PostgreSQL    |
-| Frontend  | React + Vite + TanStack Query      |
-| Type safety | Hono RPC (`hc<AppType>`)        |
-| Monorepo  | pnpm workspaces + Turborepo        |
+| Layer       | Stack                                          |
+| ----------- | ---------------------------------------------- |
+| Backend     | Hono + Drizzle ORM + PostgreSQL + Effect.ts    |
+| Frontend    | React + Vite + MUI + TanStack Query + React Router |
+| Type safety | Hono RPC (`hc<AppType>`)                       |
+| Monorepo    | pnpm workspaces + Turborepo                    |
 
 ---
 
@@ -31,20 +31,14 @@ pnpm install
 
 ```bash
 cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env
 ```
 
-Edit `apps/api/.env` if needed (defaults match the Docker Compose setup):
+Edit `apps/api/.env`:
 
 ```env
 DATABASE_URL=postgres://postgres:password@localhost:5432/gold_platform
 PORT=3000
-```
-
-`apps/web/.env`:
-
-```env
-VITE_API_URL=http://localhost:3000
+JWT_SECRET=change-me-to-a-random-32-char-secret-key
 ```
 
 ### 3. Start PostgreSQL
@@ -78,27 +72,39 @@ pnpm dev
 ```
 gold-platform/
 ├── apps/
-│   ├── api/                    # Hono backend
+│   ├── api/                          # Hono backend (hexagonal architecture)
 │   │   ├── src/
-│   │   │   ├── db/
-│   │   │   │   ├── index.ts   # Drizzle client
-│   │   │   │   └── schema.ts  # Table definitions
-│   │   │   ├── lib/
-│   │   │   │   └── env.ts     # Zod-validated env vars
-│   │   │   ├── routes/
-│   │   │   │   └── users.ts   # Example CRUD routes
-│   │   │   └── index.ts       # Entry point — exports AppType
+│   │   │   ├── core/                 # Domain logic
+│   │   │   │   ├── auth/
+│   │   │   │   │   ├── adapter/      # auth.routes.ts — POST /auth/register, /auth/login
+│   │   │   │   │   ├── application/  # auth.usecase.ts
+│   │   │   │   │   ├── domain/       # auth.error.ts
+│   │   │   │   │   └── port/         # auth.port.ts
+│   │   │   │   └── user/
+│   │   │   │       ├── adapter/      # user.routes.ts, user.repository.ts
+│   │   │   │       ├── application/  # user.usecase.ts
+│   │   │   │       ├── domain/       # user.entity.ts, user.error.ts
+│   │   │   │       └── port/         # user.port.ts
+│   │   │   ├── infrastructure/
+│   │   │   │   ├── db/
+│   │   │   │   │   ├── client.ts     # Drizzle client (Effect Layer)
+│   │   │   │   │   └── schema/       # Table definitions
+│   │   │   │   ├── http/middleware/  # auth.middleware.ts (JWT)
+│   │   │   │   ├── runtime.ts        # Effect ManagedRuntime wiring
+│   │   │   │   └── utils/            # env.ts, jwt.ts, hasher.ts, validator.ts
+│   │   │   └── index.ts              # Entry point — exports AppType
 │   │   ├── .env.example
 │   │   └── drizzle.config.ts
-│   └── web/                   # React frontend
-│       ├── src/
-│       │   ├── api/
-│       │   │   └── client.ts  # Hono RPC typed client
-│       │   └── components/
-│       │       └── UserList.tsx
-│       └── .env.example
+│   └── web/                          # React frontend
+│       └── src/
+│           ├── api/
+│           │   └── client.ts         # Hono RPC typed client
+│           ├── components/
+│           │   └── UserList.tsx
+│           ├── App.tsx               # Router + MUI theme + QueryClientProvider
+│           └── main.tsx
 ├── packages/
-│   └── types/                  # Shared Zod schemas + inferred types
+│   └── types/                        # Shared Zod schemas + inferred types
 │       └── src/
 │           └── index.ts
 ├── docker-compose.yml
@@ -122,9 +128,6 @@ pnpm --filter @gold-platform/web add -D <package>
 
 # Add a shared dep to packages/types
 pnpm --filter @gold-platform/types add <package>
-
-# Add to both apps
-pnpm --filter @gold-platform/api --filter @gold-platform/web add <package>
 ```
 
 ---
@@ -133,11 +136,11 @@ pnpm --filter @gold-platform/api --filter @gold-platform/web add <package>
 
 ### Development
 
-| Command         | Description                        |
-| --------------- | ---------------------------------- |
-| `pnpm dev`      | Start all apps in dev mode         |
-| `pnpm build`    | Build all apps                     |
-| `pnpm type-check` | Run TypeScript checks across all apps |
+| Command            | Description                            |
+| ------------------ | -------------------------------------- |
+| `pnpm dev`         | Start all apps in dev mode             |
+| `pnpm build`       | Build all apps                         |
+| `pnpm type-check`  | Run TypeScript checks across all apps  |
 
 ### Database
 
@@ -145,27 +148,38 @@ pnpm --filter @gold-platform/api --filter @gold-platform/web add <package>
 | ------------------ | ---------------------------------------- |
 | `pnpm db:generate` | Generate migration files from schema     |
 | `pnpm db:migrate`  | Apply pending migrations                 |
-| `pnpm db:studio`   | Open Drizzle Studio (visual DB browser) |
+| `pnpm db:studio`   | Open Drizzle Studio (visual DB browser)  |
 
 ### Docker
 
-| Command            | Description             |
-| ------------------ | ----------------------- |
-| `pnpm docker:up`   | Start PostgreSQL        |
-| `pnpm docker:down` | Stop PostgreSQL         |
+| Command            | Description      |
+| ------------------ | ---------------- |
+| `pnpm docker:up`   | Start PostgreSQL |
+| `pnpm docker:down` | Stop PostgreSQL  |
 
 ---
 
-## How End-to-End Type Safety Works
+## Architecture
 
-1. **API** defines routes with Zod-validated inputs and exports `AppType`:
+### Hexagonal (Ports & Adapters)
 
-   ```ts
-   // apps/api/src/index.ts
-   export type AppType = typeof app;
-   ```
+The API is organized around domain cores. Each core (`auth`, `user`) has:
 
-2. **Web** imports `AppType` as a type-only import and passes it to `hc`:
+- **domain** — entities, error types (no dependencies)
+- **port** — interfaces (contracts) the core exposes or requires
+- **application** — use-case logic using Effect.ts
+- **adapter** — Hono routes (inbound) and Drizzle repositories (outbound)
+
+Infrastructure concerns (DB client, JWT, config) live in `src/infrastructure/` and are wired together as Effect Layers in `runtime.ts`.
+
+### Effect.ts Runtime
+
+Use cases run inside an `Effect.ManagedRuntime` that provides `AppConfig` and `DrizzleClient` as layers. Route handlers call use cases via `appRuntime.runPromise(...)` and pattern-match on `Exit` to map domain errors to HTTP responses.
+
+### End-to-End Type Safety
+
+1. **API** exports `AppType` from `apps/api/src/index.ts`
+2. **Web** imports it as a type-only import and passes it to `hc`:
 
    ```ts
    // apps/web/src/api/client.ts
@@ -175,40 +189,27 @@ pnpm --filter @gold-platform/api --filter @gold-platform/web add <package>
    export const client = hc<AppType>("http://localhost:3000");
    ```
 
-3. The client now has full autocomplete and type inference on every route — request body, query params, and response shape — with no codegen step.
+3. The client has full autocomplete and type inference on every route — request body, query params, and response shape — with no codegen step.
 
 ---
 
 ## Shared Types (`packages/types`)
 
-Zod schemas that are used by **both** the API and the web live in `@gold-platform/types`. This avoids duplication and keeps validation logic in one place.
+Zod schemas used by **both** the API and the web live in `@gold-platform/types`:
 
 ```ts
 // packages/types/src/index.ts
-export const createUserSchema = z.object({ ... });
-export type CreateUserInput = z.infer<typeof createUserSchema>;
+export const registerSchema = z.object({ ... });
+export const loginSchema = z.object({ ... });
 ```
 
-**API** — uses it for request validation:
-
-```ts
-import { createUserSchema } from "@gold-platform/types";
-.post("/", zValidator("json", createUserSchema), async (c) => { ... })
-```
-
-**Web** — uses the same schema for form validation:
-
-```ts
-import { createUserSchema, type CreateUserInput } from "@gold-platform/types";
-```
-
-> Only put schemas here if both apps need them. DB-specific types (Drizzle `$inferSelect`) stay in the API.
+Only put schemas here if both apps need them. DB-specific types (Drizzle `$inferSelect`) stay in the API.
 
 ---
 
 ## Adding a New Route
 
 1. Add shared Zod schemas to `packages/types/src/index.ts` if the web will need them
-2. Create `apps/api/src/routes/your-resource.ts` and import schemas from `@gold-platform/types`
-3. Mount it in `apps/api/src/index.ts` via `.route("/your-resource", yourRouter)`
+2. Create a new core under `apps/api/src/core/your-resource/` following the domain/port/application/adapter structure
+3. Register the router in `apps/api/src/index.ts` via `.route("/your-resource", yourRouter)`
 4. The web client picks up the new routes automatically via `AppType`
