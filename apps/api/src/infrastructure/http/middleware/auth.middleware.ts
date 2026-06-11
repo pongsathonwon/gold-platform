@@ -1,4 +1,9 @@
 import { jwt } from "hono/jwt";
-import { env } from "../../env.js";
+import { createMiddleware } from "hono/factory";
 
-export const authMiddleware = jwt({ secret: env.JWT_SECRET, alg: "HS256" });
+const secret = process.env.JWT_SECRET;
+if (!secret) throw new Error("JWT_SECRET is not set");
+
+export const authMiddleware = createMiddleware(async (c, next) => {
+  return jwt({ secret, alg: "HS256" })(c, next);
+});

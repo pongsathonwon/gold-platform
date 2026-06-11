@@ -25,3 +25,18 @@ export const loginSchema = z.object({
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+
+export const publicUserSchema = z.object({
+  id: z.number(),
+  name: z.string().min(1),
+  email: z.string().email(),
+})
+
+export const LoginResponseSchema = z.object({
+  user: publicUserSchema,
+  token: z.string().jwt()
+})
+
+export type PublicUser = z.infer<typeof publicUserSchema>
+
+export type AuthResponse = z.infer<typeof LoginResponseSchema>

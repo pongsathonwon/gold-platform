@@ -1,10 +1,12 @@
 import { serve } from "@hono/node-server";
+import { Effect } from "effect";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { env } from "./infrastructure/env.js";
-import { authRouter } from "./infrastructure/http/routes/auth.routes.js";
-import { usersRouter } from "./infrastructure/http/routes/users.routes.js";
+import { AppConfig } from "./infrastructure/utils/env.js";
+import { appRuntime } from "./infrastructure/runtime.js";
+import { authRouter } from "./core/auth/adapter/auth.routes.js";
+import { usersRouter } from "./core/user/adapter/user.routes.js";
 
 const app = new Hono()
   .use(logger())
@@ -14,6 +16,14 @@ const app = new Hono()
 
 export type AppType = typeof app;
 
-serve({ fetch: app.fetch, port: env.PORT }, (info) => {
-  console.log(`API running at http://localhost:${info.port}`);
+const program = Effect.gen(function* () {
+  const config = yield* AppConfig;
+  serve({ fetch: app.fetch, port: config.app.port }, (info) => {
+    console.log(`API running at http://localhost:${info.port}`);
+  });
+});
+
+appRuntime.runPromise(program).catch((err) => {
+  console.error("Failed to initialize runtime:", err);
+  process.exit(1);
 });
