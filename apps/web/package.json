@@ -11,12 +11,17 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
     "@gold-platform/api": "workspace:*",
     "@gold-platform/types": "workspace:*",
+    "@mui/icons-material": "^9.1.1",
+    "@mui/material": "^9.1.1",
     "@tanstack/react-query": "^5.75.8",
     "hono": "^4.7.11",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.17.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.5",
