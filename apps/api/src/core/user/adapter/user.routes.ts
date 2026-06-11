@@ -3,6 +3,7 @@ import { appRuntime } from "../../../infrastructure/runtime.js";
 import { UserManagementUseCase, } from "../application/user.usecase.js";
 import { Cause, Exit } from "effect";
 import { z } from "zod";
+import { zValidator } from "@hono/zod-validator";
 
 const userManager = new UserManagementUseCase(appRuntime);
 
@@ -24,13 +25,9 @@ export const usersRouter = new Hono()
     }
 
   })
-  .get("/:id", async (c) => {
-    const id = c.req.param("id");
-    const parsingResult = z.coerce.number().safeParse(id);
-    if (parsingResult.error) {
-      return c.json({ error: parsingResult.error.message }, 400)
-    }
-    const result = await userManager.findUserById(parsingResult.data)
+  .get("/:id", zValidator('param', z.coerce.number()), async (c) => {
+    const id = c.req.valid('param');
+    const result = await userManager.findUserById(id)
     if (Exit.isSuccess(result)) {
       return c.json({ user: result.value }, 200)
     }
@@ -46,13 +43,9 @@ export const usersRouter = new Hono()
       case "UserNotFoundError": return c.json({ error: 'user not found' }, 404)
     }
   })
-  .delete("/:id", async (c) => {
-    const id = c.req.param("id");
-    const parsingResult = z.coerce.number().safeParse(id);
-    if (parsingResult.error) {
-      return c.json({ error: parsingResult.error.message }, 400)
-    }
-    const result = await userManager.deleteUserById(parsingResult.data)
+  .delete("/:id", zValidator('param', z.coerce.number()), async (c) => {
+    const id = c.req.valid('param');
+    const result = await userManager.deleteUserById(id)
     if (Exit.isSuccess(result)) {
       return c.json({ user: result.value }, 200)
     }
