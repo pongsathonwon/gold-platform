@@ -39,13 +39,13 @@ const mapDatabaseConnectionError = (error: unknown) => {
 
 export const makeConnection = (url: string) =>
   Effect.try({
-    try: () => postgres(url),
+    try: () => postgres(url, { types: { date: { to: 1082, from: [1082], serialize: (d: string) => d, parse: (d: string) => d } } }),
     catch: (error) => mapDatabaseConnectionError(error),
   });
 
 export const makeDrizzle = (pool: postgres.Sql) =>
   Effect.try({
-    try: () => drizzle(pool, { schema }),
+    try: () => drizzle(pool, { schema, casing: 'snake_case' }),
     catch: (error) =>
       new DrizzleInitializeError({
         message: "cannot initialize drizzle",
