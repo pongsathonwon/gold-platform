@@ -7,12 +7,14 @@ import { AppConfig } from "./infrastructure/utils/env.js";
 import { appRuntime } from "./infrastructure/runtime.js";
 import { authRouter } from "./core/auth/adapter/auth.routes.js";
 import { usersRouter } from "./core/user/adapter/user.routes.js";
+import { masterDataRouter } from "./core/master/adapter/master-data.router.js";
 
 const app = new Hono()
   .use(logger())
   .use(cors({ origin: "http://localhost:5173" }))
   .route("/auth", authRouter)
-  .route("/users", usersRouter);
+  .route("/users", usersRouter)
+  .route("/master-data", masterDataRouter);
 
 export type AppType = typeof app;
 
