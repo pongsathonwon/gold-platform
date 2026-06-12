@@ -13,14 +13,14 @@ export type ProductType = typeof productTypes.$inferSelect
 
 
 // what stamp on gold
-export const goldBrands = pgTable("gold_brands", {
+export const brands = pgTable("gold_brands", {
     id: varchar({ length: 10 }).primaryKey(),
     brand: varchar().notNull(),
     nonFungible: boolean().default(false).notNull(),
     active: boolean().default(true).notNull(),
 })
 
-export type GoldBrand = typeof goldBrands.$inferSelect
+export type GoldBrand = typeof brands.$inferSelect
 
 export const unitOfMeasureEnum = pgEnum('unit_of_measure', ['g', 'gb'])
 
@@ -56,6 +56,13 @@ export const supplierProductTypes = pgTable('supplier_product_types', {
     productTypeId: varchar({ length: 10 }).references(() => productTypes.id),
 }, (table) => [
     primaryKey({ columns: [table.supplierId, table.productTypeId] })
+])
+// added as utility for supplier and brand auto pick
+export const supplierBrands = pgTable('suppler_brands', {
+    supplierId: uuid().references(() => suppliers.id),
+    brandId: varchar({ length: 10 }).references(() => brands.id),
+}, (table) => [
+    primaryKey({ columns: [table.supplierId, table.brandId] })
 ])
 
 export const unitConversions = pgTable('unit_conversion', {
