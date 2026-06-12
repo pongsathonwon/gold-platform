@@ -1,11 +1,11 @@
-import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
-import { branches } from "../../../infrastructure/db/schema/master.schema.js";
-import { BranchNotFound, ForViewBranch } from "../port/branch.port.js";
+import { Database, DrizzleClient, RepositoryError } from "../../../../infrastructure/db/client.js";
+import { branches } from "../../../../infrastructure/db/schema/master.schema.js";
+import { BranchNotFound, ForViewBranch } from "../../port/branch.port.js";
 import { Effect } from "effect";
 import { eq } from "drizzle-orm";
 
 class BranchRepository implements ForViewBranch {
-    constructor(private readonly db: Database) {}
+    constructor(private readonly db: Database) { }
 
     listBranches() {
         return Effect.tryPromise({

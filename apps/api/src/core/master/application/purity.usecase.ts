@@ -1,5 +1,5 @@
 import { TApp, } from "../../../infrastructure/runtime.js";
-import { makePurityRepository } from "../adapter/purity.repository.js";
+import { makePurityRepository } from "../adapter/outbound/purity.repository.js";
 import { ForPurityUseCase, PurityRepository } from "../port/purity.port.js";
 import { Effect, Layer } from "effect";
 

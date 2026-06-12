@@ -1,12 +1,12 @@
 import { TApp } from "../../../infrastructure/runtime.js";
-import { makeBranchRepository } from "../adapter/branch.repository.js";
+import { makeBranchRepository } from "../adapter/outbound/branch.repository.js";
 import { BranchRepository, ForBranchUseCase } from "../port/branch.port.js";
 import { Effect, Layer } from "effect";
 
 export class BranchUseCase implements ForBranchUseCase {
     private readonly _repo = Layer.scoped(BranchRepository, makeBranchRepository);
 
-    constructor(private readonly runtime: TApp) {}
+    constructor(private readonly runtime: TApp) { }
 
     listBranches() {
         return this.runtime.runPromiseExit(

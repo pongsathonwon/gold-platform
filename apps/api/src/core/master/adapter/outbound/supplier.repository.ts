@@ -1,11 +1,11 @@
-import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
-import { productTypes, suppliers, supplierProductTypes } from "../../../infrastructure/db/schema/master.schema.js";
-import { ForViewSupplier, SupplierNotFound } from "../port/supplier.port.js";
+import { Database, DrizzleClient, RepositoryError } from "../../../../infrastructure/db/client.js";
+import { productTypes, suppliers, supplierProductTypes } from "../../../../infrastructure/db/schema/master.schema.js";
+import { ForViewSupplier, SupplierNotFound } from "../../port/supplier.port.js";
 import { Effect } from "effect";
 import { eq } from "drizzle-orm";
 
 class SupplierRepository implements ForViewSupplier {
-    constructor(private readonly db: Database) {}
+    constructor(private readonly db: Database) { }
 
     listSuppliers() {
         return Effect.tryPromise({

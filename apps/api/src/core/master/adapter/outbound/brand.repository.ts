@@ -1,11 +1,11 @@
-import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
-import { goldBrands } from "../../../infrastructure/db/schema/master.schema.js";
-import { BrandNotFound, ForViewBrand } from "../port/brand.port.js";
+import { Database, DrizzleClient, RepositoryError } from "../../../../infrastructure/db/client.js";
+import { goldBrands } from "../../../../infrastructure/db/schema/master.schema.js";
+import { BrandNotFound, ForViewBrand } from "../../port/brand.port.js";
 import { Effect } from "effect";
 import { eq } from "drizzle-orm";
 
 class BrandRepository implements ForViewBrand {
-    constructor(private readonly db: Database) {}
+    constructor(private readonly db: Database) { }
 
     listBrands() {
         return Effect.tryPromise({

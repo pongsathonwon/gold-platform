@@ -1,11 +1,11 @@
-import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
-import { barSizes } from "../../../infrastructure/db/schema/master.schema.js";
-import { BarSizeNotFound, ForViewBarSize } from "../port/bar-size.port.js";
+import { Database, DrizzleClient, RepositoryError } from "../../../../infrastructure/db/client.js";
+import { barSizes } from "../../../../infrastructure/db/schema/master.schema.js";
+import { BarSizeNotFound, ForViewBarSize } from "../../port/bar-size.port.js";
 import { Effect } from "effect";
 import { eq } from "drizzle-orm";
 
 class BarSizeRepository implements ForViewBarSize {
-    constructor(private readonly db: Database) {}
+    constructor(private readonly db: Database) { }
 
     listBarSizes() {
         return Effect.tryPromise({

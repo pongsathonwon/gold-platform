@@ -1,10 +1,10 @@
 import { Hono } from "hono";
-import { PurityUserCase } from "../application/purity.usecase.js";
-import { appRuntime } from "../../../infrastructure/runtime.js";
+import { PurityUserCase } from "../../application/purity.usecase.js";
+import { appRuntime } from "../../../../infrastructure/runtime.js";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { handleExit } from "../../../infrastructure/http/errors.js";
-import { PurityErrorTag } from "../port/purity.port.js";
+import { handleExit } from "../../../../infrastructure/http/errors.js";
+import { PurityErrorTag } from "../../port/purity.port.js";
 import { ContentfulStatusCode } from "hono/utils/http-status";
 
 const purityUseCase = new PurityUserCase(appRuntime);

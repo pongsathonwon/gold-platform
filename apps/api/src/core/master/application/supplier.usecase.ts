@@ -1,12 +1,12 @@
 import { TApp } from "../../../infrastructure/runtime.js";
-import { makeSupplierRepository } from "../adapter/supplier.repository.js";
+import { makeSupplierRepository } from "../adapter/outbound/supplier.repository.js";
 import { ForSupplierUseCase, SupplierRepository } from "../port/supplier.port.js";
 import { Effect, Layer } from "effect";
 
 export class SupplierUseCase implements ForSupplierUseCase {
     private readonly _repo = Layer.scoped(SupplierRepository, makeSupplierRepository);
 
-    constructor(private readonly runtime: TApp) {}
+    constructor(private readonly runtime: TApp) { }
 
     listSuppliers() {
         return this.runtime.runPromiseExit(

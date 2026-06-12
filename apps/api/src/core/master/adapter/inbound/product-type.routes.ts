@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { appRuntime } from "../../../infrastructure/runtime.js";
-import { handleExit } from "../../../infrastructure/http/errors.js";
-import { ProductTypeUseCase } from "../application/product-type.usecase.js";
-import { ProductTypeErrorTag } from "../port/product-type.port.js";
+import { appRuntime } from "../../../../infrastructure/runtime.js";
+import { handleExit } from "../../../../infrastructure/http/errors.js";
+import { ProductTypeUseCase } from "../../application/product-type.usecase.js";
+import { ProductTypeErrorTag } from "../../port/product-type.port.js";
 import { ContentfulStatusCode } from "hono/utils/http-status";
 
 const useCase = new ProductTypeUseCase(appRuntime);
