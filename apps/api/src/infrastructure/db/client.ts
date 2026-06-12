@@ -2,12 +2,20 @@ import { drizzle, PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { Context, Data, Effect, Schedule } from "effect";
 import postgres from "postgres";
 import { sql } from "drizzle-orm";
-import * as schema from "./schema/index.js";
 import { AppConfig } from "../utils/env.js";
 
 export class RepositoryError extends Data.TaggedError("RepositoryError")<{ message: string }> { }
 
-export type Database = PostgresJsDatabase<typeof schema>;
+export type Schema = typeof import('../db/schema/index.js');
+
+export type Database = PostgresJsDatabase<Schema>;
+
+export class SchemaError extends Data.TaggedError('SchemaError') { }
+
+const loadSchema = Effect.tryPromise({
+  try: () => import('../db/schema/index.js'),
+  catch: (e) => new SchemaError()
+});
 
 export class DatabaseConnectionError extends Data.TaggedError(
   "DatabaseConnectionError",
@@ -43,15 +51,6 @@ export const makeConnection = (url: string) =>
     catch: (error) => mapDatabaseConnectionError(error),
   });
 
-export const makeDrizzle = (pool: postgres.Sql) =>
-  Effect.try({
-    try: () => drizzle(pool, { schema, casing: 'snake_case' }),
-    catch: (error) =>
-      new DrizzleInitializeError({
-        message: "cannot initialize drizzle",
-        payload: error,
-      }),
-  });
 
 const retrySchedule = Schedule.jitteredWith(Schedule.spaced("1.2 seconds"), {
   min: 0.5,
@@ -65,23 +64,26 @@ const retrySchedule = Schedule.jitteredWith(Schedule.spaced("1.2 seconds"), {
   ),
 );
 
-const healthCheck = (db: PostgresJsDatabase<typeof schema>) =>
+const healthCheck = (db: PostgresJsDatabase<Schema>) =>
   Effect.tryPromise(() => db.execute(sql`select 1`)).pipe(
     Effect.retry(retrySchedule),
     Effect.tap(() => Effect.logInfo("[Database] : connected successfully")),
   );
 
 export class DrizzleClient extends Context.Tag("DrizzleClient")<
-  DrizzleClient,
-  Database
+  DrizzleClient, Database
 >() { }
 
 export const makeClient = Effect.gen(function* () {
   const config = yield* AppConfig;
+  const schema = yield* loadSchema
   const pool = yield* makeConnection(config.database.url);
   yield* Effect.addFinalizer(() => Effect.promise(() => pool.end()));
-  const db = yield* makeDrizzle(pool);
+  const db = drizzle(pool, {
+    schema,
+    casing: 'snake_case'
+  });
   yield* healthCheck(db);
-  return db;
+  return db
 });
 

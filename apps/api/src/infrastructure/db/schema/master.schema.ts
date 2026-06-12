@@ -1,11 +1,15 @@
 import { boolean, date, decimal, integer, pgEnum, pgTable, primaryKey, uuid, varchar, } from "drizzle-orm/pg-core";
 
+
+
 export const productTypes = pgTable("gold_product_type", {
     id: varchar({ length: 10 }).primaryKey(),
     productType: varchar().notNull(),
     supplierTradeable: boolean().default(true).notNull(),
     active: boolean().default(true).notNull()
 })
+
+export type ProductType = typeof productTypes.$inferSelect
 
 // what stamp on gold
 export const goldBrands = pgTable("gold_brands", {
@@ -24,6 +28,8 @@ export const purities = pgTable("purities", {
     unitOfMeasure: unitOfMeasureEnum().notNull(),
     active: boolean().default(true).notNull()
 })
+
+export type Purity = typeof purities.$inferSelect
 
 export const barSizes = pgTable('bar_sizes', {
     id: varchar({ length: 3 }).primaryKey(),

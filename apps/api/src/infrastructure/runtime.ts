@@ -1,5 +1,5 @@
 import { Layer, ManagedRuntime } from "effect";
-import { DatabaseConnectionError, DrizzleClient, DrizzleInitializeError, makeClient } from "./db/client.js";
+import { DatabaseConnectionError, DrizzleClient, DrizzleInitializeError, makeClient, SchemaError } from "./db/client.js";
 import { AppConfig, ConfigError, makeAppConfig } from "./utils/env.js";
 import { UnknownException } from "effect/Cause";
 
@@ -17,4 +17,4 @@ export const appRuntime = ManagedRuntime.make(AppLayer);
 export type TApp = typeof appRuntime
 
 
-export type TBaseError = UnknownException | DrizzleInitializeError | DatabaseConnectionError | ConfigError
+export type TBaseError = UnknownException | DrizzleInitializeError | DatabaseConnectionError | SchemaError | ConfigError
