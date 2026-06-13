@@ -9,6 +9,7 @@ import { authRouter } from "./core/auth/adapter/auth.routes.js";
 import { usersRouter } from "./core/user/adapter/user.routes.js";
 import { masterDataRouter } from "./core/master/adapter/master-data.router.js";
 import { inventoriesRoutes } from "./core/inventory/adapter/inventory.routes.js";
+import { wholesaleSellRoutes } from "./core/wholesale-sell/adapter/wholesale-sell.routes.js";
 
 const app = new Hono()
   .use(logger())
@@ -17,6 +18,7 @@ const app = new Hono()
   .route("/users", usersRouter)
   .route("/master-data", masterDataRouter)
   .route("/inventories", inventoriesRoutes)
+  .route("/wholesale-sell", wholesaleSellRoutes)
   ;
 
 export type AppType = typeof app;
