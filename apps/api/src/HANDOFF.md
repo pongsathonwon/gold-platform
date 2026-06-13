@@ -1,7 +1,7 @@
 # API Handoff Document
 
 **Branch:** `dev`
-**Date:** 2026-06-13
+**Date:** 2026-06-13 (updated)
 
 ---
 
@@ -22,7 +22,7 @@ Internal accounting service. Tracks gold weight in anonymous lots by brand + pur
 **Internal cross-domain commands** (never called from HTTP directly):
 | Command | Called by | Effect |
 |---|---|---|
-| `increment` | wholesale-buy at `RECEIVED`, | Creates a new lot + `+delta` movement |
+| `increment` | wholesale-buy at `RECEIVED` | Creates a new lot + `+delta` movement |
 | `decrement` | wholesale-sell at `SHIPPED`, retail-sell at `SHIPPED` | FIFO drains lots + `-delta` movement per lot |
 | `reverseDecrement` | (available, not yet wired) | Restores lots from original movements |
 
@@ -82,18 +82,39 @@ Every domain follows the same structure:
 
 ```
 core/<domain>/
-  port/<domain>.port.ts         — domain errors, repository interface (Context.Tag), command shapes, allowedTransitions map
-  application/<domain>.usecase.ts — orchestration, inventory side-effects
-  adapter/<domain>.repository.ts  — Drizzle ORM implementation
-  adapter/<domain>.routes.ts      — Hono HTTP routes with Zod validation
-  <domain>.md                     — domain spec
+  port/<domain>.port.ts            — domain errors, repository interface (Context.Tag), command shapes, allowedTransitions map
+  application/<domain>.usecase.ts  — plain Effect functions, orchestration, inventory side-effects
+  adapter/<domain>.repository.ts   — Drizzle ORM implementation
+  adapter/<domain>.routes.ts       — Hono HTTP routes with Zod validation + toHttpError() mapping
+  <domain>.md                      — domain spec
 ```
+
+**All usecases are plain Effect functions** — no classes. The class-based pattern was fully retired in this session. Every usecase builds a `Layer` internally and uses `runEffect()` from `infrastructure/runtime.ts`.
 
 **Status log pattern** — every transaction domain uses two tables:
 - `*_transactions` — the deal record, `currentStatus` is a write-through cache
 - `*_statuses` — append-only log, one row per transition, never updated or deleted
 
-**Transition guard** — `allowedTransitions` map in the port file. Invalid transition → `InvalidTransitionError` (HTTP 422 territory, currently returns 500 — see open items).
+**Transition guard** — `allowedTransitions` map in the port file. Invalid transition → `InvalidTransitionError` → HTTP 422.
+
+**Error handling** — `runEffect()` preserves typed domain errors. Each routes file has a `toHttpError(error)` function that discriminates by `instanceof` and returns the correct status code. Fallback is 500 with `JSON.stringify`.
+
+**Weight resolution** — `infrastructure/weight.ts` exports `resolveWeights(purityId, weight)`. Called by all four `createTransaction` usecases. See `core/weight-and-purity.md` for the full decision record.
+
+---
+
+## Weight & Purity Rules
+
+`purity.unitOfMeasure` drives the conversion direction on every `createTransaction`:
+
+| unitOfMeasure | Purity | Caller sends | Server computes |
+|---|---|---|---|
+| `g` | 99.9 | `weight` in grams | `weightGb = weight / conversionFactor` |
+| `gb` | 96.5 | `weight` in baht | `weightGm = weight * conversionFactor` |
+
+`conversionFactor` is auto-resolved from `unit_conversions ORDER BY effectiveDate` — callers no longer supply it. Both `weightGb`, `weightGm`, and `conversionFactor` are snapshotted on the transaction row.
+
+Full rationale in `core/weight-and-purity.md`.
 
 ---
 
@@ -107,48 +128,37 @@ core/<domain>/
 | `wholesale-sell.schema.ts` | `whole_sell_transactions`, `whole_sell_statuses` |
 | `retail-buy.schema.ts` | `retail_buy_transactions`, `retail_buy_statuses` |
 | `retail-sell.schema.ts` | `retail_sell_transactions`, `retail_sell_statuses` |
+| `fulfillment.schema.ts` | Draft — not yet tied to a domain. Keep pending domain decision. |
+| `received.schema.ts` | Draft — superseded by wholesale-buy pattern. Needs implementation or deletion. |
 
 **Deleted (superseded):**
-- `whole.schema.ts` — replaced by `wholesale-buy.schema.ts` and `wholesale-sell.schema.ts`. Had no status, no `supplierId`, and a typo (`purcahsedAt`).
-- `retail.schema.ts` — replaced by `retail-buy.schema.ts` and `retail-sell.schema.ts`. Same issues.
-
----
-
-## Unstaged / Pending Work
-
-The following files are modified but not yet committed — they are part of an infrastructure refactor that was in progress before this session:
-
-| File | Change |
-|---|---|
-| `infrastructure/runtime.ts` | Added `runEffect()` helper, `BaseError` type, `Result<T,E>` shape |
-| `infrastructure/db/client.ts` | Improved `DatabaseConnectionError` shape, fixed `healthCheck` error mapping |
-| `core/master/application/bar-size.usecase.ts` | Refactored from class-based to function-based (matches inventory pattern) |
-| `core/master/adapter/inbound/bar-size.routes.ts` | Updated to use `runEffect()` |
-| `core/master/adapter/outbound/brand.repository.ts` | Renamed `goldBrands` → `brands` (schema rename) |
-| `infrastructure/db/schema/master.schema.ts` | Minor comment move |
-| `infrastructure/utils/usecase.ts` | Deleted — superseded by `runtime.ts` types |
-
-**Untracked files** (not yet decided):
-- `core/inventory/inventory.md` — domain spec doc, ready to commit
-- `infrastructure/db/schema/fulfillment.schema.ts` — draft schema, not yet tied to a domain
-- `infrastructure/db/schema/received.schema.ts` — draft schema, superseded by wholesale-buy pattern
-- `infrastructure/db/schema/retail.schema.ts` — superseded, safe to delete
-- `infrastructure/runtime-test.ts` — empty file
+- `whole.schema.ts` — replaced by `wholesale-buy.schema.ts` and `wholesale-sell.schema.ts`.
+- `retail.schema.ts` — replaced by `retail-buy.schema.ts` and `retail-sell.schema.ts`.
+- `infrastructure/utils/usecase.ts` — superseded by `runtime.ts` types.
 
 ---
 
 ## Open Items
 
-1. **HTTP error mapping** — `InvalidTransitionError` and `TransactionNotFoundError` currently fall through to a generic 500. They should map to 422 and 404 respectively. The `runEffect()` helper returns a string error — needs domain error discrimination at the route level or a structured error handler.
+1. **`received.schema.ts`** — draft schema kept intentionally. Needs a domain implementation or deletion once the received flow is scoped.
 
-2. **`retail.schema.ts` cleanup** — untracked file, superseded. Safe to delete.
+2. **`fulfillment.schema.ts`** — draft schema not yet tied to any domain. Decide whether to keep, repurpose, or delete.
 
-3. **`received.schema.ts` / `fulfillment.schema.ts`** — draft schemas that don't map to any active domain. Decide whether to keep, repurpose, or delete.
+3. **User FK** — all `recordedBy / createdBy / movedBy / auditedBy` fields are plain `varchar`. Replace with FK once auth domain is finalized.
 
-4. **User FK** — all `recordedBy / createdBy / movedBy / auditedBy` fields are plain `varchar`. Replace with FK once auth domain is finalized.
+4. **`custCode` / `emplCode` FK** — retail domains use legacy system codes. Replace with FK once customer and employee domains exist.
 
-5. **`custCode` / `emplCode` FK** — retail domains use legacy system codes. Replace with FK once customer and employee domains exist.
+5. **DB migrations** — no migration files exist yet. All schemas are Drizzle definitions only. Run `drizzle-kit generate` and `drizzle-kit migrate` before any deployment.
 
-6. **DB migrations** — no migration files exist yet. All schemas are Drizzle definitions only. Run `drizzle-kit generate` and `drizzle-kit migrate` before any deployment.
+---
 
-7. **`conversionFactor` lookup** — all domains snapshot the conversion factor at creation time from `unit_conversions ORDER BY effectiveDate DESC LIMIT 1`. This lookup is not yet implemented in any usecase — currently the caller must provide the value. Should be auto-resolved in `createTransaction`.
+## Completed This Session
+
+- Deleted superseded files: `retail.schema.ts`, `runtime-test.ts`
+- Committed infrastructure refactor: `runEffect()`, `BaseError`, function-based usecases, `DatabaseConnectionError` shape, `brand.repository.ts` rename
+- Converted all master domain usecases (bar-size, brand, branch, purity, product-type, supplier) from class-based to plain Effect functions
+- Converted all master domain routes from `handleExit` + class instantiation to `runEffect` + `toHttpError`
+- Cleaned all port files: removed dead `AppReturnShape`, `TBaseError`, `ForXxxUseCase`, `XxxErrorTag` types
+- Implemented HTTP error mapping: `TransactionNotFoundError` → 404, `InvalidTransitionError` → 422 across all transaction domains
+- Implemented `resolveWeights`: auto-lookup of purity unit and conversion factor on `createTransaction`; callers now send a single `weight` field
+- Added `core/weight-and-purity.md` decision record
