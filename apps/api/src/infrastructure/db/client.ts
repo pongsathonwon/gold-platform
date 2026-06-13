@@ -14,12 +14,12 @@ export class SchemaError extends Data.TaggedError('SchemaError') { }
 
 const loadSchema = Effect.tryPromise({
   try: () => import('../db/schema/index.js'),
-  catch: (e) => new SchemaError()
+  catch: (_) => new DatabaseConnectionError({ message: 'cannot load db schema', level: 'loading schema error' })
 });
 
 export class DatabaseConnectionError extends Data.TaggedError(
   "DatabaseConnectionError",
-)<{ message: string; payload: unknown }> { }
+)<{ message: string, level: string }> { }
 
 export class DrizzleInitializeError extends Data.TaggedError(
   "DrizzleInitializeError",
@@ -28,20 +28,17 @@ export class DrizzleInitializeError extends Data.TaggedError(
 const mapDatabaseConnectionError = (error: unknown) => {
   if (error instanceof postgres.PostgresError) {
     return new DatabaseConnectionError({
-      message: `[${error.code}] : ${error.message}`,
-      payload: error,
+      message: `[${error.code}] : ${error.message}`, level: 'creating connection fail'
     });
   }
   if (error instanceof Error) {
     return new DatabaseConnectionError({
-      message: `[unknown error] : ${error.message}`,
-      payload: error,
+      message: `[unknown error] : ${error.message}`, level: 'creating connection fail'
     });
   }
   const stringErr = JSON.stringify(error);
   return new DatabaseConnectionError({
-    message: `[unknown error] : ${stringErr}`,
-    payload: new Error(stringErr),
+    message: `[unknown error] : ${stringErr}`, level: 'creating connection fail'
   });
 };
 
@@ -65,7 +62,15 @@ const retrySchedule = Schedule.jitteredWith(Schedule.spaced("1.2 seconds"), {
 );
 
 const healthCheck = (db: PostgresJsDatabase<Schema>) =>
-  Effect.tryPromise(() => db.execute(sql`select 1`)).pipe(
+  Effect.tryPromise({
+    try: () => db.execute(sql`select 1`),
+    catch: (error) => {
+      if (error instanceof Error) {
+        return new DatabaseConnectionError({ message: `[known error] : ${error.message}`, level: 'drizzle fail' })
+      }
+      return new DatabaseConnectionError({ message: `[unknown error] : ${JSON.stringify(error)}`, level: 'drizzle fail' })
+    }
+  }).pipe(
     Effect.retry(retrySchedule),
     Effect.tap(() => Effect.logInfo("[Database] : connected successfully")),
   );

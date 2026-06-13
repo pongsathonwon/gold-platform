@@ -3,26 +3,15 @@ import { makeBarSizeRepository } from "../adapter/outbound/bar-size.repository.j
 import { BarSizeRepository, ForBarSizeUseCase } from "../port/bar-size.port.js";
 import { Effect, Layer } from "effect";
 
-export class BarSizeUseCase implements ForBarSizeUseCase {
-    private readonly _repo = Layer.scoped(BarSizeRepository, makeBarSizeRepository);
+const barSizeLive = Layer.scoped(BarSizeRepository, makeBarSizeRepository);
 
-    constructor(private readonly runtime: TApp) { }
+export const listBarSizes = () => Effect.gen(function* () {
+    const repo = yield* BarSizeRepository;
+    return yield* repo.listBarSizes();
+}).pipe(Effect.provide(barSizeLive))
 
-    listBarSizes() {
-        return this.runtime.runPromiseExit(
-            Effect.gen(function* () {
-                const repo = yield* BarSizeRepository;
-                return yield* repo.listBarSizes();
-            }).pipe(Effect.provide(this._repo))
-        );
-    }
+export const findBarSizeById = (id: string) => Effect.gen(function* () {
+    const repo = yield* BarSizeRepository;
+    return yield* repo.findBarSizeById(id);
+}).pipe(Effect.provide(barSizeLive))
 
-    findBarSizeById(id: string) {
-        return this.runtime.runPromiseExit(
-            Effect.gen(function* () {
-                const repo = yield* BarSizeRepository;
-                return yield* repo.findBarSizeById(id);
-            }).pipe(Effect.provide(this._repo))
-        );
-    }
-}

@@ -64,6 +64,7 @@ export const supplierBrands = pgTable('suppler_brands', {
 }, (table) => [
     primaryKey({ columns: [table.supplierId, table.brandId] })
 ])
+// TODO: should create a drizzle relation for query
 
 export const unitConversions = pgTable('unit_conversion', {
     id: uuid().primaryKey().defaultRandom(),

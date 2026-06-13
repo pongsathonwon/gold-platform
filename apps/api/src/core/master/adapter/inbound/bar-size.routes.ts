@@ -1,13 +1,12 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { appRuntime } from "../../../../infrastructure/runtime.js";
-import { handleExit } from "../../../../infrastructure/http/errors.js";
-import { BarSizeUseCase } from "../../application/bar-size.usecase.js";
+import { runEffect } from "../../../../infrastructure/runtime.js";
+
 import { BarSizeErrorTag } from "../../port/bar-size.port.js";
 import { ContentfulStatusCode } from "hono/utils/http-status";
+import { findBarSizeById, listBarSizes } from "../../application/bar-size.usecase.js";
 
-const useCase = new BarSizeUseCase(appRuntime);
 
 const domainErrors: Record<BarSizeErrorTag, readonly [string, ContentfulStatusCode]> = {
     BarSizeNotFound: ["Bar size not found", 404],
@@ -15,10 +14,12 @@ const domainErrors: Record<BarSizeErrorTag, readonly [string, ContentfulStatusCo
 
 export const barSizeRouter = new Hono()
     .get("/", async (c) => {
-        const result = await useCase.listBarSizes();
-        return handleExit(c, result, (barSizes) => c.json({ barSizes }, 200));
+        const result = await runEffect(listBarSizes())
+        if (result.result === 'success') return c.json({ data: result.data }, 200)
+        return c.json({ error: result.error }, 500)
     })
     .get("/:id", zValidator("param", z.string().min(1)), async (c) => {
-        const result = await useCase.findBarSizeById(c.req.valid("param"));
-        return handleExit(c, result, (barSize) => c.json({ barSize }, 200), domainErrors);
+        const result = await runEffect(findBarSizeById(c.req.valid("param")));
+        if (result.result === 'success') return c.json({ data: result.data }, 200)
+        return c.json({ error: result.error }, 500)
     });
