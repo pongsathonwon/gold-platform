@@ -1,38 +1,74 @@
-import { Context } from "effect";
-import { AppReturnShape } from "../../../infrastructure/utils/usecase.js";
-import { LotShape } from "../../../infrastructure/db/schema/inventory.schema.js";
-import { UnknownException } from "effect/Cause";
-import { AdjustLotReq, VoidLotReq } from "@gold-platform/types";
-// For Http call
-type InventoryError = UnknownException
+import { Context, Data, Effect } from "effect";
+import { CreateLot, CreateMovement, CreateStockGain, CreateStockLoss, LotShape, MovementShape } from "../../../infrastructure/db/schema/inventory.schema.js";
+import { RepositoryError } from "../../../infrastructure/db/client.js";
+
+// --- Domain errors ---
+
+export class InsufficientStockError extends Data.TaggedError("InsufficientStockError")<{
+    requested: number
+    available: number
+}> {}
+
+// --- Repository port (outbound) ---
 
 export interface ForInventoriesRepository {
-
+    listLots(req: Partial<LotShape>): Effect.Effect<LotShape[], RepositoryError>
+    findLotById(id: string): Effect.Effect<LotShape, RepositoryError>
+    createLot(req: CreateLot): Effect.Effect<LotShape, RepositoryError>
+    // remainingCost must always move with remainingWeightGb to preserve the lot invariant
+    updateLotRemaining(req: Pick<LotShape, 'id' | 'remainingWeightGb' | 'remainingCost'>): Effect.Effect<void, RepositoryError>
+    createMovement(req: CreateMovement): Effect.Effect<void, RepositoryError>
+    createStockGainAdjustment(req: CreateStockGain): Effect.Effect<void, RepositoryError>
+    createStockLossAdjustment(req: CreateStockLoss): Effect.Effect<void, RepositoryError>
+    findLotsByFifo(req: Pick<LotShape, 'brandId' | 'purityId' | 'productTypeId'>): Effect.Effect<LotShape[], RepositoryError>
+    findMovementsByReference(referenceType: string, referenceId: string): Effect.Effect<MovementShape[], RepositoryError>
 }
 
+export class InventoriesRepository extends Context.Tag('inventories/repository')<InventoriesRepository, ForInventoriesRepository>() {}
 
-export class InventoriesRepository extends Context.Tag('inventories/outbound')<ForInventoriesRepository, ForInventoriesRepository>() { }
+// --- Shared request shapes ---
 
-export interface ForInventoriesUseCase {
-    listLot(req: Partial<LotShape>): AppReturnShape<LotShape[], InventoryError>
-    adjustLot(req: AdjustLotReq): AppReturnShape<LotShape, InventoryError>
-    voidLot(req: VoidLotReq): AppReturnShape<LotShape, InventoryError>
+export interface InventoryVolume {
+    brandId: string
+    purityId: string
+    productTypeId: string
+    totalWeightGb: number
+    totalWeightGm: number
+    totalCost: number
 }
 
-export class InventoriesUseCase extends Context.Tag('inventories/usecase')<ForInventoriesRepository, ForInventoriesUseCase>() { }
+// Internal cross-domain command shapes
 
-
-
-// For internal usage - ie. subscribe to other domain events/commands or tool calls
-export interface ForInternalInvetoriesRepository {
-
+export interface IncrementReq {
+    sourceId: string
+    purityId: string
+    brandId: string
+    productTypeId: string
+    weightGb: number
+    weightGm: number
+    conversionFactor: number
+    totalCost: number
+    referenceType: string
+    referenceId: string
+    createdBy: string
 }
 
-export class InternalInventoriesRepository extends Context.Tag('inventories/internal/repository')<InternalInventoriesRepository, ForInternalInvetoriesRepository>() { }
-
-export interface ForInternalInventoriesUsecase {
-    increment(): AppReturnShape<unknown, unknown>
-    decrement(): AppReturnShape<unknown, unknown>
+export interface DecrementReq {
+    purityId: string
+    brandId: string
+    productTypeId: string
+    weightGb: number
+    weightGm: number
+    referenceType: string
+    referenceId: string
+    movedBy: string
 }
 
-export class InternalInventoriesUseCase extends Context.Tag('inventories/internal/usecase')<InternalInventoriesUseCase, ForInternalInvetoriesRepository>() { }
+// reverseDecrement locates touched lots via original movements
+export interface ReverseDecrementReq {
+    originalReferenceType: string
+    originalReferenceId: string
+    reverseReferenceType: string
+    reverseReferenceId: string
+    movedBy: string
+}

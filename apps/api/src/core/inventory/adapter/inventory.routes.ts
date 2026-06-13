@@ -1,23 +1,29 @@
 import { Hono } from "hono";
-import { Inventories } from "../application/inventory.usecase.js";
-import { appRuntime } from "../../../infrastructure/runtime.js";
-import { Exit } from "effect";
 import { zValidator } from "@hono/zod-validator";
-import { adjustLotSchema } from "@gold-platform/types";
-
-const usecase = new Inventories(appRuntime);
+import { runEffect } from "../../../infrastructure/runtime.js";
+import { stockGainSchema, stockLossSchema } from "@gold-platform/types";
+import { listLots, getInventoryVolume, stockGain, stockLoss } from "../application/inventory.usecase.js";
 
 export const inventoriesRoutes = new Hono()
-    .get('/', async (c) => {
-        const result = await usecase.listLot({});
-        if (Exit.isSuccess(result)) return c.json({ data: result.value }, 200)
-        return c.json({ error: 'not implemented' }, 502)
+    .get("/", async (c) => {
+        const result = await runEffect(listLots({}))
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        return c.json({ error: result.error }, 500)
     })
-    .post('/', zValidator('json', adjustLotSchema), async (c) => {
-        const req = c.req.valid('json')
-        const result = await usecase.adjustLot(req);
-        if (Exit.isSuccess(result)) return c.json({ data: result.value }, 200)
-        return c.json({ error: 'not implemented' }, 502)
+    .get("/volume", async (c) => {
+        const result = await runEffect(getInventoryVolume())
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        return c.json({ error: result.error }, 500)
     })
-
-    ; 
+    .post("/gain", zValidator("json", stockGainSchema), async (c) => {
+        const req = c.req.valid("json")
+        const result = await runEffect(stockGain(req))
+        if (result.result === "success") return c.json({ data: result.data }, 201)
+        return c.json({ error: result.error }, 500)
+    })
+    .post("/loss", zValidator("json", stockLossSchema), async (c) => {
+        const req = c.req.valid("json")
+        const result = await runEffect(stockLoss(req))
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        return c.json({ error: result.error }, 500)
+    })

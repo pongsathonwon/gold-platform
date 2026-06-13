@@ -42,38 +42,33 @@ export type PublicUser = z.infer<typeof publicUserSchema>
 export type AuthResponse = z.infer<typeof LoginResponseSchema>
 
 //inventory
-const lotSchema = z.object({
-  id: z.string(),
-  sourceType: z.string(),
-  sourceId: z.string(),
+
+// stock gain — creates a new lot from a manual adjustment
+export const stockGainSchema = z.object({
   purityId: z.string(),
   brandId: z.string(),
   productTypeId: z.string(),
-  barSizeId: z.string(),
-  weightGb: z.number(),
-  weightGm: z.number(),
-  conversionFactor: z.string(),
-  totalCost: z.number(),
-  createdBy: z.string(),
-  createdAt: z.coerce.date(),
+  weightGb: z.number().positive(),
+  weightGm: z.number().positive(),
+  conversionFactor: z.number().positive(),
+  totalCost: z.number().positive(),
+  reason: z.enum(['stock_count_gain', 'correction']),
+  notes: z.string().optional(),
+  auditedBy: z.string(),
 })
 
-export const adjustLotSchema = lotSchema.omit({
-  id: true, // system generate
-  sourceType: true, // set to ADJUSTMENT
-  sourceId: true, // system generate
-  createdAt: true // db generate
-}).and(z.object({
-  reason: z.string(),
-}))
+export type StockGainReq = z.infer<typeof stockGainSchema>
 
-export type AdjustLotReq = z.infer<typeof adjustLotSchema>
+// stock loss — FIFO drains existing lots; no totalCost (derived from lot cost basis)
+export const stockLossSchema = z.object({
+  purityId: z.string(),
+  brandId: z.string(),
+  productTypeId: z.string(),
+  weightGb: z.number().positive(),
+  weightGm: z.number().positive(),
+  reason: z.enum(['stock_count_loss', 'damage', 'lost', 'correction']),
+  notes: z.string().optional(),
+  auditedBy: z.string(),
+})
 
-export const voidLotSchema = lotSchema.pick({
-  id: true,
-  createdBy: true
-}).and(z.object({
-  reason: z.string(),
-}))
-
-export type VoidLotReq = z.infer<typeof voidLotSchema>
+export type StockLossReq = z.infer<typeof stockLossSchema>
