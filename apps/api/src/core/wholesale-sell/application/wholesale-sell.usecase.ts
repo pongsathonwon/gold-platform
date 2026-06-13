@@ -94,5 +94,5 @@ export const getTransaction = (id: string) =>
 export const listTransactions = (req: { currentStatus?: string; settlementPeriod?: string }) =>
     Effect.gen(function* () {
         const repo = yield* WholeSellRepository;
-        return yield* repo.listTransactions(req);
+        return yield* repo.listTransactions(req as any);
     }).pipe(Effect.provide(wholeSellLive))

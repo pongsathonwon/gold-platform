@@ -1,6 +1,5 @@
-import { TApp } from "../../../infrastructure/runtime.js";
 import { makeBarSizeRepository } from "../adapter/outbound/bar-size.repository.js";
-import { BarSizeRepository, ForBarSizeUseCase } from "../port/bar-size.port.js";
+import { BarSizeRepository } from "../port/bar-size.port.js";
 import { Effect, Layer } from "effect";
 
 const barSizeLive = Layer.scoped(BarSizeRepository, makeBarSizeRepository);

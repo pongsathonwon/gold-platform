@@ -6,10 +6,7 @@ import { InvalidCredentialsError, DuplicateEmailError } from "../domain/auth.err
 import { HashService, makeBcryptHashService } from "../../../infrastructure/utils/hasher.js";
 import { PublicUser, User } from "../../user/domain/user.entity.js";
 import { JWTService, makeJwtServie } from "../../../infrastructure/utils/jwt.js";
-import { ForAuthentication } from "../port/auth.port.js";
-import { TApp, TBaseError } from "../../../infrastructure/runtime.js";
-import { RepositoryError } from "../../../infrastructure/db/client.js";
-import { AppReturnShape } from "../../../infrastructure/utils/usecase.js";
+import { TApp } from "../../../infrastructure/runtime.js";
 
 const findUserByEmail = ({ email, password }: LoginInput) => Effect.gen(function* () {
     const repo = yield* UserRepository
@@ -66,7 +63,7 @@ const makeRegisterUserCase = (req: RegisterInput) => validateExistingEmail(req).
 )
 
 
-export class AuthUseCase implements ForAuthentication {
+export class AuthUseCase {
     private readonly authDepLive = Layer.effect(UserRepository, makeUserRepository).pipe(
         Layer.merge(Layer.effect(JWTService, makeJwtServie)),
         Layer.merge(Layer.effect(HashService, makeBcryptHashService))

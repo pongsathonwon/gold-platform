@@ -1,28 +1,17 @@
-import { TApp } from "../../../infrastructure/runtime.js";
 import { makeBrandRepository } from "../adapter/outbound/brand.repository.js";
-import { BrandRepository, ForBrandUseCase } from "../port/brand.port.js";
+import { BrandRepository } from "../port/brand.port.js";
 import { Effect, Layer } from "effect";
 
-export class BrandUseCase implements ForBrandUseCase {
-    private readonly _repo = Layer.scoped(BrandRepository, makeBrandRepository);
+const brandLive = Layer.scoped(BrandRepository, makeBrandRepository);
 
-    constructor(private readonly runtime: TApp) { }
+export const listBrands = () =>
+    Effect.gen(function* () {
+        const repo = yield* BrandRepository;
+        return yield* repo.listBrands();
+    }).pipe(Effect.provide(brandLive))
 
-    listBrands() {
-        return this.runtime.runPromiseExit(
-            Effect.gen(function* () {
-                const repo = yield* BrandRepository;
-                return yield* repo.listBrands();
-            }).pipe(Effect.provide(this._repo))
-        );
-    }
-
-    findBrandById(id: string) {
-        return this.runtime.runPromiseExit(
-            Effect.gen(function* () {
-                const repo = yield* BrandRepository;
-                return yield* repo.findBrandById(id);
-            }).pipe(Effect.provide(this._repo))
-        );
-    }
-}
+export const findBrandById = (id: string) =>
+    Effect.gen(function* () {
+        const repo = yield* BrandRepository;
+        return yield* repo.findBrandById(id);
+    }).pipe(Effect.provide(brandLive))

@@ -1,28 +1,28 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { appRuntime } from "../../../../infrastructure/runtime.js";
-import { handleExit } from "../../../../infrastructure/http/errors.js";
-import { SupplierUseCase } from "../../application/supplier.usecase.js";
-import { SupplierErrorTag } from "../../port/supplier.port.js";
-import { ContentfulStatusCode } from "hono/utils/http-status";
+import { runEffect } from "../../../../infrastructure/runtime.js";
+import { listSuppliers, findSupplierById, findSupplierProductTypes } from "../../application/supplier.usecase.js";
+import { SupplierNotFound } from "../../port/supplier.port.js";
 
-const useCase = new SupplierUseCase(appRuntime);
-
-const domainErrors: Record<SupplierErrorTag, readonly [string, ContentfulStatusCode]> = {
-    SupplierNotFound: ["Supplier not found", 404],
-};
+function toHttpError(error: unknown): [string, number] {
+    if (error instanceof SupplierNotFound) return ["Supplier not found", 404]
+    return [JSON.stringify(error), 500]
+}
 
 export const supplierRouter = new Hono()
     .get("/", async (c) => {
-        const result = await useCase.listSuppliers();
-        return handleExit(c, result, (suppliers) => c.json({ suppliers }, 200));
+        const result = await runEffect(listSuppliers())
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
     .get("/:id", zValidator("param", z.string().uuid()), async (c) => {
-        const result = await useCase.findSupplierById(c.req.valid("param"));
-        return handleExit(c, result, (supplier) => c.json({ supplier }, 200), domainErrors);
+        const result = await runEffect(findSupplierById(c.req.valid("param")))
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
     .get("/:id/product-types", zValidator("param", z.string().uuid()), async (c) => {
-        const result = await useCase.findSupplierProductTypes(c.req.valid("param"));
-        return handleExit(c, result, (productTypes) => c.json({ productTypes }, 200), domainErrors);
+        const result = await runEffect(findSupplierProductTypes(c.req.valid("param")))
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     });

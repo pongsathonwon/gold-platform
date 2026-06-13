@@ -1,24 +1,23 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { appRuntime } from "../../../../infrastructure/runtime.js";
-import { handleExit } from "../../../../infrastructure/http/errors.js";
-import { ProductTypeUseCase } from "../../application/product-type.usecase.js";
-import { ProductTypeErrorTag } from "../../port/product-type.port.js";
-import { ContentfulStatusCode } from "hono/utils/http-status";
+import { runEffect } from "../../../../infrastructure/runtime.js";
+import { listProductTypes, findProductTypeById } from "../../application/product-type.usecase.js";
+import { ProductTypeNotFound } from "../../port/product-type.port.js";
 
-const useCase = new ProductTypeUseCase(appRuntime);
-
-const domainErrors: Record<ProductTypeErrorTag, readonly [string, ContentfulStatusCode]> = {
-    ProductTypeNotFound: ["Product type not found", 404],
-};
+function toHttpError(error: unknown): [string, number] {
+    if (error instanceof ProductTypeNotFound) return ["Product type not found", 404]
+    return [JSON.stringify(error), 500]
+}
 
 export const productTypeRouter = new Hono()
     .get("/", async (c) => {
-        const result = await useCase.listProductTypes();
-        return handleExit(c, result, (productTypes) => c.json({ productTypes }, 200));
+        const result = await runEffect(listProductTypes())
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
     .get("/:id", zValidator("param", z.string().min(1)), async (c) => {
-        const result = await useCase.findProductTypeById(c.req.valid("param"));
-        return handleExit(c, result, (productType) => c.json({ productType }, 200), domainErrors);
+        const result = await runEffect(findProductTypeById(c.req.valid("param")))
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     });

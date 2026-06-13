@@ -1,5 +1,5 @@
 import { Effect, Layer, Option } from "effect";
-import { ForUserUseCase, UserRepository } from "../port/user.port.js";
+import { UserRepository } from "../port/user.port.js";
 import { TApp } from "../../../infrastructure/runtime.js";
 import { makeUserRepository } from "../adapter/user.repository.js";
 import { UserNotFoundError } from "../domain/user.error.js";
@@ -29,7 +29,7 @@ export const makeFindAllUsersCase = () =>
   });
 
 
-export class UserManagementUseCase implements ForUserUseCase {
+export class UserManagementUseCase {
 
   private readonly userServiceLive = Layer.scoped(UserRepository, makeUserRepository);
 

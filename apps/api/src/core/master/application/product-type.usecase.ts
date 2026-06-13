@@ -1,28 +1,17 @@
-import { TApp } from "../../../infrastructure/runtime.js";
 import { makeProductTypeRepository } from "../adapter/outbound/product-type.repository.js";
-import { ForProductTypeUseCase, ProductTypeRepository } from "../port/product-type.port.js";
+import { ProductTypeRepository } from "../port/product-type.port.js";
 import { Effect, Layer } from "effect";
 
-export class ProductTypeUseCase implements ForProductTypeUseCase {
-    private readonly _repo = Layer.scoped(ProductTypeRepository, makeProductTypeRepository);
+const productTypeLive = Layer.scoped(ProductTypeRepository, makeProductTypeRepository);
 
-    constructor(private readonly runtime: TApp) { }
+export const listProductTypes = () =>
+    Effect.gen(function* () {
+        const repo = yield* ProductTypeRepository;
+        return yield* repo.listProductTypes();
+    }).pipe(Effect.provide(productTypeLive))
 
-    listProductTypes() {
-        return this.runtime.runPromiseExit(
-            Effect.gen(function* () {
-                const repo = yield* ProductTypeRepository;
-                return yield* repo.listProductTypes();
-            }).pipe(Effect.provide(this._repo))
-        );
-    }
-
-    findProductTypeById(id: string) {
-        return this.runtime.runPromiseExit(
-            Effect.gen(function* () {
-                const repo = yield* ProductTypeRepository;
-                return yield* repo.findProductTypeById(id);
-            }).pipe(Effect.provide(this._repo))
-        );
-    }
-}
+export const findProductTypeById = (id: string) =>
+    Effect.gen(function* () {
+        const repo = yield* ProductTypeRepository;
+        return yield* repo.findProductTypeById(id);
+    }).pipe(Effect.provide(productTypeLive))

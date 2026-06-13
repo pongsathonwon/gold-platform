@@ -28,32 +28,23 @@ type ErrorEffect<E> = {
 
 type Result<T, E> = SuccessEffect<T> | ErrorEffect<E>
 
-export async function runEffect<R, E>(effect: Effect.Effect<R, E, AppConfig | DrizzleClient>): Promise<Result<R, string>> {
+export async function runEffect<R, E>(effect: Effect.Effect<R, E, AppConfig | DrizzleClient>): Promise<Result<R, E | BaseError | string>> {
   const result = await appRuntime.runPromiseExit(effect)
   if (Exit.isSuccess(result)) return {
     result: 'success',
     data: result.value,
   }
   const cause = result.cause
-  if (Cause.isEmptyType(cause)) {
-    return { result: 'fail', error: 'fail without definition' }
+  if (Cause.isFailType(cause)) {
+    return { result: 'fail', error: cause.error }
   }
   if (Cause.isDieType(cause)) {
-    return { result: 'fail', error: `runtime dies ${cause.defect}` }
+    return { result: 'fail', error: `runtime died: ${cause.defect}` }
   }
   if (Cause.isInterruptType(cause)) {
-    return { result: 'fail', error: `fiber ${cause.fiberId} die` }
+    return { result: 'fail', error: `fiber interrupted: ${cause.fiberId}` }
   }
-  if (Cause.isSequentialType(cause)) {
-    return { result: 'fail', error: JSON.stringify(cause) }
-  }
-  if (Cause.isParallelType(cause)) {
-    return { result: 'fail', error: JSON.stringify(cause) }
-  }
-  return {
-    result: 'fail',
-    error: JSON.stringify(cause.error)
-  }
+  return { result: 'fail', error: `unexpected cause: ${JSON.stringify(cause)}` }
 }
 
 export type AppReturnShape<T, E> = Promise<Exit.Exit<T, E | BaseError>>

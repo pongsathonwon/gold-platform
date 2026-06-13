@@ -1,37 +1,23 @@
-import { TApp } from "../../../infrastructure/runtime.js";
 import { makeSupplierRepository } from "../adapter/outbound/supplier.repository.js";
-import { ForSupplierUseCase, SupplierRepository } from "../port/supplier.port.js";
+import { SupplierRepository } from "../port/supplier.port.js";
 import { Effect, Layer } from "effect";
 
-export class SupplierUseCase implements ForSupplierUseCase {
-    private readonly _repo = Layer.scoped(SupplierRepository, makeSupplierRepository);
+const supplierLive = Layer.scoped(SupplierRepository, makeSupplierRepository);
 
-    constructor(private readonly runtime: TApp) { }
+export const listSuppliers = () =>
+    Effect.gen(function* () {
+        const repo = yield* SupplierRepository;
+        return yield* repo.listSuppliers();
+    }).pipe(Effect.provide(supplierLive))
 
-    listSuppliers() {
-        return this.runtime.runPromiseExit(
-            Effect.gen(function* () {
-                const repo = yield* SupplierRepository;
-                return yield* repo.listSuppliers();
-            }).pipe(Effect.provide(this._repo))
-        );
-    }
+export const findSupplierById = (id: string) =>
+    Effect.gen(function* () {
+        const repo = yield* SupplierRepository;
+        return yield* repo.findSupplierById(id);
+    }).pipe(Effect.provide(supplierLive))
 
-    findSupplierById(id: string) {
-        return this.runtime.runPromiseExit(
-            Effect.gen(function* () {
-                const repo = yield* SupplierRepository;
-                return yield* repo.findSupplierById(id);
-            }).pipe(Effect.provide(this._repo))
-        );
-    }
-
-    findSupplierProductTypes(id: string) {
-        return this.runtime.runPromiseExit(
-            Effect.gen(function* () {
-                const repo = yield* SupplierRepository;
-                return yield* repo.findSupplierProductTypes(id);
-            }).pipe(Effect.provide(this._repo))
-        );
-    }
-}
+export const findSupplierProductTypes = (id: string) =>
+    Effect.gen(function* () {
+        const repo = yield* SupplierRepository;
+        return yield* repo.findSupplierProductTypes(id);
+    }).pipe(Effect.provide(supplierLive))

@@ -1,24 +1,23 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { appRuntime } from "../../../../infrastructure/runtime.js";
-import { handleExit } from "../../../../infrastructure/http/errors.js";
-import { BrandUseCase } from "../../application/brand.usecase.js";
-import { BrandErrorTag } from "../../port/brand.port.js";
-import { ContentfulStatusCode } from "hono/utils/http-status";
+import { runEffect } from "../../../../infrastructure/runtime.js";
+import { listBrands, findBrandById } from "../../application/brand.usecase.js";
+import { BrandNotFound } from "../../port/brand.port.js";
 
-const useCase = new BrandUseCase(appRuntime);
-
-const domainErrors: Record<BrandErrorTag, readonly [string, ContentfulStatusCode]> = {
-    BrandNotFound: ["Brand not found", 404],
-};
+function toHttpError(error: unknown): [string, number] {
+    if (error instanceof BrandNotFound) return ["Brand not found", 404]
+    return [JSON.stringify(error), 500]
+}
 
 export const brandRouter = new Hono()
     .get("/", async (c) => {
-        const result = await useCase.listBrands();
-        return handleExit(c, result, (brands) => c.json({ brands }, 200));
+        const result = await runEffect(listBrands())
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
     .get("/:id", zValidator("param", z.string().min(1)), async (c) => {
-        const result = await useCase.findBrandById(c.req.valid("param"));
-        return handleExit(c, result, (brand) => c.json({ brand }, 200), domainErrors);
+        const result = await runEffect(findBrandById(c.req.valid("param")))
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     });
