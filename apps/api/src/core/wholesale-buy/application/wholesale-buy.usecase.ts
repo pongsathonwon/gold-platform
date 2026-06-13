@@ -6,6 +6,7 @@ import {
 } from "../port/wholesale-buy.port.js";
 import { makeWholeBuyRepository } from "../adapter/wholesale-buy.repository.js";
 import { increment } from "../../inventory/application/inventory.usecase.js";
+import { resolveWeights } from "../../../infrastructure/weight.js";
 
 const wholeBuyLive = Layer.effect(WholeBuyRepository, makeWholeBuyRepository);
 
@@ -13,6 +14,7 @@ export const createTransaction = (req: CreateTransactionReq) =>
     Effect.gen(function* () {
         const repo = yield* WholeBuyRepository;
         const id = randomUUID();
+        const { weightGb, weightGm, conversionFactor } = yield* resolveWeights(req.purityId, req.weight);
 
         const transaction = yield* repo.createTransaction({
             id,
@@ -20,11 +22,11 @@ export const createTransaction = (req: CreateTransactionReq) =>
             purityId: req.purityId,
             brandId: req.brandId,
             productTypeId: req.productTypeId,
-            weightGb: req.weightGb,
-            weightGm: req.weightGm,
-            conversionFactor: req.conversionFactor,
+            weightGb,
+            weightGm,
+            conversionFactor,
             pricePerGb: req.pricePerGb,
-            totalAmount: req.weightGb * req.pricePerGb,
+            totalAmount: weightGb * req.pricePerGb,
             settlementPeriod: req.settlementPeriod,
             currentStatus: 'DRAFT',
             recordedBy: req.recordedBy,

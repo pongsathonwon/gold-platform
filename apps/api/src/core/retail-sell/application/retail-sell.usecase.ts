@@ -6,6 +6,7 @@ import {
 } from "../port/retail-sell.port.js";
 import { makeRetailSellRepository } from "../adapter/retail-sell.repository.js";
 import { decrement } from "../../inventory/application/inventory.usecase.js";
+import { resolveWeights } from "../../../infrastructure/weight.js";
 
 const retailSellLive = Layer.effect(RetailSellRepository, makeRetailSellRepository);
 
@@ -13,6 +14,7 @@ export const createTransaction = (req: CreateTransactionReq) =>
     Effect.gen(function* () {
         const repo = yield* RetailSellRepository;
         const id = randomUUID();
+        const { weightGb, weightGm, conversionFactor } = yield* resolveWeights(req.purityId, req.weight);
 
         const transaction = yield* repo.createTransaction({
             id,
@@ -25,12 +27,12 @@ export const createTransaction = (req: CreateTransactionReq) =>
             productTypeId: req.productTypeId,
             brandText: req.brandText,
             sizeText: req.sizeText,
-            weightGb: req.weightGb,
-            weightGm: req.weightGm,
-            conversionFactor: req.conversionFactor,
+            weightGb,
+            weightGm,
+            conversionFactor,
             pricePerGb: req.pricePerGb,
             goldPriceSnapshot: req.goldPriceSnapshot,
-            totalAmount: req.weightGb * req.pricePerGb,
+            totalAmount: weightGb * req.pricePerGb,
             settlementPeriod: req.settlementPeriod,
             currentStatus: 'DRAFT',
             recordedBy: req.recordedBy,

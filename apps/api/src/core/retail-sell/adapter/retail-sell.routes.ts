@@ -4,10 +4,13 @@ import { z } from "zod";
 import { runEffect } from "../../../infrastructure/runtime.js";
 import { createTransaction, advanceStatus, getTransaction, listTransactions } from "../application/retail-sell.usecase.js";
 import { TransactionNotFoundError, InvalidTransitionError } from "../port/retail-sell.port.js";
+import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
 
 function toHttpError(error: unknown): [string, number] {
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
+    if (error instanceof PurityNotFoundError) return [`purity ${error.purityId} not found`, 422]
+    if (error instanceof NoConversionRateError) return [`no conversion rate available`, 503]
     return [JSON.stringify(error), 500]
 }
 
@@ -23,9 +26,7 @@ const createTransactionSchema = z.object({
     productTypeId: z.string().min(1),
     brandText: z.string().min(1),
     sizeText: z.string().min(1),
-    weightGb: z.number().positive(),
-    weightGm: z.number().positive(),
-    conversionFactor: z.number().positive(),
+    weight: z.number().positive(),
     pricePerGb: z.number().positive(),
     goldPriceSnapshot: z.number().positive(),
     settlementPeriod: z.string().min(1),

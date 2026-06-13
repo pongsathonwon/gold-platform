@@ -36,9 +36,7 @@ export interface CreateTransactionReq {
     purityId: string
     brandId: string
     productTypeId: string
-    weightGb: number
-    weightGm: number
-    conversionFactor: number
+    weight: number
     pricePerGb: number
     settlementPeriod: string
     recordedBy: string
