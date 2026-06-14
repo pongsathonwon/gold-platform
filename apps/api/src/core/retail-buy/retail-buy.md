@@ -55,8 +55,8 @@ Append-only status log. Never updated or deleted.
 
 ```
 DRAFT → CONFIRMED
-  ↓
-CANCELLED
+  ↓          ↓
+CANCELLED  CANCELLED
 ```
 
 | Transition          | Guard | Inventory effect |

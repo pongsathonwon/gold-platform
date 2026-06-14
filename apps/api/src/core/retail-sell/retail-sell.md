@@ -2,7 +2,7 @@
 
 ## Core Concept
 
-A retail sell is the shop **selling gold to a customer** at the counter. Inventory decrements **at confirmation** — stock leaves when the transaction is confirmed at point of sale.
+A retail sell is the shop **selling gold to a customer** at the counter. Inventory decrements **at shipping** — stock leaves when the order is physically dispatched, not at confirmation.
 
 Legacy sync fields (`saleNumb`, `custCode`, `emplCode`, `brandText`, `sizeText`) are stored as-is. The sync service handles mapping plain-text brand/size to master data IDs.
 
@@ -30,7 +30,7 @@ One record per counter transaction. Created once, never deleted. Only `currentSt
 | `goldPriceSnapshot`                  | Market gold price at transaction time — for reporting and net position calc  |
 | `totalAmount`                        | `weightGb * pricePerGb` — computed and stored at creation                    |
 | `settlementPeriod`                   | Week index (Fri–Thu) — used for net buy/sell tracking per week               |
-| `currentStatus`                      | Write-through cache — `DRAFT \| CONFIRMED \| CANCELLED`                      |
+| `currentStatus`                      | Write-through cache — `DRAFT \| CONFIRMED \| SHIPPED \| CANCELLED`           |
 | `recordedBy`                         | Cashier who recorded — plain varchar until auth domain is settled            |
 | `recordedAt`                         | Creation timestamp                                                           |
 
@@ -44,7 +44,7 @@ Append-only status log. Never updated or deleted.
 | --------------- | -------------------------------------------------------- |
 | `id`            | UUID primary key                                         |
 | `transactionId` | FK → `retail_sell_transactions.id`                       |
-| `status`        | `DRAFT \| CONFIRMED \| CANCELLED`                        |
+| `status`        | `DRAFT \| CONFIRMED \| SHIPPED \| CANCELLED`             |
 | `note`          | Optional free-text (required when CANCELLED)             |
 | `createdBy`     | Who triggered this transition                            |
 | `createdAt`     | Timestamp of the transition                              |
@@ -121,4 +121,4 @@ allowed transitions:
 
 3. **No user FK** — `recordedBy / createdBy` are plain `varchar`. Replace with FK after auth domain is settled.
 
-4. **`CONFIRMED → CANCELLED` recovery** — if a confirmed sale needs reversal, create a new `retail-buy` transaction. The inventory movements from the original decrement are permanent.
+4. **`SHIPPED → CANCELLED` is not supported** — once inventory is decremented the lot movements are permanent. Reversal requires a new `retail-buy` transaction to bring stock back in. `CONFIRMED → CANCELLED` (before shipping) is safe and requires no inventory undo.
