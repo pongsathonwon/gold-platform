@@ -80,7 +80,7 @@ export const inventoryMovements = pgTable('inventory_movements', {
     lotId: uuid().notNull().references(() => inventoryLots.id),
 
     // caller-provided reference — each domain registers its own type string
-    // e.g. RECEIVED | STOCK_GAIN | STOCK_LOSS | FULFILLMENT | FULFILLMENT_REVERSAL | WHOLESALE_BUY | WHOLESALE_SALE | RETAIL_BUY | RETAIL_SALE
+    // e.g. RECEIVED | STOCK_GAIN | STOCK_LOSS | WHOLESALE_BUY | WHOLESALE_SELL | RETAIL_SELL
     referenceType: varchar().notNull(),
     referenceId: uuid().notNull(),
 

@@ -7,7 +7,7 @@
 
 ## What Was Built
 
-Four transaction domains were designed and implemented from scratch, all following the same hexagonal architecture pattern. The inventory domain was also wired as the shared internal service that all outbound gold flows call into.
+Seven transaction domains implemented, all following the same hexagonal architecture pattern. Inventory domain is the shared internal service wired to all gold flow domains.
 
 ---
 
@@ -15,21 +15,22 @@ Four transaction domains were designed and implemented from scratch, all followi
 
 ### Inventory (`/inventories`)
 
-Internal accounting service. Tracks gold weight in anonymous lots by brand + purity + product type. Uses FIFO for all outbound movements.
+Internal accounting service. Tracks goldbar weight in anonymous lots by brand + purity + product type. Uses FIFO for all outbound movements. Goldbar only in current phase — jewelry inventory deferred.
 
 **Exposed HTTP:** `GET /`, `GET /volume`, `POST /gain`, `POST /loss`
 
-**Internal cross-domain commands** (never called from HTTP directly):
+**Internal cross-domain commands:**
 | Command | Called by | Effect |
 |---|---|---|
-| `increment` | wholesale-buy at `RECEIVED` | Creates a new lot + `+delta` movement |
-| `decrement` | wholesale-sell at `SHIPPED`, retail-sell at `SHIPPED` | FIFO drains lots + `-delta` movement per lot |
+| `increment` | wholesale-buy at `RECEIVED`, receive/smelting at `CONFIRMED` | Creates a new lot + `+delta` movement |
+| `decrement` | wholesale-sell at `SHIPPED`, retail-sell at `SHIPPED`, convert-out at `CONFIRMED` | FIFO drains lots + `-delta` movement per lot |
 | `reverseDecrement` | (available, not yet wired) | Restores lots from original movements |
 
-**`referenceType` registry** — each domain registers its own string in `inventory_movements`:
+**`referenceType` registry:**
 - `WHOLESALE_BUY`
 - `WHOLESALE_SELL`
 - `RETAIL_SELL`
+- `RECEIVED`
 - `STOCK_GAIN` / `STOCK_LOSS`
 
 ---
@@ -56,7 +57,7 @@ Shop selling gold back to a supplier. Inventory decrements when gold physically 
 
 ### Retail Buy (`/retail-buy`)
 
-Customer selling gold to the shop at the counter. **No inventory coupling** — the business cannot trace which customer transaction maps to which physical lot. Inventory is adjusted separately via `stockGain` or the received flow.
+Customer selling gold to the shop at the counter. No inventory coupling.
 
 **Status flow:** `DRAFT → CONFIRMED` | `DRAFT/CONFIRMED → CANCELLED`
 
@@ -80,6 +81,42 @@ Shop selling gold to a customer at the counter. Inventory decrements when gold s
 
 ---
 
+### Receive (`/receive`)
+
+Gold arriving at HQ from branches. Grouped by productType + purity + brand. Cancel only allowed within 2-hour grace period. Bot auto-confirms after grace period.
+
+**Status flow:** `RECEIVED → CONFIRMED` | `RECEIVED → CANCELLED` (grace period only)
+
+**Inventory:** `increment` fires at `RECEIVED → CONFIRMED`
+
+**List filters:** `currentStatus`, `settlementPeriod`, `branchCode`
+
+---
+
+### Smelting (`/smelting`) — planned
+
+Converting non-goldbar items into goldbar. Tracks output only (input is out of scope). Output is always goldbar (goldbar-only phase). Cancel only within grace period, bot auto-confirms.
+
+**Status flow:** `DRAFT → CONFIRMED` | `DRAFT → CANCELLED` (grace period only)
+
+**Inventory:** `increment` fires at `DRAFT → CONFIRMED`
+
+**Fields:** `brandId`, `purityId`, `productTypeId`, `weight`, `totalCost` (business-calculated: input value − byproduct value − smelting fee — computation is out of scope, caller provides the value)
+
+---
+
+### Convert-out (`/convert-out`) — planned
+
+Spending gold from inventory. Result documented as free text (non-gold output not tracked). Cancel only within grace period, bot auto-confirms.
+
+**Status flow:** `DRAFT → CONFIRMED` | `DRAFT → CANCELLED` (grace period only)
+
+**Inventory:** `decrement` fires at `DRAFT → CONFIRMED`
+
+**Fields:** `brandId`, `purityId`, `productTypeId`, `weight`, `resultDescription` (free text)
+
+---
+
 ## Architectural Pattern
 
 Every domain follows the same structure:
@@ -93,7 +130,7 @@ core/<domain>/
   <domain>.md                      — domain spec
 ```
 
-**All usecases are plain Effect functions** — no classes. The class-based pattern was fully retired in this session. Every usecase builds a `Layer` internally and uses `runEffect()` from `infrastructure/runtime.ts`.
+**All usecases are plain Effect functions** — no classes.
 
 **Status log pattern** — every transaction domain uses two tables:
 - `*_transactions` — the deal record, `currentStatus` is a write-through cache
@@ -101,9 +138,15 @@ core/<domain>/
 
 **Transition guard** — `allowedTransitions` map in the port file. Invalid transition → `InvalidTransitionError` → HTTP 422.
 
-**Error handling** — `runEffect()` preserves typed domain errors. Each routes file has a `toHttpError(error)` function that discriminates by `instanceof` and returns the correct status code. Fallback is 500 with `JSON.stringify`.
+**Grace period pattern** — cancel checks elapsed time since the initial status entry (`createdAt` on the status row, not `recordedAt` on the transaction). Window is 2 hours. After expiry → `GracePeriodExpiredError` → HTTP 422. Bot confirms via `createdBy: 'BOT-CONFIRM'`.
 
-**Weight resolution** — `infrastructure/weight.ts` exports `resolveWeights(purityId, weight)`. Called by all four `createTransaction` usecases. See `core/weight-and-purity.md` for the full decision record.
+**Error handling** — `runEffect()` preserves typed domain errors. Each routes file has a `toHttpError(error)` function. Fallback is 500 with `JSON.stringify`.
+
+**Weight resolution** — `infrastructure/weight.ts` exports `resolveWeights(purityId, weight)`. Called by all `createTransaction` usecases. See `core/weight-and-purity.md`.
+
+**Settlement period** — `infrastructure/settlement.ts` (planned) exports `resolveSettlementPeriod(date)`. Auto-derived from `recordedAt` using Fri–Thu boundary. Callers never send it.
+
+**Product type × purity constraint** — `resolveProductPurity(productTypeId, purityId)` (planned) validates the combination against `product_type_purities` join table. Called by all `createTransaction` usecases.
 
 ---
 
@@ -116,9 +159,34 @@ core/<domain>/
 | `g` | 99.9 | `weight` in grams | `weightGb = weight / conversionFactor` |
 | `gb` | 96.5 | `weight` in baht | `weightGm = weight * conversionFactor` |
 
-`conversionFactor` is auto-resolved from `unit_conversions ORDER BY effectiveDate` — callers no longer supply it. Both `weightGb`, `weightGm`, and `conversionFactor` are snapshotted on the transaction row.
+`conversionFactor` is auto-resolved from `unit_conversions ORDER BY effectiveDate`. Full rationale in `core/weight-and-purity.md`.
 
-Full rationale in `core/weight-and-purity.md`.
+---
+
+## Settlement Period Rules
+
+`settlementPeriod` is a reporting bucket — a week label (e.g. `"2026-W24"`) auto-computed from `recordedAt`. Callers never supply it.
+
+- Boundary: **Friday to Thursday** (fixed)
+- Format: ISO week string e.g. `"2026-W24"`
+- Purpose: net buy/sell reporting per week — no locking or period management in current scope
+
+Each domain exposes a split summary endpoint (not merged — keeps domains isolated):
+- `GET /retail-buy/settlement/:period/summary`
+- `GET /retail-sell/settlement/:period/summary`
+- `GET /wholesale-buy/settlement/:period/summary`
+- `GET /wholesale-sell/settlement/:period/summary`
+
+---
+
+## Product Type × Purity Constraint
+
+Not all purities are valid for every product type:
+- Goldbar: 99.9, 96.5
+- Gold-plate: 96.5 only
+- Jewelry (future): 99.9, 96.5, 90, 75
+
+Admin configures valid combinations at go-live via `product_type_purities` join table in master data. `resolveProductPurity()` guards all `createTransaction` calls.
 
 ---
 
@@ -126,46 +194,44 @@ Full rationale in `core/weight-and-purity.md`.
 
 | File | Tables |
 |---|---|
-| `master.schema.ts` | `gold_product_type`, `gold_brands`, `purities`, `bar_sizes`, `suppliers`, `supplier_product_types`, `suppler_brands`, `unit_conversion`, `branches` |
+| `master.schema.ts` | `gold_product_type`, `gold_brands`, `purities`, `bar_sizes`, `suppliers`, `supplier_product_types`, `suppler_brands`, `unit_conversion`, `branches`, `product_type_purities` (planned) |
 | `inventory.schema.ts` | `inventory_lots`, `inventory_movements`, `stock_gain_adjustments`, `stock_loss_adjustments`, `inventory_daily_snapshots` |
 | `wholesale-buy.schema.ts` | `whole_buy_transactions`, `whole_buy_statuses` |
 | `wholesale-sell.schema.ts` | `whole_sell_transactions`, `whole_sell_statuses` |
 | `retail-buy.schema.ts` | `retail_buy_transactions`, `retail_buy_statuses` |
 | `retail-sell.schema.ts` | `retail_sell_transactions`, `retail_sell_statuses` |
-| `fulfillment.schema.ts` | Draft — not yet tied to a domain. Keep pending domain decision. |
-| `received.schema.ts` | Draft — superseded by wholesale-buy pattern. Needs implementation or deletion. |
+| `received.schema.ts` | `received_transactions`, `received_statuses` |
+| `smelting.schema.ts` | (planned) `smelting_transactions`, `smelting_statuses` |
+| `convert-out.schema.ts` | (planned) `convert_out_transactions`, `convert_out_statuses` |
 
 **Deleted (superseded):**
-- `whole.schema.ts` — replaced by `wholesale-buy.schema.ts` and `wholesale-sell.schema.ts`.
-- `retail.schema.ts` — replaced by `retail-buy.schema.ts` and `retail-sell.schema.ts`.
-- `infrastructure/utils/usecase.ts` — superseded by `runtime.ts` types.
+- `whole.schema.ts` — replaced by `wholesale-buy.schema.ts` and `wholesale-sell.schema.ts`
+- `retail.schema.ts` — replaced by `retail-buy.schema.ts` and `retail-sell.schema.ts`
+- `fulfillment.schema.ts` — deleted; branch transfer is out of scope (no branch inventory in current phase)
+- `infrastructure/utils/usecase.ts` — superseded by `runtime.ts` types
 
 ---
 
 ## Open Items
 
-1. **`received.schema.ts`** — draft schema kept intentionally. Needs a domain implementation or deletion once the received flow is scoped.
-
-2. **`fulfillment.schema.ts`** — draft schema not yet tied to any domain. Decide whether to keep, repurpose, or delete.
-
-3. **User FK** — all `recordedBy / createdBy / movedBy / auditedBy` fields are plain `varchar`. Replace with FK once auth domain is finalized.
-
-4. **`custCode` / `emplCode` FK** — retail domains use legacy system codes. Replace with FK once customer and employee domains exist.
-
-5. **DB migrations** — no migration files exist yet. All schemas are Drizzle definitions only. Run `drizzle-kit generate` and `drizzle-kit migrate` before any deployment.
+1. **User FK** — `recordedBy / createdBy / movedBy / auditedBy` are plain `varchar`; blocked on employee/customer domain decision
+2. **`custCode` / `emplCode` FK** — retail domains use legacy system codes; blocked on same decision
+3. **Employee vs user identity** — recommendation: separate `employees` table (carries `emplCode`) from `users` (login only); `customers` table for `custCode`. Defer until legacy sync strategy is decided with stakeholders
+4. **`users` table PK** — currently `serial` (integer); migrate to `uuid` before adding any user FKs
+5. **DB migrations** — no migration files yet; run `drizzle-kit generate` then `drizzle-kit migrate` before any deployment
+6. **Goldbar-to-goldbar conversion** — unclear if this is a convert-out + smelting pair or needs its own domain
+7. **Jewelry inventory** — deferred to next phase; requires non-fungible inventory model (discrete items by design/SKU)
+8. **`reverseDecrement()`** — implemented in inventory usecase but not wired to any domain yet
 
 ---
 
-## Completed This Session
+## Planned Work (next tasks in order)
 
-- Deleted superseded files: `retail.schema.ts`, `runtime-test.ts`
-- Committed infrastructure refactor: `runEffect()`, `BaseError`, function-based usecases, `DatabaseConnectionError` shape, `brand.repository.ts` rename
-- Converted all master domain usecases (bar-size, brand, branch, purity, product-type, supplier) from class-based to plain Effect functions
-- Converted all master domain routes from `handleExit` + class instantiation to `runEffect` + `toHttpError`
-- Cleaned all port files: removed dead `AppReturnShape`, `TBaseError`, `ForXxxUseCase`, `XxxErrorTag` types
-- Implemented HTTP error mapping: `TransactionNotFoundError` → 404, `InvalidTransitionError` → 422 across all transaction domains
-- Implemented `resolveWeights`: auto-lookup of purity unit and conversion factor on `createTransaction`; callers now send a single `weight` field
-- Added `core/weight-and-purity.md` decision record
-- Reviewed and corrected retail domain docs: retail-sell core concept (decrement at shipping not confirmation), added `SHIPPED` to status enum descriptions, fixed status flow diagram in retail-buy, corrected open issue on cancellation reversal
-- Added `branchCode` filter to `listTransactions` on retail-buy and retail-sell — threaded through port, repository, usecase, and routes
-- Fixed unhandled `InsufficientStockError` in retail-sell routes — was falling through to 500, now returns 422 with requested vs available weight
+1. `resolveSettlementPeriod(date)` utility — Fri–Thu boundary
+2. Strip `settlementPeriod` from all `createTransaction` request schemas — auto-derive from `recordedAt`
+3. Settlement summary endpoints — per domain (retail-buy, retail-sell, wholesale-buy, wholesale-sell)
+4. `product_type_purities` join table + admin CRUD endpoint
+5. `resolveProductPurity(productTypeId, purityId)` guard — wire into all `createTransaction` usecases
+6. Smelting domain — full implementation
+7. Convert-out domain — full implementation
+8. DB migrations — after all schema changes are done
