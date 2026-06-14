@@ -21,7 +21,7 @@ export class InvalidTransitionError extends Data.TaggedError("RetailBuyInvalidTr
 export interface ForRetailBuyRepository {
     createTransaction(req: CreateRetailBuyTransaction): Effect.Effect<RetailBuyTransactionShape, RepositoryError>
     findTransactionById(id: string): Effect.Effect<RetailBuyTransactionShape, RepositoryError | TransactionNotFoundError>
-    listTransactions(req: Partial<Pick<RetailBuyTransactionShape, 'currentStatus' | 'settlementPeriod'>>): Effect.Effect<RetailBuyTransactionShape[], RepositoryError>
+    listTransactions(req: Partial<Pick<RetailBuyTransactionShape, 'currentStatus' | 'settlementPeriod' | 'branchCode'>>): Effect.Effect<RetailBuyTransactionShape[], RepositoryError>
     updateCurrentStatus(id: string, status: RetailBuyStatus): Effect.Effect<void, RepositoryError>
     createStatus(req: CreateRetailBuyStatus): Effect.Effect<void, RepositoryError>
     listStatuses(transactionId: string): Effect.Effect<RetailBuyStatusShape[], RepositoryError>

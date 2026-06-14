@@ -74,7 +74,7 @@ CANCELLED  CANCELLED
 | `createTransaction` | `POST /retail-buy`               | Creates transaction + initial `DRAFT` status row      |
 | `advanceStatus`     | `POST /retail-buy/:id/status`    | Appends status row, updates `currentStatus`, fires inventory side-effect if applicable |
 | `getTransaction`    | `GET /retail-buy/:id`            | Returns transaction + full status history             |
-| `listTransactions`  | `GET /retail-buy`                | Filterable by `currentStatus` and `settlementPeriod`  |
+| `listTransactions`  | `GET /retail-buy`                | Filterable by `currentStatus`, `settlementPeriod`, and `branchCode` |
 
 ---
 

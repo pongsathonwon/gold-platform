@@ -99,7 +99,7 @@ export const getTransaction = (id: string) =>
         return { transaction, statuses };
     }).pipe(Effect.provide(retailSellLive))
 
-export const listTransactions = (req: { currentStatus?: string; settlementPeriod?: string }) =>
+export const listTransactions = (req: { currentStatus?: string; settlementPeriod?: string; branchCode?: string }) =>
     Effect.gen(function* () {
         const repo = yield* RetailSellRepository;
         return yield* repo.listTransactions(req as any);

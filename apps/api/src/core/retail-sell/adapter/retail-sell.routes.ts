@@ -5,10 +5,12 @@ import { runEffect } from "../../../infrastructure/runtime.js";
 import { createTransaction, advanceStatus, getTransaction, listTransactions } from "../application/retail-sell.usecase.js";
 import { TransactionNotFoundError, InvalidTransitionError } from "../port/retail-sell.port.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
+import { InsufficientStockError } from "../../inventory/port/inventories.port.js";
 
 function toHttpError(error: unknown): [string, number] {
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
+    if (error instanceof InsufficientStockError) return [`insufficient stock: requested ${error.requested} gb, available ${error.available} gb`, 422]
     if (error instanceof PurityNotFoundError) return [`purity ${error.purityId} not found`, 422]
     if (error instanceof NoConversionRateError) return [`no conversion rate available`, 503]
     return [JSON.stringify(error), 500]
@@ -42,6 +44,7 @@ const advanceStatusSchema = z.object({
 const listQuerySchema = z.object({
     currentStatus: z.enum(['DRAFT', ...retailSellStatusValues]).optional(),
     settlementPeriod: z.string().optional(),
+    branchCode: z.string().optional(),
 })
 
 export const retailSellRoutes = new Hono()

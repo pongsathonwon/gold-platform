@@ -42,6 +42,7 @@ const advanceStatusSchema = z.object({
 const listQuerySchema = z.object({
     currentStatus: z.enum(['DRAFT', ...retailBuyStatusValues]).optional(),
     settlementPeriod: z.string().optional(),
+    branchCode: z.string().optional(),
 })
 
 export const retailBuyRoutes = new Hono()

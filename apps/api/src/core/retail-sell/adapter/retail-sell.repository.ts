@@ -31,10 +31,11 @@ class RetailSellRepositoryImpl implements ForRetailSellRepository {
         );
     }
 
-    listTransactions(req: Partial<Pick<RetailSellTransactionShape, 'currentStatus' | 'settlementPeriod'>>) {
+    listTransactions(req: Partial<Pick<RetailSellTransactionShape, 'currentStatus' | 'settlementPeriod' | 'branchCode'>>) {
         const conditions = [
             req.currentStatus ? eq(retailSellTransactions.currentStatus, req.currentStatus) : undefined,
             req.settlementPeriod ? eq(retailSellTransactions.settlementPeriod, req.settlementPeriod) : undefined,
+            req.branchCode ? eq(retailSellTransactions.branchCode, req.branchCode) : undefined,
         ].filter(Boolean) as ReturnType<typeof eq>[];
 
         return Effect.tryPromise({

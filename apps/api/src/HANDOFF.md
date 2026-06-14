@@ -1,7 +1,7 @@
 # API Handoff Document
 
 **Branch:** `dev`
-**Date:** 2026-06-13 (updated)
+**Date:** 2026-06-14 (updated)
 
 ---
 
@@ -60,6 +60,8 @@ Customer selling gold to the shop at the counter. **No inventory coupling** — 
 
 **Status flow:** `DRAFT → CONFIRMED` | `DRAFT/CONFIRMED → CANCELLED`
 
+**List filters:** `currentStatus`, `settlementPeriod`, `branchCode`
+
 **Legacy sync fields:** `buyNumb`, `custCode`, `emplCode`, `brandText`, `sizeText`, `goldPriceSnapshot`
 
 ---
@@ -71,6 +73,8 @@ Shop selling gold to a customer at the counter. Inventory decrements when gold s
 **Status flow:** `DRAFT → CONFIRMED → SHIPPED` | `DRAFT/CONFIRMED → CANCELLED`
 
 **Inventory:** `decrement` fires at `CONFIRMED → SHIPPED`
+
+**List filters:** `currentStatus`, `settlementPeriod`, `branchCode`
 
 **Legacy sync fields:** `saleNumb`, `custCode`, `emplCode`, `brandText`, `sizeText`, `goldPriceSnapshot`
 
@@ -162,3 +166,6 @@ Full rationale in `core/weight-and-purity.md`.
 - Implemented HTTP error mapping: `TransactionNotFoundError` → 404, `InvalidTransitionError` → 422 across all transaction domains
 - Implemented `resolveWeights`: auto-lookup of purity unit and conversion factor on `createTransaction`; callers now send a single `weight` field
 - Added `core/weight-and-purity.md` decision record
+- Reviewed and corrected retail domain docs: retail-sell core concept (decrement at shipping not confirmation), added `SHIPPED` to status enum descriptions, fixed status flow diagram in retail-buy, corrected open issue on cancellation reversal
+- Added `branchCode` filter to `listTransactions` on retail-buy and retail-sell — threaded through port, repository, usecase, and routes
+- Fixed unhandled `InsufficientStockError` in retail-sell routes — was falling through to 500, now returns 422 with requested vs available weight
