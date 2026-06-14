@@ -13,6 +13,7 @@ import { wholesaleSellRoutes } from "./core/wholesale-sell/adapter/wholesale-sel
 import { wholesaleBuyRoutes } from "./core/wholesale-buy/adapter/wholesale-buy.routes.js";
 import { retailBuyRoutes } from "./core/retail-buy/adapter/retail-buy.routes.js";
 import { retailSellRoutes } from "./core/retail-sell/adapter/retail-sell.routes.js";
+import { receiveRoutes } from "./core/receive/adapter/receive.routes.js";
 
 const app = new Hono()
   .use(logger())
@@ -25,6 +26,7 @@ const app = new Hono()
   .route("/wholesale-buy", wholesaleBuyRoutes)
   .route("/retail-buy", retailBuyRoutes)
   .route("/retail-sell", retailSellRoutes)
+  .route("/receive", receiveRoutes)
   ;
 
 export type AppType = typeof app;
