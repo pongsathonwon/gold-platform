@@ -54,7 +54,30 @@ pnpm db:generate   # generate migration files from schema
 pnpm db:migrate    # apply migrations to the database
 ```
 
-### 5. Start development servers
+### 5. Seed the database
+
+```bash
+pnpm db:seed
+```
+
+Seeds Sprint 1 master data:
+
+| Table | Data |
+|---|---|
+| `purities` | 99.9% (g), 96.5% (gb) |
+| `gold_product_type` | Goldbar, Gold Plate |
+| `gold_brands` | NA (sentinel for 99.9% pools), ฮั่วเซ่งเฮง (non-fungible) |
+| `unit_conversion` | 1 baht = 15.244 g |
+| `users` | admin / admin |
+
+Override credentials via env vars:
+```bash
+SEED_USERNAME=myname SEED_PASSWORD=securepass pnpm db:seed
+```
+
+The script is idempotent — safe to run multiple times (`ON CONFLICT DO NOTHING`).
+
+### 6. Start development servers
 
 ```bash
 pnpm dev
@@ -148,6 +171,7 @@ pnpm --filter @gold-platform/types add <package>
 | ------------------ | ---------------------------------------- |
 | `pnpm db:generate` | Generate migration files from schema     |
 | `pnpm db:migrate`  | Apply pending migrations                 |
+| `pnpm db:seed`     | Seed Sprint 1 master data + admin user   |
 | `pnpm db:studio`   | Open Drizzle Studio (visual DB browser)  |
 
 ### Docker
