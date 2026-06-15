@@ -39,16 +39,16 @@ export const makeUserRepository = Effect.gen(function* () {
       catch: mapRepositoryError,
     });
 
-  const findByEmail = (email: string) =>
+  const findByUsername = (username: string) =>
     Effect.tryPromise({
       try: async () => {
-        const result = await db.select().from(users).where(eq(users.email, email));
+        const result = await db.select().from(users).where(eq(users.username, username));
         return result.length === 1 ? Option.some(result[0]) : Option.none();
       },
       catch: mapRepositoryError,
     });
 
-  const createUser = (data: { name: string; email: string; passwordHash: string }) =>
+  const createUser = (data: { name: string; username: string; passwordHash: string }) =>
     Effect.tryPromise({
       try: async () => {
         const result = await db.insert(users).values(data).returning();
@@ -70,7 +70,7 @@ export const makeUserRepository = Effect.gen(function* () {
       ),
     );
 
-  return { findAll, findById, findByEmail, createUser, deleteById } satisfies ForUserRepository;
+  return { findAll, findById, findByUsername, createUser, deleteById } satisfies ForUserRepository;
 })
 
 export class UserRepository extends Context.Tag("UserRepository")<

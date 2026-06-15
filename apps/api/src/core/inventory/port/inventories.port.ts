@@ -1,5 +1,8 @@
 import { Context, Data, Effect } from "effect";
-import { CreateLot, CreateMovement, CreateStockGain, CreateStockLoss, LotShape, MovementShape } from "../../../infrastructure/db/schema/inventory.schema.js";
+import {
+    BalanceShape, CreateMovement, CreateProductSwitch, CreateSnapshot, CreateStockGain, CreateStockLoss,
+    MovementShape, ProductSwitchShape, SnapshotShape, UpsertBalance,
+} from "../../../infrastructure/db/schema/inventory.schema.js";
 import { RepositoryError } from "../../../infrastructure/db/client.js";
 
 // --- Domain errors ---
@@ -9,18 +12,31 @@ export class InsufficientStockError extends Data.TaggedError("InsufficientStockE
     available: number
 }> {}
 
+export class NoSnapshotError extends Data.TaggedError("NoSnapshotError")<{
+    purityId: string
+    brandId: string
+    origin: string
+    productTypeId: string
+    date: string
+}> {}
+
 // --- Repository port (outbound) ---
 
+export type BalanceKey = Pick<BalanceShape, 'purityId' | 'brandId' | 'origin' | 'productTypeId'>
+export type SnapshotKey = Pick<SnapshotShape, 'purityId' | 'brandId' | 'origin' | 'productTypeId'>
+
 export interface ForInventoriesRepository {
-    listLots(req: Partial<LotShape>): Effect.Effect<LotShape[], RepositoryError>
-    findLotById(id: string): Effect.Effect<LotShape, RepositoryError>
-    createLot(req: CreateLot): Effect.Effect<LotShape, RepositoryError>
-    // remainingCost must always move with remainingWeightGb to preserve the lot invariant
-    updateLotRemaining(req: Pick<LotShape, 'id' | 'remainingWeightGb' | 'remainingCost'>): Effect.Effect<void, RepositoryError>
+    listBalances(): Effect.Effect<BalanceShape[], RepositoryError>
+    getBalance(key: BalanceKey): Effect.Effect<BalanceShape | null, RepositoryError>
+    upsertBalance(req: UpsertBalance): Effect.Effect<void, RepositoryError>
+    decrementBalance(key: BalanceKey, weightGb: number, weightGm: number, costDelta: number): Effect.Effect<void, RepositoryError | InsufficientStockError>
     createMovement(req: CreateMovement): Effect.Effect<void, RepositoryError>
     createStockGainAdjustment(req: CreateStockGain): Effect.Effect<void, RepositoryError>
     createStockLossAdjustment(req: CreateStockLoss): Effect.Effect<void, RepositoryError>
-    findLotsByFifo(req: Pick<LotShape, 'brandId' | 'purityId' | 'productTypeId'>): Effect.Effect<LotShape[], RepositoryError>
+    getDailySnapshot(key: SnapshotKey, date: string): Effect.Effect<SnapshotShape | null, RepositoryError>
+    upsertDailySnapshotOnce(req: CreateSnapshot): Effect.Effect<void, RepositoryError>
+    computeAllSnapshots(date: string): Effect.Effect<SnapshotShape[], RepositoryError>
+    createProductSwitchAdjustment(req: CreateProductSwitch): Effect.Effect<ProductSwitchShape, RepositoryError>
     findMovementsByReference(referenceType: string, referenceId: string): Effect.Effect<MovementShape[], RepositoryError>
 }
 
@@ -29,8 +45,9 @@ export class InventoriesRepository extends Context.Tag('inventories/repository')
 // --- Shared request shapes ---
 
 export interface InventoryVolume {
-    brandId: string
     purityId: string
+    brandId: string
+    origin: string
     productTypeId: string
     totalWeightGb: number
     totalWeightGm: number
@@ -40,9 +57,9 @@ export interface InventoryVolume {
 // Internal cross-domain command shapes
 
 export interface IncrementReq {
-    sourceId: string
     purityId: string
     brandId: string
+    origin: 'domestic' | 'foreign'
     productTypeId: string
     weightGb: number
     weightGm: number
@@ -56,6 +73,7 @@ export interface IncrementReq {
 export interface DecrementReq {
     purityId: string
     brandId: string
+    origin: 'domestic' | 'foreign'
     productTypeId: string
     weightGb: number
     weightGm: number
@@ -64,7 +82,7 @@ export interface DecrementReq {
     movedBy: string
 }
 
-// reverseDecrement locates touched lots via original movements
+// reverseDecrement locates movements via original reference and restores balance delta
 export interface ReverseDecrementReq {
     originalReferenceType: string
     originalReferenceId: string
@@ -72,3 +90,15 @@ export interface ReverseDecrementReq {
     reverseReferenceId: string
     movedBy: string
 }
+
+export interface ProductSwitchReq {
+    purityId: string
+    productTypeId: string
+    fromBrandId: string
+    weightGb: number
+    weightGm: number
+    notes?: string
+    switchedBy: string
+}
+
+export type { ProductSwitchShape };

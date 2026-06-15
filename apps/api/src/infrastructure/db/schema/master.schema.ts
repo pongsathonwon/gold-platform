@@ -1,6 +1,6 @@
 import { boolean, date, decimal, integer, pgEnum, pgTable, primaryKey, uuid, varchar, } from "drizzle-orm/pg-core";
 
-
+export const originEnum = pgEnum('origin', ['domestic', 'foreign'])
 
 export const productTypes = pgTable("gold_product_type", {
     id: varchar({ length: 10 }).primaryKey(),

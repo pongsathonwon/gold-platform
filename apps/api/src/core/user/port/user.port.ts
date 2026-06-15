@@ -7,8 +7,8 @@ import { UserNotFoundError } from "../domain/user.error.js";
 export interface ForUserRepository {
   findAll: () => Effect.Effect<User[], RepositoryError>;
   findById: (id: number) => Effect.Effect<Option<User>, RepositoryError>;
-  findByEmail: (email: string) => Effect.Effect<Option<User>, RepositoryError>;
-  createUser: (data: { name: string; email: string; passwordHash: string }) => Effect.Effect<User, RepositoryError>;
+  findByUsername: (username: string) => Effect.Effect<Option<User>, RepositoryError>;
+  createUser: (data: { name: string; username: string; passwordHash: string }) => Effect.Effect<User, RepositoryError>;
   deleteById: (id: number) => Effect.Effect<User, UserNotFoundError | RepositoryError>;
 }
 
