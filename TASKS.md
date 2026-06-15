@@ -9,9 +9,9 @@ Transaction domains (wholesale, retail, receive, smelting, convert-out) are Spri
 
 See [apps/api/TASKS.md](apps/api/TASKS.md) for the full breakdown.
 
-- [ ] Schema: replace `inventoryLots` with `inventoryBalance`; add `origin`, `notes`, `productSwitchAdjustments`
-- [ ] Inventory domain: WAC via daily snapshot, `computeSnapshots`, `productSwitch`
-- [ ] Auth: login endpoint working, JWT middleware on inventory routes
+- [x] Schema: replace `inventoryLots` with `inventoryBalance`; add `origin`, `notes`, `productSwitchAdjustments`
+- [x] Inventory domain: WAC via daily snapshot, `computeSnapshots`, `productSwitch`
+- [x] Auth: login endpoint working, JWT middleware on inventory routes
 - [ ] DB migration + seed `'NA'` brand
 
 ## Frontend

@@ -63,6 +63,7 @@ export const advanceStatus = (req: AdvanceStatusReq) =>
             yield* decrement({
                 purityId: transaction.purityId,
                 brandId: transaction.brandId,
+                origin: 'foreign',
                 productTypeId: transaction.productTypeId,
                 weightGb: transaction.weightGb,
                 weightGm: transaction.weightGm,

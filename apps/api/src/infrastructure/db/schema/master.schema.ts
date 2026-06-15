@@ -1,6 +1,6 @@
 import { boolean, date, decimal, integer, pgEnum, pgTable, primaryKey, uuid, varchar, } from "drizzle-orm/pg-core";
 
-
+export const originEnum = pgEnum('origin', ['domestic', 'foreign'])
 
 export const productTypes = pgTable("gold_product_type", {
     id: varchar({ length: 10 }).primaryKey(),
@@ -22,12 +22,12 @@ export const brands = pgTable("gold_brands", {
 
 export type GoldBrand = typeof brands.$inferSelect
 
-export const unitOfMeasureEnum = pgEnum('unit_of_measure', ['g', 'gb'])
+export const unitOfMeasureEnum = pgEnum('unit_of_measure_enum', ['g', 'gb'])
 
 export const purities = pgTable("purities", {
     id: varchar({ length: 4 }).primaryKey(),
     label: varchar({ length: 10 }).notNull(),
-    percent: decimal({ precision: 2, scale: 2, mode: 'number' }).notNull(),
+    percent: decimal({ precision: 5, scale: 2, mode: 'number' }).notNull(),
     unitOfMeasure: unitOfMeasureEnum().notNull(),
     active: boolean().default(true).notNull()
 })
@@ -68,7 +68,7 @@ export const supplierBrands = pgTable('suppler_brands', {
 
 export const unitConversions = pgTable('unit_conversion', {
     id: uuid().primaryKey().defaultRandom(),
-    factorValue: decimal({ mode: 'number', scale: 2, precision: 4 }).notNull(),
+    factorValue: decimal({ mode: 'number', scale: 4, precision: 6 }).notNull(),
     effectiveDate: date().defaultNow().notNull(),
     changeBy: uuid()
 })

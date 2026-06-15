@@ -1,47 +1,44 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
 import { StockGainReq, StockLossReq } from "@gold-platform/types";
-import { DecrementReq, IncrementReq, InventoriesRepository, InsufficientStockError, ReverseDecrementReq } from "../port/inventories.port.js";
-import { LotShape } from "../../../infrastructure/db/schema/inventory.schema.js";
+import {
+    DecrementReq, IncrementReq, InventoriesRepository, InventoryVolume,
+    InsufficientStockError, NoSnapshotError, ProductSwitchReq, ReverseDecrementReq,
+} from "../port/inventories.port.js";
 import { makeInventoryRepository } from "../adapter/inventory.repository.js";
 
 const inventoryLive = Layer.effect(InventoriesRepository, makeInventoryRepository);
 
-// --- Public usecases (HTTP) ---
+const today = () => new Date().toISOString().slice(0, 10);
 
-export const listLots = (req: Partial<LotShape>) =>
-    Effect.gen(function* () {
-        const repo = yield* InventoriesRepository;
-        return yield* repo.listLots(req);
-    }).pipe(Effect.provide(inventoryLive))
+// --- Public usecases (HTTP) ---
 
 export const getInventoryVolume = () =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
-        const lots = yield* repo.listLots({});
-        // group by brand + purity + productType and sum remaining
-        const map = new Map<string, { brandId: string; purityId: string; productTypeId: string; totalWeightGb: number; totalWeightGm: number; totalCost: number }>();
-        for (const lot of lots) {
-            const key = `${lot.brandId}:${lot.purityId}:${lot.productTypeId}`;
-            const existing = map.get(key) ?? { brandId: lot.brandId, purityId: lot.purityId, productTypeId: lot.productTypeId, totalWeightGb: 0, totalWeightGm: 0, totalCost: 0 };
-            existing.totalWeightGb += lot.remainingWeightGb;
-            existing.totalWeightGm += lot.remainingWeightGb * lot.conversionFactor;
-            existing.totalCost += lot.remainingCost;
-            map.set(key, existing);
-        }
-        return Array.from(map.values());
+        const rows = yield* repo.listBalances();
+        return rows.map((b): InventoryVolume => ({
+            purityId: b.purityId,
+            brandId: b.brandId,
+            origin: b.origin,
+            productTypeId: b.productTypeId,
+            totalWeightGb: b.totalWeightGb,
+            totalWeightGm: b.totalWeightGm,
+            totalCost: b.totalCost,
+        }));
     }).pipe(Effect.provide(inventoryLive))
 
 export const stockGain = (req: StockGainReq) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
         const adjustmentId = randomUUID();
-        const lotId = randomUUID();
+        const brandId = req.brandId ?? 'NA';
 
         yield* repo.createStockGainAdjustment({
             id: adjustmentId,
             purityId: req.purityId,
-            brandId: req.brandId,
+            brandId: req.brandId ?? null,
+            origin: req.origin,
             productTypeId: req.productTypeId,
             weightGb: req.weightGb,
             weightGm: req.weightGm,
@@ -53,48 +50,60 @@ export const stockGain = (req: StockGainReq) =>
             auditedAt: new Date(),
         });
 
-        const lot = yield* repo.createLot({
-            id: lotId,
-            sourceType: 'STOCK_GAIN',
-            sourceId: adjustmentId,
+        yield* repo.upsertBalance({
             purityId: req.purityId,
-            brandId: req.brandId,
+            brandId,
+            origin: req.origin,
             productTypeId: req.productTypeId,
-            weightGb: req.weightGb,
-            weightGm: req.weightGm,
-            conversionFactor: req.conversionFactor,
+            totalWeightGb: req.weightGb,
+            totalWeightGm: req.weightGm,
             totalCost: req.totalCost,
-            remainingWeightGb: req.weightGb,
-            remainingCost: req.totalCost,
-            status: 'active',
-            createdBy: req.auditedBy,
-            createdAt: new Date(),
         });
 
         yield* repo.createMovement({
             id: randomUUID(),
-            lotId,
+            purityId: req.purityId,
+            brandId,
+            origin: req.origin,
+            productTypeId: req.productTypeId,
             referenceType: 'STOCK_GAIN',
             referenceId: adjustmentId,
             weightGbDelta: req.weightGb,
             weightGmDelta: req.weightGm,
             costDelta: req.totalCost,
+            notes: req.notes ?? null,
             movedAt: new Date(),
             movedBy: req.auditedBy,
         });
 
-        return lot;
+        return { id: adjustmentId };
     }).pipe(Effect.provide(inventoryLive))
 
 export const stockLoss = (req: StockLossReq) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
         const adjustmentId = randomUUID();
+        const brandId = req.brandId ?? 'NA';
+        const date = today();
+
+        const snapshot = yield* repo.getDailySnapshot(
+            { purityId: req.purityId, brandId, origin: req.origin, productTypeId: req.productTypeId },
+            date,
+        );
+        if (!snapshot) {
+            return yield* Effect.fail(new NoSnapshotError({
+                purityId: req.purityId, brandId, origin: req.origin, productTypeId: req.productTypeId, date,
+            }));
+        }
+
+        const snapshotRate = snapshot.totalCost / snapshot.weightGb;
+        const costDelta = req.weightGb * snapshotRate;
 
         yield* repo.createStockLossAdjustment({
             id: adjustmentId,
             purityId: req.purityId,
-            brandId: req.brandId,
+            brandId: req.brandId ?? null,
+            origin: req.origin,
             productTypeId: req.productTypeId,
             weightGb: req.weightGb,
             weightGm: req.weightGm,
@@ -104,59 +113,209 @@ export const stockLoss = (req: StockLossReq) =>
             auditedAt: new Date(),
         });
 
-        yield* runFifo({
+        yield* repo.decrementBalance(
+            { purityId: req.purityId, brandId, origin: req.origin, productTypeId: req.productTypeId },
+            req.weightGb, req.weightGm, costDelta,
+        );
+
+        yield* repo.createMovement({
+            id: randomUUID(),
             purityId: req.purityId,
-            brandId: req.brandId,
+            brandId,
+            origin: req.origin,
             productTypeId: req.productTypeId,
-            weightGb: req.weightGb,
-            weightGm: req.weightGm,
             referenceType: 'STOCK_LOSS',
             referenceId: adjustmentId,
+            weightGbDelta: -req.weightGb,
+            weightGmDelta: -req.weightGm,
+            costDelta: -costDelta,
+            notes: req.notes ?? null,
+            movedAt: new Date(),
             movedBy: req.auditedBy,
         });
+
+        return { id: adjustmentId };
     }).pipe(Effect.provide(inventoryLive))
 
-// --- Internal usecases (cross-domain commands) ---
-
-export const increment = (req: IncrementReq) =>
+export const computeSnapshots = () =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
-        const lotId = randomUUID();
+        return yield* repo.computeAllSnapshots(today());
+    }).pipe(Effect.provide(inventoryLive))
 
-        const lot = yield* repo.createLot({
-            id: lotId,
-            sourceType: 'RECEIVED',
-            sourceId: req.sourceId,
+export const productSwitch = (req: ProductSwitchReq) =>
+    Effect.gen(function* () {
+        const repo = yield* InventoriesRepository;
+        const date = today();
+        const origin = 'foreign' as const;
+
+        // get non-fungible balance to compute its WAC
+        const nonFungibleBalance = yield* repo.getBalance({
             purityId: req.purityId,
-            brandId: req.brandId,
+            brandId: req.fromBrandId,
+            origin,
             productTypeId: req.productTypeId,
+        });
+        if (!nonFungibleBalance || nonFungibleBalance.totalWeightGb < req.weightGb) {
+            const available = nonFungibleBalance?.totalWeightGb ?? 0;
+            return yield* Effect.fail(new InsufficientStockError({ requested: req.weightGb, available }));
+        }
+
+        const nonFungibleWac = nonFungibleBalance.totalCost / nonFungibleBalance.totalWeightGb;
+        const fromCostDelta = req.weightGb * nonFungibleWac;
+
+        // get fungible (NA) snapshot for today's rate
+        const fungibleSnapshot = yield* repo.getDailySnapshot(
+            { purityId: req.purityId, brandId: 'NA', origin, productTypeId: req.productTypeId },
+            date,
+        );
+        if (!fungibleSnapshot) {
+            return yield* Effect.fail(new NoSnapshotError({
+                purityId: req.purityId, brandId: 'NA', origin, productTypeId: req.productTypeId, date,
+            }));
+        }
+        const fungibleRate = fungibleSnapshot.totalCost / fungibleSnapshot.weightGb;
+        const toCostDelta = req.weightGb * fungibleRate;
+
+        // decrement non-fungible pool
+        yield* repo.decrementBalance(
+            { purityId: req.purityId, brandId: req.fromBrandId, origin, productTypeId: req.productTypeId },
+            req.weightGb, req.weightGm, fromCostDelta,
+        );
+
+        // increment fungible (NA) pool
+        yield* repo.upsertBalance({
+            purityId: req.purityId,
+            brandId: 'NA',
+            origin,
+            productTypeId: req.productTypeId,
+            totalWeightGb: req.weightGb,
+            totalWeightGm: req.weightGm,
+            totalCost: toCostDelta,
+        });
+
+        const adjustment = yield* repo.createProductSwitchAdjustment({
+            purityId: req.purityId,
+            productTypeId: req.productTypeId,
+            fromBrandId: req.fromBrandId,
             weightGb: req.weightGb,
             weightGm: req.weightGm,
-            conversionFactor: req.conversionFactor,
-            totalCost: req.totalCost,
-            remainingWeightGb: req.weightGb,
-            remainingCost: req.totalCost,
-            status: 'active',
-            createdBy: req.createdBy,
-            createdAt: new Date(),
+            fromCostDelta,
+            toCostDelta,
+            notes: req.notes ?? null,
+            switchedBy: req.switchedBy,
+            switchedAt: new Date(),
+        });
+
+        const adjustmentId = adjustment.id;
+
+        yield* repo.createMovement({
+            id: randomUUID(),
+            purityId: req.purityId,
+            brandId: req.fromBrandId,
+            origin,
+            productTypeId: req.productTypeId,
+            referenceType: 'PRODUCT_SWITCH',
+            referenceId: adjustmentId,
+            weightGbDelta: -req.weightGb,
+            weightGmDelta: -req.weightGm,
+            costDelta: -fromCostDelta,
+            notes: req.notes ?? null,
+            movedAt: new Date(),
+            movedBy: req.switchedBy,
         });
 
         yield* repo.createMovement({
             id: randomUUID(),
-            lotId,
+            purityId: req.purityId,
+            brandId: 'NA',
+            origin,
+            productTypeId: req.productTypeId,
+            referenceType: 'PRODUCT_SWITCH',
+            referenceId: adjustmentId,
+            weightGbDelta: req.weightGb,
+            weightGmDelta: req.weightGm,
+            costDelta: toCostDelta,
+            notes: req.notes ?? null,
+            movedAt: new Date(),
+            movedBy: req.switchedBy,
+        });
+
+        return adjustment;
+    }).pipe(Effect.provide(inventoryLive))
+
+// --- Internal cross-domain commands ---
+
+export const increment = (req: IncrementReq) =>
+    Effect.gen(function* () {
+        const repo = yield* InventoriesRepository;
+
+        yield* repo.upsertBalance({
+            purityId: req.purityId,
+            brandId: req.brandId,
+            origin: req.origin,
+            productTypeId: req.productTypeId,
+            totalWeightGb: req.weightGb,
+            totalWeightGm: req.weightGm,
+            totalCost: req.totalCost,
+        });
+
+        yield* repo.createMovement({
+            id: randomUUID(),
+            purityId: req.purityId,
+            brandId: req.brandId,
+            origin: req.origin,
+            productTypeId: req.productTypeId,
             referenceType: req.referenceType,
             referenceId: req.referenceId,
             weightGbDelta: req.weightGb,
             weightGmDelta: req.weightGm,
             costDelta: req.totalCost,
+            notes: null,
             movedAt: new Date(),
             movedBy: req.createdBy,
         });
-
-        return lot;
     }).pipe(Effect.provide(inventoryLive))
 
-export const decrement = (req: DecrementReq) => runFifo(req).pipe(Effect.provide(inventoryLive))
+export const decrement = (req: DecrementReq) =>
+    Effect.gen(function* () {
+        const repo = yield* InventoriesRepository;
+        const date = today();
+
+        const snapshot = yield* repo.getDailySnapshot(
+            { purityId: req.purityId, brandId: req.brandId, origin: req.origin, productTypeId: req.productTypeId },
+            date,
+        );
+        if (!snapshot) {
+            return yield* Effect.fail(new NoSnapshotError({
+                purityId: req.purityId, brandId: req.brandId, origin: req.origin, productTypeId: req.productTypeId, date,
+            }));
+        }
+
+        const snapshotRate = snapshot.totalCost / snapshot.weightGb;
+        const costDelta = req.weightGb * snapshotRate;
+
+        yield* repo.decrementBalance(
+            { purityId: req.purityId, brandId: req.brandId, origin: req.origin, productTypeId: req.productTypeId },
+            req.weightGb, req.weightGm, costDelta,
+        );
+
+        yield* repo.createMovement({
+            id: randomUUID(),
+            purityId: req.purityId,
+            brandId: req.brandId,
+            origin: req.origin,
+            productTypeId: req.productTypeId,
+            referenceType: req.referenceType,
+            referenceId: req.referenceId,
+            weightGbDelta: -req.weightGb,
+            weightGmDelta: -req.weightGm,
+            costDelta: -costDelta,
+            notes: null,
+            movedAt: new Date(),
+            movedBy: req.movedBy,
+        });
+    }).pipe(Effect.provide(inventoryLive))
 
 export const reverseDecrement = (req: ReverseDecrementReq) =>
     Effect.gen(function* () {
@@ -164,63 +323,30 @@ export const reverseDecrement = (req: ReverseDecrementReq) =>
         const movements = yield* repo.findMovementsByReference(req.originalReferenceType, req.originalReferenceId);
 
         for (const movement of movements) {
-            const lot = yield* repo.findLotById(movement.lotId);
-            yield* repo.updateLotRemaining({
-                id: lot.id,
-                remainingWeightGb: lot.remainingWeightGb + Math.abs(movement.weightGbDelta),
-                remainingCost: lot.remainingCost + Math.abs(movement.costDelta),
+            yield* repo.upsertBalance({
+                purityId: movement.purityId,
+                brandId: movement.brandId,
+                origin: movement.origin,
+                productTypeId: movement.productTypeId,
+                totalWeightGb: Math.abs(movement.weightGbDelta),
+                totalWeightGm: Math.abs(movement.weightGmDelta),
+                totalCost: Math.abs(movement.costDelta),
             });
+
             yield* repo.createMovement({
                 id: randomUUID(),
-                lotId: lot.id,
+                purityId: movement.purityId,
+                brandId: movement.brandId,
+                origin: movement.origin,
+                productTypeId: movement.productTypeId,
                 referenceType: req.reverseReferenceType,
                 referenceId: req.reverseReferenceId,
                 weightGbDelta: Math.abs(movement.weightGbDelta),
                 weightGmDelta: Math.abs(movement.weightGmDelta),
                 costDelta: Math.abs(movement.costDelta),
+                notes: null,
                 movedAt: new Date(),
                 movedBy: req.movedBy,
             });
         }
     }).pipe(Effect.provide(inventoryLive))
-
-// --- FIFO picking — shared by stockLoss and decrement ---
-
-const runFifo = (req: DecrementReq) =>
-    Effect.gen(function* () {
-        const repo = yield* InventoriesRepository;
-        const lots = yield* repo.findLotsByFifo({ brandId: req.brandId, purityId: req.purityId, productTypeId: req.productTypeId });
-
-        const totalAvailable = lots.reduce((sum, l) => sum + l.remainingWeightGb, 0);
-        if (totalAvailable < req.weightGb) {
-            return yield* Effect.fail(new InsufficientStockError({ requested: req.weightGb, available: totalAvailable }));
-        }
-
-        let remaining = req.weightGb;
-        for (const lot of lots) {
-            if (remaining <= 0) break;
-            const take = Math.min(lot.remainingWeightGb, remaining);
-            const costTaken = (take / lot.weightGb) * lot.totalCost;
-            const gmTaken = take * lot.conversionFactor;
-
-            yield* repo.updateLotRemaining({
-                id: lot.id,
-                remainingWeightGb: lot.remainingWeightGb - take,
-                remainingCost: lot.remainingCost - costTaken,
-            });
-
-            yield* repo.createMovement({
-                id: randomUUID(),
-                lotId: lot.id,
-                referenceType: req.referenceType,
-                referenceId: req.referenceId,
-                weightGbDelta: -take,
-                weightGmDelta: -gmTaken,
-                costDelta: -costTaken,
-                movedAt: new Date(),
-                movedBy: req.movedBy,
-            });
-
-            remaining -= take;
-        }
-    })

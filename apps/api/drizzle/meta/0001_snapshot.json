@@ -1,6 +1,6 @@
 {
-  "id": "47d8ab92-6929-4133-925d-a833881316a5",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "8fe77cc1-0953-4e1a-9428-95862605efe0",
+  "prevId": "47d8ab92-6929-4133-925d-a833881316a5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -222,7 +222,7 @@
         },
         "percent": {
           "name": "percent",
-          "type": "numeric(2, 2)",
+          "type": "numeric(5, 2)",
           "primaryKey": false,
           "notNull": true
         },
@@ -421,7 +421,7 @@
         },
         "factor_value": {
           "name": "factor_value",
-          "type": "numeric(4, 2)",
+          "type": "numeric(4, 6)",
           "primaryKey": false,
           "notNull": true
         },

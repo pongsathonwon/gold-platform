@@ -64,16 +64,16 @@ export const advanceStatus = (req: AdvanceStatusReq) =>
             const receivedEntry = yield* repo.findReceivedStatusEntry(req.transactionId);
             const elapsed = Date.now() - receivedEntry.createdAt.getTime();
             if (elapsed > GRACE_PERIOD_MS) {
-                return yield* Effect.fail(new GracePeriodExpiredError({}));
+                return yield* Effect.fail(new GracePeriodExpiredError());
             }
         }
 
         // inventory increment fires exactly once — when document is confirmed
         if (req.toStatus === 'CONFIRMED') {
             yield* increment({
-                sourceId: transaction.id,
                 purityId: transaction.purityId,
                 brandId: transaction.brandId,
+                origin: 'foreign',
                 productTypeId: transaction.productTypeId,
                 weightGb: transaction.weightGb,
                 weightGm: transaction.weightGm,

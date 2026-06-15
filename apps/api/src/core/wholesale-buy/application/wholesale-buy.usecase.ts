@@ -61,9 +61,9 @@ export const advanceStatus = (req: AdvanceStatusReq) =>
         // inventory increment fires exactly once — when gold physically arrives
         if (transaction.currentStatus === 'CONFIRMED' && req.toStatus === 'RECEIVED') {
             yield* increment({
-                sourceId: transaction.id,
                 purityId: transaction.purityId,
                 brandId: transaction.brandId,
+                origin: 'foreign',
                 productTypeId: transaction.productTypeId,
                 weightGb: transaction.weightGb,
                 weightGm: transaction.weightGm,
