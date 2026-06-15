@@ -2,7 +2,7 @@
 
 **Monorepo:** `gold-platform`  
 **Branch:** `dev`  
-**Last updated:** 2026-06-14
+**Last updated:** 2026-06-15
 
 ---
 
@@ -67,16 +67,18 @@ pnpm docker:down    # docker compose down
 ① Master Data  →  ② Inventory  →  ③ Trade / Transactions  →  ④ Position / Period Net  →  ⑤ หลอมทอง
 ```
 
-**Current state (2026-06-14):**
+**Sprint 1 scope (2026-06-15) — auth + manual inventory tracking only:**
 
-| Phase | Domain | Status |
+| Phase | Domain | Sprint 1 Status |
 |---|---|---|
+| — | Auth / Login | In progress |
 | ① | Master data routes | Complete |
-| ② | Inventory (lots, FIFO, movements) | Complete |
-| ③ | wholesale-buy, wholesale-sell, retail-buy, retail-sell, receive | Complete |
-| ③ | smelting, convert-out | Planned |
-| ④ | Position / Period Net | Not started |
-| ⑤ | หลอมทอง | Not started |
+| ② | Inventory — balance model, WAC, origin, daily snapshot | In progress |
+| ② | Manual adjustments (stock gain, stock loss, product switch) | In progress |
+| ③ | wholesale-buy, wholesale-sell, retail-buy, retail-sell, receive | Deferred to Sprint 2 |
+| ③ | smelting, convert-out | Deferred to Sprint 3 |
+| ④ | Position / Period Net | Deferred |
+| ⑤ | หลอมทอง | Deferred |
 
 ---
 
@@ -95,7 +97,7 @@ pnpm docker:down    # docker compose down
 | Purity | Label | Unit | Products |
 |---|---|---|---|
 | 96.5% | Standard Thai gold | Gold Baht (GB) | ทองแท่ง, ทองแผ่น, รูปพรรณ |
-| 99.99% | Investment grade | Gram / kilogram | Investment bars (supplier side) |
+| 99.9% | Investment grade | Gram / kilogram | ทองแท่ง investment bars — tracked by **origin**, not brand |
 
 These are **separate inventory pools**. Cross-purity operations are never allowed.
 
@@ -112,13 +114,24 @@ Callers always send a single `weight` field. The server resolves both units:
 
 ### Brand Rules
 
-Brand is a **required first-class field** on every gold record.
+| Brand | Purity | Rule |
+|---|---|---|
+| ฮั่วเซ็งเฮ็ง | 96.5% | `nonFungible = true`. Cannot substitute for or with any other brand. |
+| AU, Inter | 96.5% | Generic — fungible within same purity |
+| N/A (sentinel `id='NA'`) | 99.9% | System brand for investment goldbar. Never user-selectable. `active=false` so it never appears in brand dropdowns. Brand is irrelevant for 99.9% — inventory pools are keyed by **origin** instead. |
 
-| Brand | Rule |
-|---|---|
-| ฮั่วเซ็งเฮ็ง | `nonFungible = true`. Cannot substitute for or with any other brand. |
-| AU, Inter | Generic — fungible within same purity |
-| HQ Smelted | System-assigned on หลอมทอง output only. Never user-selectable. |
+### Origin (99.9% goldbar only)
+
+| Origin | Produced by | Decremented by |
+|---|---|---|
+| `domestic` | `smelting` — always domestic, no exception | `convert_out` only |
+| `foreign` | all other inbound (wholesale-buy, receive) | any outbound domain |
+
+`smelting` hardcodes `origin = 'domestic'`. `convert_out` accepts `origin` as caller input (can consume either pool). All other domains hardcode `origin = 'foreign'`. 96.5% products are always `foreign`.
+
+### Product Switch
+
+Rare reclassification: decrement a **non-fungible** (96.5%, specific brand) pool and increment the **fungible** (`N/A`) pool at today's WAC. Same purity and product type only. Cross-purity or cross-type discrepancies are handled as a manual stock-loss + stock-gain pair (audited separately).
 
 ### Bar Sizes
 
@@ -173,10 +186,11 @@ One immutable row per Fri–Thu period. Rows never auto-sum. Each row shows Net 
 ## 6. Key Business Rules
 
 1. **Gold Baht is the customer unit; grams/kg is the supplier unit.** Always store both. Never recalculate at query time.
-2. **ฮั่วเซ็งเฮ็ง is non-fungible.** Cannot substitute for or with any other brand, ever.
-3. **96.5% and 99.99% are separate inventory pools.** Never mix in any query, pick, or calculation.
+2. **ฮั่วเซ็งเฮ็ง is non-fungible (96.5% only).** Cannot substitute for or with any other brand, ever.
+3. **96.5% and 99.9% are separate inventory pools.** Never mix in any query, pick, or calculation.
 4. **`supplierTradeable` is configurable, not hard-coded.** ทองแผ่น may become tradeable in future.
-5. **Cost basis must flow at actual transaction cost.** Market price is a valuation input only — never a cost entry.
+5. **Inventory cost is WAC via daily opening snapshot.** At day-open, `snapshotRate = totalCost / totalWeightGb` per pool is frozen. All outbound cost attribution uses `weight × snapshotRate`. No outbound movement is permitted before the snapshot is computed for today.
+6. **Domestic pool is protected.** Only `convert_out` can decrement domestic-origin stock. All other outbound domains are hardcoded to `foreign` and cannot touch the domestic pool.
 6. **Bar sizes are interchangeable within the same brand.** Two 5 GB = one 10 GB. Brand segregation still applies.
 7. **Inventory and position are decoupled.** A retail-buy feeds position (period net). It does not touch HQ inventory.
 8. **Period assignment is immutable.** Transactions cannot be reassigned after posting.
@@ -207,9 +221,11 @@ One immutable row per Fri–Thu period. Rows never auto-sum. Each row shows Net 
 | Net Customer Orders | Sum of all customer-facing gold transactions in a period |
 | Net Company Orders | Sum of all supplier-facing gold transactions in a period |
 | settlementPeriod | Fri–Thu week ID e.g. `"2026-W24"`. Auto-derived, never caller-supplied |
-| Lot | Virtual accounting bucket for a batch of gold. Anonymous weight pool |
-| FIFO | Oldest lot consumed first on all outbound movements |
-| WAC | Weighted average cost = `total_cost / total_weight_gb` across active lots |
+| Balance | Aggregate stock position per pool `(purityId × brandId × origin × productTypeId)`. One row per pool; no per-lot records. |
+| WAC | Weighted Average Cost = `totalCost / totalWeightGb` per pool. The daily snapshot freezes this rate at day-open. |
+| Daily snapshot | Opening WAC rate per pool, frozen once at start of each trading day via `POST /inventory/snapshots/compute`. All outbound cost attribution uses `weight × snapshotRate`. |
+| Origin | `domestic` (smelted in-house) or `foreign` (imported). Key dimension for 99.9% goldbar pools only. 96.5% is always foreign. |
+| Product switch | Reclassification operation: decrement non-fungible brand pool → increment fungible (`N/A`) pool at today's WAC. Same purity + product type only. |
 | ค่าบล็อค | Mould/block fee on ทองแผ่น — ~100 THB/GB |
 | ค่าแรง + ค่ากำเน็จ | Labour + craftsmanship fees on รูปพรรณ — ~1,000 THB/GB total |
 | หลอมทอง | Gold smelting — converts รูปพรรณ into ทองแท่ง |

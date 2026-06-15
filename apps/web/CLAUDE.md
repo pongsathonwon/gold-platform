@@ -107,20 +107,29 @@ When adding a new transaction domain, add its request schema to `packages/types`
 
 Routes are declared in `App.tsx`. React Router v7 with `<Routes>` / `<Route>`.
 
-Planned route structure (not yet implemented):
+**Sprint 1 routes (implement now):**
+
+```
+/login                    — login form (public)
+/inventory                — inventory balance view, today's WAC rate, snapshot trigger (protected)
+/inventory/gain           — stock gain form (protected)
+/inventory/loss           — stock loss form (protected)
+/inventory/switch         — product switch form (protected)
+```
+
+**Deferred to Sprint 2+:**
 
 ```
 /                         — management dashboard (current period net)
-/inventory                — inventory balance view
 /wholesale-buy            — wholesale buy list + create
 /wholesale-buy/:id        — wholesale buy detail + status advance
-/wholesale-sell           — wholesale sell list + create
+/wholesale-sell
 /wholesale-sell/:id
-/retail-buy               — retail buy list + create
+/retail-buy
 /retail-buy/:id
-/retail-sell              — retail sell list + create
+/retail-sell
 /retail-sell/:id
-/receive                  — receive list + confirm/cancel
+/receive
 /receive/:id
 /period-report            — historical period net report
 /master-data              — brands, purities, suppliers, branches (admin)
@@ -162,19 +171,18 @@ The API must be running at `VITE_API_URL` for data fetching to work in dev. Run 
 
 ## 10. Current State
 
-The web app is a **scaffold**. Only one component exists (`UserList.tsx` — a user CRUD demo). The full UI build has not started.
+The web app is a **scaffold**. Only one component exists (`UserList.tsx` — a user CRUD demo).
 
-When the UI build begins, the priority order mirrors the API build order:
+**Sprint 1 scope — auth + manual inventory tracking only:**
 
 ```
-① Master data admin screens
-② Inventory balance view
-③ Transaction entry screens (wholesale-buy, retail-buy, etc.)
-④ Management dashboard — current period net
-⑤ Period report — historical view
+① Login screen — email + password → JWT → protected routes
+② Inventory balance view — pool totals (purity / brand-or-origin / product type / weight / WAC)
+③ Manual adjustment forms — stock gain, stock loss, product switch
+④ Daily snapshot trigger — "Compute Today's Rate" button → POST /inventory/snapshots/compute
 ```
 
-The management dashboard (④) is the primary deliverable from the user's perspective. Everything before it is operational tooling.
+Transaction entry screens (wholesale, retail, receive), the management dashboard, and period reports are all deferred to Sprint 2+.
 
 ---
 
