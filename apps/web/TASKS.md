@@ -43,10 +43,10 @@ All transaction screens (wholesale, retail, receive) are Sprint 2+.
 
 ## 4. Stock Gain Form — `/inventory/gain`
 
-- [ ] Fields: Purity (select) | Brand or 'N/A' (conditional on purity) | Origin (conditional: show only for 99.9%) | Product Type | Weight (GB) | Weight (g) | Conversion Factor | Total Cost | Reason (select from enum) | Notes | Audited By
-- [ ] Zod client-side validation with updated `stockGainSchema` from `@gold-platform/types`
-- [ ] Mutation `POST /inventory/gain` — on success: show toast "Stock added" + navigate to `/inventory`
-- [ ] On `422` (insufficient or domain error): show inline error
+- [x] Fields: Purity (select) | Brand or 'N/A' (conditional on purity) | Origin (conditional: show only for 99.9%) | Product Type | Weight (GB) | Weight (g) | Conversion Factor | Total Cost | Reason (select from enum) | Notes | Audited By
+- [x] Zod client-side validation with updated `stockGainSchema` from `@gold-platform/types`
+- [x] Mutation `POST /inventory/gain` — on success: show toast "Stock added" + navigate to `/inventory`
+- [x] On `422` (insufficient or domain error): show inline error
 
 ---
 
