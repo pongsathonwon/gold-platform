@@ -73,6 +73,6 @@ All transaction screens (wholesale, retail, receive) are Sprint 2+.
 
 ## 7. Navigation
 
-- [ ] Top nav bar: "Inventory" link + logout button
-- [ ] Active route highlighted
-- [ ] Nav only renders when `isAuthenticated` is true
+- [x] Top nav bar: "Inventory" link + logout button
+- [x] Active route highlighted (`NavLink` prefix-matches, so `/inventory/*` subroutes keep "Inventory" highlighted)
+- [x] Nav only renders when `isAuthenticated` is true
