@@ -7,25 +7,25 @@ All transaction screens (wholesale, retail, receive) are Sprint 2+.
 
 ## 1. Auth
 
-- [ ] `POST /auth/login` mutation via Hono RPC client
-- [ ] Store JWT in `localStorage` (key: `gp_token`); attach as `Authorization: Bearer <token>` header on every API request
-- [ ] `AuthContext` + `useAuth()` hook — exposes `{ user, token, login, logout, isAuthenticated }`
-- [ ] Update `client.ts` to inject the stored token into every request
-- [ ] `<AuthGuard>` component — reads `isAuthenticated`; redirects to `/login` if false
-- [ ] `LoginPage` — email + password controlled form; Zod validation with `loginSchema` from `@gold-platform/types`; show error on 401
-- [ ] Logout button in nav — clears token, redirects to `/login`
+- [x] `POST /auth/login` mutation via Hono RPC client
+- [x] Store JWT in `localStorage` (key: `gp_token`); attach as `Authorization: Bearer <token>` header on every API request
+- [x] `AuthContext` + `useAuth()` hook — exposes `{ user, token, login, logout, isAuthenticated }`
+- [x] Update `client.ts` to inject the stored token into every request
+- [x] `<AuthGuard>` component — reads `isAuthenticated`; redirects to `/login` if false
+- [x] `LoginPage` — username + password controlled form (backend schema uses `username`, not `email`); Zod validation with `loginSchema` from `@gold-platform/types`; show error on failed login
+- [x] Logout button in nav — clears token, redirects to `/login`
 
 ---
 
 ## 2. Routing
 
-- [ ] Add `/login` as a public route (no `<AuthGuard>`)
-- [ ] Wrap all other routes with `<AuthGuard>`
-- [ ] `/inventory` — inventory balance + snapshot trigger
-- [ ] `/inventory/gain` — stock gain form
-- [ ] `/inventory/loss` — stock loss form
-- [ ] `/inventory/switch` — product switch form
-- [ ] Redirect `/` → `/inventory` for now (dashboard is Sprint 2)
+- [x] Add `/login` as a public route (no `<AuthGuard>`)
+- [x] Wrap all other routes with `<AuthGuard>`
+- [x] `/inventory` — inventory balance + snapshot trigger (placeholder page, content in section 3)
+- [x] `/inventory/gain` — stock gain form (placeholder page, content in section 4)
+- [x] `/inventory/loss` — stock loss form (placeholder page, content in section 5)
+- [x] `/inventory/switch` — product switch form (placeholder page, content in section 6)
+- [x] Redirect `/` → `/inventory` for now (dashboard is Sprint 2)
 
 ---
 
