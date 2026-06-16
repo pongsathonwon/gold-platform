@@ -52,11 +52,11 @@ All transaction screens (wholesale, retail, receive) are Sprint 2+.
 
 ## 5. Stock Loss Form — `/inventory/loss`
 
-- [ ] Fields: Purity | Brand or 'N/A' | Origin | Product Type | Weight (GB) | Weight (g) | Reason | Notes | Audited By
-- [ ] Zod validation with updated `stockLossSchema`
-- [ ] Mutation `POST /inventory/loss` — success: toast + navigate to `/inventory`
-- [ ] On `422 InsufficientStockError`: show "Insufficient stock — requested X GB, available Y GB"
-- [ ] On `422 NoSnapshotError`: show "Today's rate not set — compute snapshot first"
+- [x] Fields: Purity | Brand or 'N/A' | Origin | Product Type | Weight (GB) | Weight (g) | Reason | Notes | Audited By
+- [x] Zod validation with updated `stockLossSchema`
+- [x] Mutation `POST /inventory/loss` — success: toast + navigate to `/inventory`
+- [x] On `422 InsufficientStockError`: show "Insufficient stock — requested X GB, available Y GB"
+- [x] On `422 NoSnapshotError`: show "Today's rate not set — compute snapshot first"
 
 ---
 
