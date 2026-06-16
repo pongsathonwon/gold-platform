@@ -16,7 +16,7 @@ export function clearToken() {
 }
 
 export const client = hc<AppType>(import.meta.env.VITE_API_URL, {
-  headers: () => {
+  headers: (): Record<string, string> => {
     const token = getToken();
     return token ? { Authorization: `Bearer ${token}` } : {};
   },

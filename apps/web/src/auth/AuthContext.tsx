@@ -19,10 +19,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(username: string, password: string) {
     const res = await client.auth.login.$post({ json: { username, password } });
     if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      throw new Error((body as { error?: string } | null)?.error ?? "Login failed");
+      const body: unknown = await res.json().catch(() => null);
+      const message =
+        typeof body === "object" && body !== null && "error" in body
+          ? String((body as { error: unknown }).error)
+          : "Login failed";
+      throw new Error(message);
     }
-    const body = await res.json();
+    const body = (await res.json()) as { token: string; user: PublicUser };
     setToken(body.token);
     setTokenState(body.token);
     setUser(body.user);

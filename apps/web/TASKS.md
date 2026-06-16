@@ -31,13 +31,13 @@ All transaction screens (wholesale, retail, receive) are Sprint 2+.
 
 ## 3. Inventory Balance View — `/inventory`
 
-- [ ] `useInventoryVolume` query — `GET /inventory/volume` (TanStack Query, key: `['inventory','volume']`)
-- [ ] Table columns: Purity | Brand / Origin | Product Type | Weight (GB) | Weight (g) | Total Cost | WAC Rate
+- [x] `useInventoryVolume` query — `GET /inventory/volume` (TanStack Query, key: `['inventory','volume']`)
+- [x] Table columns: Purity | Brand / Origin | Product Type | Weight (GB) | Weight (g) | Total Cost | WAC Rate
   - For 99.9% rows: show Origin (`domestic` / `foreign`) in the Brand column; brand is 'N/A'
   - WAC Rate = `totalCost / totalWeightGb`, formatted as THB/GB
-- [ ] "Compute Today's Rate" button — mutation `POST /inventory/snapshots/compute` → on success refetch volume
-- [ ] Show whether today's snapshot has been computed per pool (compare `snapshotDate` to today)
-- [ ] Links to `/inventory/gain`, `/inventory/loss`, `/inventory/switch`
+- [x] "Compute Today's Rate" button — mutation `POST /inventory/snapshots/compute` → on success refetch volume
+- [ ] Show whether today's snapshot has been computed per pool (compare `snapshotDate` to today) — **deferred**: no `GET` endpoint exists yet to read today's snapshots without triggering a write; needs a backend addition before this can be implemented
+- [x] Links to `/inventory/gain`, `/inventory/loss`, `/inventory/switch`
 
 ---
 
