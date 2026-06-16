@@ -62,12 +62,12 @@ All transaction screens (wholesale, retail, receive) are Sprint 2+.
 
 ## 6. Product Switch Form — `/inventory/switch`
 
-- [ ] Fields: Purity | Product Type | From Brand (only non-fungible brands — `nonFungible=true`) | Weight (GB) | Weight (g) | Notes | Switched By
-- [ ] Origin is always `foreign` — not shown to user (hardcoded on submit)
-- [ ] Zod validation with `productSwitchSchema`
-- [ ] Mutation `POST /inventory/product-switch` — success: toast "Reclassified to fungible pool" + navigate to `/inventory`
-- [ ] On `422 NoSnapshotError`: show "Compute today's rate first"
-- [ ] On `422 InsufficientStockError`: show insufficient stock message
+- [x] Fields: Purity | Product Type | From Brand (only non-fungible brands — `nonFungible=true`) | Weight (GB) | Weight (g) | Notes | Switched By
+- [x] Origin is always `foreign` — not shown to user (hardcoded server-side; not part of `productSwitchSchema`)
+- [x] Zod validation with `productSwitchSchema`
+- [x] Mutation `POST /inventory/product-switch` — success: toast "Reclassified to fungible pool" + navigate to `/inventory`
+- [x] On `422 NoSnapshotError`: show "Compute today's rate first" (backend message: "Today's rate not set — compute snapshot first")
+- [x] On `422 InsufficientStockError`: show insufficient stock message
 
 ---
 
