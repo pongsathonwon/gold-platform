@@ -13,7 +13,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setTokenState] = useState<string | null>(getToken());
+  const [tokenState, setTokenState] = useState<string | null>(getToken);
   const [user, setUser] = useState<PublicUser | null>(null);
 
   async function login(username: string, password: string) {
@@ -40,7 +40,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, token, isAuthenticated: !!token, login, logout }}
+      value={{
+        user,
+        token: tokenState,
+        isAuthenticated: !!tokenState,
+        login,
+        logout,
+      }}
     >
       {children}
     </AuthContext.Provider>

@@ -1,6 +1,14 @@
-import { useState, type FormEvent } from "react";
+import React, { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Button, Card, CardContent, TextField, Typography, Alert } from "@mui/material";
+import {
+  Box,
+  Button,
+  Card,
+  CardContent,
+  TextField,
+  Typography,
+  Alert,
+} from "@mui/material";
 import { loginSchema } from "@gold-platform/types";
 import { useAuth } from "../auth/AuthContext";
 
@@ -13,22 +21,24 @@ export function LoginPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  async function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: React.SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
+    setIsSubmitting(true);
     setSubmitError(null);
 
     const parsed = loginSchema.safeParse({ username, password });
     if (!parsed.success) {
       setFieldError(parsed.error.issues[0]?.message ?? "Invalid input");
+      setIsSubmitting(false);
       return;
     }
     setFieldError(null);
 
-    setIsSubmitting(true);
     try {
       await login(username, password);
       navigate("/inventory");
     } catch (err) {
+      console.error(err);
       setSubmitError(err instanceof Error ? err.message : "Login failed");
     } finally {
       setIsSubmitting(false);
@@ -50,7 +60,11 @@ export function LoginPage() {
           <Typography variant="h3" sx={{ mb: 3 }}>
             GoldOffice Login
           </Typography>
-          <Box component="form" onSubmit={handleSubmit} sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <Box
+            component="form"
+            onSubmit={handleSubmit}
+            sx={{ display: "flex", flexDirection: "column", gap: 2 }}
+          >
             <TextField
               label="Username"
               value={username}
