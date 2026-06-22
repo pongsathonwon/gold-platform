@@ -15,6 +15,7 @@ import { stockLossSchema } from "@gold-platform/types";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 import { useStockLoss } from "../hooks/useInventoryMutations";
 import { useToast } from "../components/ToastContext";
+import { useAuth } from "../auth/AuthContext";
 
 const LOSS_REASONS = [
   { value: "stock_count_loss", label: "Stock Count Loss" },
@@ -26,6 +27,7 @@ const LOSS_REASONS = [
 export function StockLossPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { user } = useAuth();
   const { data: puritiesRes } = usePurities();
   const { data: brandsRes } = useBrands();
   const { data: productTypesRes } = useProductTypes();
@@ -39,7 +41,6 @@ export function StockLossPage() {
   const [weightGm, setWeightGm] = useState("");
   const [reason, setReason] = useState<"stock_count_loss" | "damage" | "lost" | "correction">("stock_count_loss");
   const [notes, setNotes] = useState("");
-  const [auditedBy, setAuditedBy] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -59,7 +60,6 @@ export function StockLossPage() {
       weightGm: Number(weightGm),
       reason,
       notes: notes || undefined,
-      auditedBy,
     };
 
     const parsed = stockLossSchema.safeParse(payload);
@@ -141,7 +141,7 @@ export function StockLossPage() {
             </TextField>
 
             <TextField label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} multiline minRows={2} />
-            <TextField label="Audited By" value={auditedBy} onChange={(e) => setAuditedBy(e.target.value)} required />
+            <TextField label="Audited By" value={user?.username ?? ""} disabled />
 
             {fieldError && <Alert severity="error">{fieldError}</Alert>}
             {submitError && <Alert severity="error">{submitError}</Alert>}

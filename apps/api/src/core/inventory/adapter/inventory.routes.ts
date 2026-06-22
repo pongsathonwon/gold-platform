@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { runEffect } from "../../../infrastructure/runtime.js";
 import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
@@ -18,6 +18,11 @@ function toHttpError(error: unknown): [string, number] {
     return [JSON.stringify(error), 500]
 }
 
+function currentUsername(c: Context): string {
+    const payload = c.get("jwtPayload") as { username: string }
+    return payload.username
+}
+
 export const inventoriesRoutes = new Hono()
     .use(authMiddleware)
     .get("/volume", async (c) => {
@@ -27,13 +32,13 @@ export const inventoriesRoutes = new Hono()
     })
     .post("/gain", zValidator("json", stockGainSchema), async (c) => {
         const req = c.req.valid("json")
-        const result = await runEffect(stockGain(req))
+        const result = await runEffect(stockGain(req, currentUsername(c)))
         if (result.result === "success") return c.json({ data: result.data }, 201)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
     .post("/loss", zValidator("json", stockLossSchema), async (c) => {
         const req = c.req.valid("json")
-        const result = await runEffect(stockLoss(req))
+        const result = await runEffect(stockLoss(req, currentUsername(c)))
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
@@ -49,7 +54,7 @@ export const inventoriesRoutes = new Hono()
     })
     .post("/product-switch", zValidator("json", productSwitchSchema), async (c) => {
         const req = c.req.valid("json")
-        const result = await runEffect(productSwitch(req))
+        const result = await runEffect(productSwitch(req, currentUsername(c)))
         if (result.result === "success") return c.json({ data: result.data }, 201)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })

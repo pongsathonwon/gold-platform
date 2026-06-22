@@ -99,7 +99,6 @@ export interface ProductSwitchReq {
     weightGb: number
     weightGm: number
     notes?: string
-    switchedBy: string
 }
 
 export type { ProductSwitchShape };

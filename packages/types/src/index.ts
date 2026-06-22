@@ -54,7 +54,6 @@ export const stockGainSchema = z.object({
   totalCost: z.number().positive(),
   reason: z.enum(['stock_count_gain', 'correction']),
   notes: z.string().optional(),
-  auditedBy: z.string(),
 })
 
 export type StockGainReq = z.infer<typeof stockGainSchema>
@@ -68,7 +67,6 @@ export const stockLossSchema = z.object({
   weightGm: z.number().positive(),
   reason: z.enum(['stock_count_loss', 'damage', 'lost', 'correction']),
   notes: z.string().optional(),
-  auditedBy: z.string(),
 })
 
 export type StockLossReq = z.infer<typeof stockLossSchema>
@@ -80,7 +78,6 @@ export const productSwitchSchema = z.object({
   weightGb: z.number().positive(),
   weightGm: z.number().positive(),
   notes: z.string().optional(),
-  switchedBy: z.string(),
 })
 
 export type ProductSwitchReq = z.infer<typeof productSwitchSchema>

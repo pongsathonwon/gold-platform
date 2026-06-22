@@ -28,7 +28,7 @@ export const getInventoryVolume = () =>
         }));
     }).pipe(Effect.provide(inventoryLive))
 
-export const stockGain = (req: StockGainReq) =>
+export const stockGain = (req: StockGainReq, auditedBy: string) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
         const adjustmentId = randomUUID();
@@ -46,7 +46,7 @@ export const stockGain = (req: StockGainReq) =>
             totalCost: req.totalCost,
             reason: req.reason,
             notes: req.notes ?? null,
-            auditedBy: req.auditedBy,
+            auditedBy,
             auditedAt: new Date(),
         });
 
@@ -73,13 +73,13 @@ export const stockGain = (req: StockGainReq) =>
             costDelta: req.totalCost,
             notes: req.notes ?? null,
             movedAt: new Date(),
-            movedBy: req.auditedBy,
+            movedBy: auditedBy,
         });
 
         return { id: adjustmentId };
     }).pipe(Effect.provide(inventoryLive))
 
-export const stockLoss = (req: StockLossReq) =>
+export const stockLoss = (req: StockLossReq, auditedBy: string) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
         const adjustmentId = randomUUID();
@@ -109,7 +109,7 @@ export const stockLoss = (req: StockLossReq) =>
             weightGm: req.weightGm,
             reason: req.reason,
             notes: req.notes ?? null,
-            auditedBy: req.auditedBy,
+            auditedBy,
             auditedAt: new Date(),
         });
 
@@ -131,7 +131,7 @@ export const stockLoss = (req: StockLossReq) =>
             costDelta: -costDelta,
             notes: req.notes ?? null,
             movedAt: new Date(),
-            movedBy: req.auditedBy,
+            movedBy: auditedBy,
         });
 
         return { id: adjustmentId };
@@ -149,7 +149,7 @@ export const getTodaySnapshots = () =>
         return yield* repo.listSnapshotsByDate(today());
     }).pipe(Effect.provide(inventoryLive))
 
-export const productSwitch = (req: ProductSwitchReq) =>
+export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
         const date = today();
@@ -209,7 +209,7 @@ export const productSwitch = (req: ProductSwitchReq) =>
             fromCostDelta,
             toCostDelta,
             notes: req.notes ?? null,
-            switchedBy: req.switchedBy,
+            switchedBy,
             switchedAt: new Date(),
         });
 
@@ -228,7 +228,7 @@ export const productSwitch = (req: ProductSwitchReq) =>
             costDelta: -fromCostDelta,
             notes: req.notes ?? null,
             movedAt: new Date(),
-            movedBy: req.switchedBy,
+            movedBy: switchedBy,
         });
 
         yield* repo.createMovement({
@@ -244,7 +244,7 @@ export const productSwitch = (req: ProductSwitchReq) =>
             costDelta: toCostDelta,
             notes: req.notes ?? null,
             movedAt: new Date(),
-            movedBy: req.switchedBy,
+            movedBy: switchedBy,
         });
 
         return adjustment;

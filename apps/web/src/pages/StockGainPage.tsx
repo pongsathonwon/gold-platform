@@ -15,6 +15,7 @@ import { stockGainSchema } from "@gold-platform/types";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 import { useStockGain } from "../hooks/useInventoryMutations";
 import { useToast } from "../components/ToastContext";
+import { useAuth } from "../auth/AuthContext";
 
 const GAIN_REASONS = [
   { value: "stock_count_gain", label: "Stock Count Gain" },
@@ -24,6 +25,7 @@ const GAIN_REASONS = [
 export function StockGainPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { user } = useAuth();
   const { data: puritiesRes } = usePurities();
   const { data: brandsRes } = useBrands();
   const { data: productTypesRes } = useProductTypes();
@@ -39,7 +41,6 @@ export function StockGainPage() {
   const [totalCost, setTotalCost] = useState("");
   const [reason, setReason] = useState<"stock_count_gain" | "correction">("stock_count_gain");
   const [notes, setNotes] = useState("");
-  const [auditedBy, setAuditedBy] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -61,7 +62,6 @@ export function StockGainPage() {
       totalCost: Number(totalCost),
       reason,
       notes: notes || undefined,
-      auditedBy,
     };
 
     const parsed = stockGainSchema.safeParse(payload);
@@ -157,7 +157,7 @@ export function StockGainPage() {
             </TextField>
 
             <TextField label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} multiline minRows={2} />
-            <TextField label="Audited By" value={auditedBy} onChange={(e) => setAuditedBy(e.target.value)} required />
+            <TextField label="Audited By" value={user?.username ?? ""} disabled />
 
             {fieldError && <Alert severity="error">{fieldError}</Alert>}
             {submitError && <Alert severity="error">{submitError}</Alert>}

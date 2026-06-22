@@ -15,10 +15,12 @@ import { productSwitchSchema } from "@gold-platform/types";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 import { useProductSwitch } from "../hooks/useInventoryMutations";
 import { useToast } from "../components/ToastContext";
+import { useAuth } from "../auth/AuthContext";
 
 export function ProductSwitchPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { user } = useAuth();
   const { data: puritiesRes } = usePurities();
   const { data: brandsRes } = useBrands();
   const { data: productTypesRes } = useProductTypes();
@@ -30,7 +32,6 @@ export function ProductSwitchPage() {
   const [weightGb, setWeightGb] = useState("");
   const [weightGm, setWeightGm] = useState("");
   const [notes, setNotes] = useState("");
-  const [switchedBy, setSwitchedBy] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -47,7 +48,6 @@ export function ProductSwitchPage() {
       weightGb: Number(weightGb),
       weightGm: Number(weightGm),
       notes: notes || undefined,
-      switchedBy,
     };
 
     const parsed = productSwitchSchema.safeParse(payload);
@@ -114,7 +114,7 @@ export function ProductSwitchPage() {
             />
 
             <TextField label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} multiline minRows={2} />
-            <TextField label="Switched By" value={switchedBy} onChange={(e) => setSwitchedBy(e.target.value)} required />
+            <TextField label="Switched By" value={user?.username ?? ""} disabled />
 
             {fieldError && <Alert severity="error">{fieldError}</Alert>}
             {submitError && <Alert severity="error">{submitError}</Alert>}
