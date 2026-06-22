@@ -12,16 +12,16 @@ See [apps/api/TASKS.md](apps/api/TASKS.md) for the full breakdown.
 - [x] Schema: replace `inventoryLots` with `inventoryBalance`; add `origin`, `notes`, `productSwitchAdjustments`
 - [x] Inventory domain: WAC via daily snapshot, `computeSnapshots`, `productSwitch`
 - [x] Auth: login endpoint working, JWT middleware on inventory routes
-- [ ] DB migration + seed `'NA'` brand
+- [x] DB migration + seed `'NA'` brand
 
 ## Frontend
 
 See [apps/web/TASKS.md](apps/web/TASKS.md) for the full breakdown.
 
-- [ ] Login screen + JWT storage + auth guard
-- [ ] Inventory balance view + today's WAC rate display
-- [ ] Manual adjustment forms (gain, loss, product switch)
-- [ ] Daily snapshot trigger button
+- [x] Login screen + JWT storage + auth guard
+- [x] Inventory balance view + today's WAC rate display
+- [x] Manual adjustment forms (gain, loss, product switch)
+- [x] Daily snapshot trigger button
 
 ---
 
