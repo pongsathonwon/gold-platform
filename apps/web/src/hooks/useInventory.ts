@@ -11,6 +11,17 @@ export interface InventoryVolumeRow {
   totalCost: number;
 }
 
+export interface InventorySnapshotRow {
+  purityId: string;
+  brandId: string;
+  origin: string;
+  productTypeId: string;
+  snapshotDate: string;
+  weightGb: number;
+  weightGm: number;
+  totalCost: number;
+}
+
 export function useInventoryVolume() {
   return useQuery({
     queryKey: ["inventory", "volume"],
@@ -18,6 +29,17 @@ export function useInventoryVolume() {
       const res = await client.inventory.volume.$get();
       if (!res.ok) throw new Error("Failed to fetch inventory volume");
       return (await res.json()) as { data: InventoryVolumeRow[] };
+    },
+  });
+}
+
+export function useTodaySnapshots() {
+  return useQuery({
+    queryKey: ["inventory", "snapshots", "today"],
+    queryFn: async () => {
+      const res = await client.inventory.snapshots.$get();
+      if (!res.ok) throw new Error("Failed to fetch today's snapshots");
+      return (await res.json()) as { data: InventorySnapshotRow[] };
     },
   });
 }
@@ -32,6 +54,7 @@ export function useComputeSnapshot() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["inventory", "volume"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory", "snapshots", "today"] });
     },
   });
 }

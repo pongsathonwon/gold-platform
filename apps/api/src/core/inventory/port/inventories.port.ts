@@ -34,6 +34,7 @@ export interface ForInventoriesRepository {
     createStockGainAdjustment(req: CreateStockGain): Effect.Effect<void, RepositoryError>
     createStockLossAdjustment(req: CreateStockLoss): Effect.Effect<void, RepositoryError>
     getDailySnapshot(key: SnapshotKey, date: string): Effect.Effect<SnapshotShape | null, RepositoryError>
+    listSnapshotsByDate(date: string): Effect.Effect<SnapshotShape[], RepositoryError>
     upsertDailySnapshotOnce(req: CreateSnapshot): Effect.Effect<void, RepositoryError>
     computeAllSnapshots(date: string): Effect.Effect<SnapshotShape[], RepositoryError>
     createProductSwitchAdjustment(req: CreateProductSwitch): Effect.Effect<ProductSwitchShape, RepositoryError>

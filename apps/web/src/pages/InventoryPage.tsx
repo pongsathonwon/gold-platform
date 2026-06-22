@@ -13,14 +13,20 @@ import {
   CircularProgress,
   Alert,
   Stack,
+  Chip,
 } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
-import { useInventoryVolume, useComputeSnapshot } from "../hooks/useInventory";
+import { useInventoryVolume, useComputeSnapshot, useTodaySnapshots } from "../hooks/useInventory";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
 
+function poolKey(row: { purityId: string; brandId: string; origin: string; productTypeId: string }) {
+  return `${row.purityId}-${row.brandId}-${row.origin}-${row.productTypeId}`;
+}
+
 export function InventoryPage() {
   const { data: volumeRes, isPending, isError } = useInventoryVolume();
+  const { data: snapshotsRes } = useTodaySnapshots();
   const { data: puritiesRes } = usePurities();
   const { data: brandsRes } = useBrands();
   const { data: productTypesRes } = useProductTypes();
@@ -30,6 +36,7 @@ export function InventoryPage() {
   const purityById = new Map((puritiesRes?.data ?? []).map((p) => [p.id, p]));
   const brandById = new Map((brandsRes?.data ?? []).map((b) => [b.id, b]));
   const productTypeById = new Map((productTypesRes?.data ?? []).map((pt) => [pt.id, pt]));
+  const computedPools = new Set((snapshotsRes?.data ?? []).map(poolKey));
 
   function handleComputeSnapshot() {
     computeSnapshot.mutate(undefined, {
@@ -78,6 +85,7 @@ export function InventoryPage() {
                 <TableCell align="right">Weight (g)</TableCell>
                 <TableCell align="right">Total Cost</TableCell>
                 <TableCell align="right">WAC Rate (THB/GB)</TableCell>
+                <TableCell align="center">Today's Rate</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -88,9 +96,10 @@ export function InventoryPage() {
                   ? row.origin
                   : brandById.get(row.brandId)?.brand ?? row.brandId;
                 const wacRate = row.totalWeightGb > 0 ? row.totalCost / row.totalWeightGb : 0;
+                const isComputed = computedPools.has(poolKey(row));
 
                 return (
-                  <TableRow key={`${row.purityId}-${row.brandId}-${row.origin}-${row.productTypeId}`}>
+                  <TableRow key={poolKey(row)}>
                     <TableCell>{purity?.label ?? row.purityId}</TableCell>
                     <TableCell>{brandOrOrigin}</TableCell>
                     <TableCell>{productTypeById.get(row.productTypeId)?.productType ?? row.productTypeId}</TableCell>
@@ -98,12 +107,19 @@ export function InventoryPage() {
                     <TableCell align="right">{row.totalWeightGm.toFixed(2)}</TableCell>
                     <TableCell align="right">{row.totalCost.toFixed(2)}</TableCell>
                     <TableCell align="right">{wacRate.toFixed(2)}</TableCell>
+                    <TableCell align="center">
+                      <Chip
+                        label={isComputed ? "Computed" : "Not computed"}
+                        color={isComputed ? "success" : "default"}
+                        size="small"
+                      />
+                    </TableCell>
                   </TableRow>
                 );
               })}
               {volumeRes.data.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} align="center">
+                  <TableCell colSpan={8} align="center">
                     No inventory balance yet.
                   </TableCell>
                 </TableRow>

@@ -5,7 +5,7 @@ import { authMiddleware } from "../../../infrastructure/http/middleware/auth.mid
 import { stockGainSchema, stockLossSchema, productSwitchSchema } from "@gold-platform/types";
 import { InsufficientStockError, NoSnapshotError } from "../port/inventories.port.js";
 import {
-    getInventoryVolume, stockGain, stockLoss, computeSnapshots, productSwitch,
+    getInventoryVolume, stockGain, stockLoss, computeSnapshots, getTodaySnapshots, productSwitch,
 } from "../application/inventory.usecase.js";
 
 function toHttpError(error: unknown): [string, number] {
@@ -39,6 +39,11 @@ export const inventoriesRoutes = new Hono()
     })
     .post("/snapshots/compute", async (c) => {
         const result = await runEffect(computeSnapshots())
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+    })
+    .get("/snapshots", async (c) => {
+        const result = await runEffect(getTodaySnapshots())
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })

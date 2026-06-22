@@ -132,6 +132,15 @@ class InventoryRepository implements ForInventoriesRepository {
         }).pipe(Effect.map((rows) => rows[0] ?? null));
     }
 
+    listSnapshotsByDate(date: string) {
+        return Effect.tryPromise({
+            try: () => this.db.select().from(inventoryDailySnapshots)
+                .where(eq(inventoryDailySnapshots.snapshotDate, date))
+                .execute(),
+            catch: () => new RepositoryError({ message: "cannot list snapshots" }),
+        });
+    }
+
     upsertDailySnapshotOnce(req: CreateSnapshot) {
         return Effect.tryPromise({
             try: () => this.db.insert(inventoryDailySnapshots)

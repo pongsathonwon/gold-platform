@@ -36,7 +36,7 @@ All transaction screens (wholesale, retail, receive) are Sprint 2+.
   - For 99.9% rows: show Origin (`domestic` / `foreign`) in the Brand column; brand is 'N/A'
   - WAC Rate = `totalCost / totalWeightGb`, formatted as THB/GB
 - [x] "Compute Today's Rate" button — mutation `POST /inventory/snapshots/compute` → on success refetch volume
-- [ ] Show whether today's snapshot has been computed per pool (compare `snapshotDate` to today) — **deferred**: no `GET` endpoint exists yet to read today's snapshots without triggering a write; needs a backend addition before this can be implemented
+- [x] Show whether today's snapshot has been computed per pool (compare `snapshotDate` to today) — backed by `GET /inventory/snapshots` (returns today's snapshot rows only); table shows a "Computed" / "Not computed" chip per row
 - [x] Links to `/inventory/gain`, `/inventory/loss`, `/inventory/switch`
 
 ---

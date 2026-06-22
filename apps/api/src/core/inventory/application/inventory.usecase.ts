@@ -143,6 +143,12 @@ export const computeSnapshots = () =>
         return yield* repo.computeAllSnapshots(today());
     }).pipe(Effect.provide(inventoryLive))
 
+export const getTodaySnapshots = () =>
+    Effect.gen(function* () {
+        const repo = yield* InventoriesRepository;
+        return yield* repo.listSnapshotsByDate(today());
+    }).pipe(Effect.provide(inventoryLive))
+
 export const productSwitch = (req: ProductSwitchReq) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
