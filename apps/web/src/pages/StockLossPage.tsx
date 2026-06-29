@@ -6,16 +6,18 @@ import {
   Card,
   CardContent,
   TextField,
-  MenuItem,
   Button,
   Box,
   Alert,
 } from "@mui/material";
 import { stockLossSchema } from "@gold-platform/types";
-import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
+import { useBrands, useProductTypePurities, useProductTypes } from "../hooks/useMasterData";
 import { useStockLoss } from "../hooks/useInventoryMutations";
 import { useToast } from "../components/ToastContext";
 import { useAuth } from "../auth/AuthContext";
+import { useDynamicForm } from "../forms/useDynamicForm";
+import { DynamicFormField } from "../forms/DynamicFormField";
+import { getVisibleFields, type FieldConfig } from "../forms/types";
 
 const LOSS_REASONS = [
   { value: "stock_count_loss", label: "Stock Count Loss" },
@@ -24,42 +26,128 @@ const LOSS_REASONS = [
   { value: "correction", label: "Correction" },
 ] as const;
 
+interface LossValues extends Record<string, string> {
+  productTypeId: string;
+  purityId: string;
+  brandId: string;
+  origin: string;
+  weight: string;
+  reason: string;
+  notes: string;
+}
+
+const initialValues: LossValues = {
+  productTypeId: "",
+  purityId: "",
+  brandId: "",
+  origin: "foreign",
+  weight: "",
+  reason: "stock_count_loss",
+  notes: "",
+};
+
+// when an upstream field changes, downstream selections it no longer governs are reset
+const RESET_ON_CHANGE: Record<string, (keyof LossValues)[]> = {
+  productTypeId: ["purityId", "weight", "brandId", "origin"],
+  purityId: ["weight"],
+};
+
 export function StockLossPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { user } = useAuth();
-  const { data: puritiesRes } = usePurities();
-  const { data: brandsRes } = useBrands();
   const { data: productTypesRes } = useProductTypes();
+  const { data: brandsRes } = useBrands();
   const stockLoss = useStockLoss();
 
-  const [purityId, setPurityId] = useState("");
-  const [brandId, setBrandId] = useState("");
-  const [origin, setOrigin] = useState<"domestic" | "foreign">("foreign");
-  const [productTypeId, setProductTypeId] = useState("");
-  const [weightGb, setWeightGb] = useState("");
-  const [weightGm, setWeightGm] = useState("");
-  const [reason, setReason] = useState<"stock_count_loss" | "damage" | "lost" | "correction">("stock_count_loss");
-  const [notes, setNotes] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const selectedPurity = (puritiesRes?.data ?? []).find((p) => p.id === purityId);
-  const isNineNineNine = selectedPurity?.percent === 99.9;
+  const { values, setValue } = useDynamicForm(initialValues);
+  const { data: purityRulesRes } = useProductTypePurities(values.productTypeId);
+  const purityRules = purityRulesRes?.data ?? [];
+  const matchingRule = (v: LossValues) => purityRules.find((p) => p.purityId === v.purityId);
+
+  function handleChange(name: keyof LossValues, value: string) {
+    setValue(name, value);
+    // origin defaults to "foreign" and is only user-editable for 99.9% purity — reset it back to
+    // that default, not to "", since the field stays hidden (and thus unfixable) for other purities
+    RESET_ON_CHANGE[name as string]?.forEach((dep) => setValue(dep, dep === "origin" ? "foreign" : ""));
+  }
+
+  const fields: FieldConfig<LossValues>[] = [
+    {
+      name: "productTypeId",
+      label: "Product Type",
+      kind: "select",
+      required: true,
+      getOptions: () => (productTypesRes?.data ?? []).map((pt) => ({ value: pt.id, label: pt.productType })),
+    },
+    {
+      name: "purityId",
+      label: "Purity",
+      kind: "select",
+      required: true,
+      isVisible: (v) => !!v.productTypeId,
+      getOptions: () => purityRules.map((p) => ({ value: p.purityId, label: p.label })),
+    },
+    {
+      name: "origin",
+      label: "Origin",
+      kind: "select",
+      required: true,
+      isVisible: (v) => matchingRule(v)?.percent === 99.9,
+      getOptions: () => [
+        { value: "domestic", label: "Domestic" },
+        { value: "foreign", label: "Foreign" },
+      ],
+    },
+    {
+      name: "brandId",
+      label: "Brand",
+      kind: "select",
+      required: true,
+      isVisible: (v) => matchingRule(v)?.percent !== 99.9,
+      getOptions: () => (brandsRes?.data ?? []).filter((b) => b.active).map((b) => ({ value: b.id, label: b.brand })),
+    },
+    {
+      name: "weight",
+      label: (v) => (matchingRule(v)?.inputUnit === "kg" ? "Weight (kg)" : "Weight (GB)"),
+      kind: (v) => (matchingRule(v)?.allowedValues ? "select" : "number"),
+      required: true,
+      getOptions: (v) => (matchingRule(v)?.allowedValues ?? []).map((n) => ({ value: String(n), label: String(n) })),
+      helperText: (v) => {
+        const rule = matchingRule(v);
+        return rule && !rule.allowedValues ? `Minimum ${rule.minQuantity} GB` : undefined;
+      },
+    },
+    {
+      name: "reason",
+      label: "Reason",
+      kind: "select",
+      required: true,
+      getOptions: () => LOSS_REASONS.map((r) => ({ value: r.value, label: r.label })),
+    },
+    {
+      name: "notes",
+      label: "Notes",
+      kind: "multiline",
+    },
+  ];
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setSubmitError(null);
 
+    const rule = matchingRule(values);
     const payload = {
-      purityId,
-      brandId: isNineNineNine ? undefined : brandId || undefined,
-      origin,
-      productTypeId,
-      weightGb: Number(weightGb),
-      weightGm: Number(weightGm),
-      reason,
-      notes: notes || undefined,
+      purityId: values.purityId,
+      brandId: rule?.percent === 99.9 ? undefined : values.brandId || undefined,
+      origin: values.origin as "domestic" | "foreign",
+      productTypeId: values.productTypeId,
+      weight: Number(values.weight),
+      reason: values.reason as "stock_count_loss" | "damage" | "lost" | "correction",
+      notes: values.notes || undefined,
     };
 
     const parsed = stockLossSchema.safeParse(payload);
@@ -86,61 +174,10 @@ export function StockLossPage() {
       <Card>
         <CardContent>
           <Box component="form" onSubmit={handleSubmit} sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <TextField select label="Purity" value={purityId} onChange={(e) => setPurityId(e.target.value)} required>
-              {(puritiesRes?.data ?? []).map((p) => (
-                <MenuItem key={p.id} value={p.id}>
-                  {p.label}
-                </MenuItem>
-              ))}
-            </TextField>
+            {getVisibleFields(fields, values).map((field) => (
+              <DynamicFormField key={String(field.name)} field={field} values={values} onChange={handleChange} />
+            ))}
 
-            {isNineNineNine ? (
-              <TextField select label="Origin" value={origin} onChange={(e) => setOrigin(e.target.value as "domestic" | "foreign")} required>
-                <MenuItem value="domestic">Domestic</MenuItem>
-                <MenuItem value="foreign">Foreign</MenuItem>
-              </TextField>
-            ) : (
-              <TextField select label="Brand" value={brandId} onChange={(e) => setBrandId(e.target.value)} required>
-                {(brandsRes?.data ?? []).map((b) => (
-                  <MenuItem key={b.id} value={b.id}>
-                    {b.brand}
-                  </MenuItem>
-                ))}
-              </TextField>
-            )}
-
-            <TextField select label="Product Type" value={productTypeId} onChange={(e) => setProductTypeId(e.target.value)} required>
-              {(productTypesRes?.data ?? []).map((pt) => (
-                <MenuItem key={pt.id} value={pt.id}>
-                  {pt.productType}
-                </MenuItem>
-              ))}
-            </TextField>
-
-            <TextField
-              label="Weight (GB)"
-              type="number"
-              value={weightGb}
-              onChange={(e) => setWeightGb(e.target.value)}
-              required
-            />
-            <TextField
-              label="Weight (g)"
-              type="number"
-              value={weightGm}
-              onChange={(e) => setWeightGm(e.target.value)}
-              required
-            />
-
-            <TextField select label="Reason" value={reason} onChange={(e) => setReason(e.target.value as typeof reason)} required>
-              {LOSS_REASONS.map((r) => (
-                <MenuItem key={r.value} value={r.value}>
-                  {r.label}
-                </MenuItem>
-              ))}
-            </TextField>
-
-            <TextField label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} multiline minRows={2} />
             <TextField label="Audited By" value={user?.username ?? ""} disabled />
 
             {fieldError && <Alert severity="error">{fieldError}</Alert>}

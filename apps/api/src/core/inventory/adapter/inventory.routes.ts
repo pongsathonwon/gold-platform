@@ -4,6 +4,8 @@ import { runEffect } from "../../../infrastructure/runtime.js";
 import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
 import { stockGainSchema, stockLossSchema, productSwitchSchema } from "@gold-platform/types";
 import { InsufficientStockError, NoSnapshotError } from "../port/inventories.port.js";
+import { InvalidQuantityError, ProductTypePurityNotFoundError } from "../../../infrastructure/quantity.js";
+import { PurityNotFoundError, NoConversionRateError } from "../../../infrastructure/weight.js";
 import {
     getInventoryVolume, stockGain, stockLoss, computeSnapshots, getTodaySnapshots, productSwitch,
 } from "../application/inventory.usecase.js";
@@ -14,6 +16,22 @@ function toHttpError(error: unknown): [string, number] {
     }
     if (error instanceof NoSnapshotError) {
         return [`Today's rate not set — compute snapshot first`, 422]
+    }
+    if (error instanceof ProductTypePurityNotFoundError) {
+        return [`Purity ${error.purityId} is not valid for product type ${error.productTypeId}`, 422]
+    }
+    if (error instanceof InvalidQuantityError) {
+        const unit = error.inputUnit === "kg" ? "kg" : "GB"
+        const msg = error.allowedValues
+            ? `Weight must be one of ${error.allowedValues.join(", ")} ${unit}`
+            : `Weight must be a whole number of at least ${error.minQuantity} ${unit}`
+        return [msg, 422]
+    }
+    if (error instanceof PurityNotFoundError) {
+        return [`Purity ${error.purityId} not found`, 422]
+    }
+    if (error instanceof NoConversionRateError) {
+        return [`No conversion rate available`, 503]
     }
     return [JSON.stringify(error), 500]
 }

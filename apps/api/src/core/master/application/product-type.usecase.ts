@@ -15,3 +15,9 @@ export const findProductTypeById = (id: string) =>
         const repo = yield* ProductTypeRepository;
         return yield* repo.findProductTypeById(id);
     }).pipe(Effect.provide(productTypeLive))
+
+export const findProductTypePurities = (id: string) =>
+    Effect.gen(function* () {
+        const repo = yield* ProductTypeRepository;
+        return yield* repo.findProductTypePurities(id);
+    }).pipe(Effect.provide(productTypeLive))

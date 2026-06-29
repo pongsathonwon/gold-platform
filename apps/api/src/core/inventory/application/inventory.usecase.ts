@@ -6,6 +6,7 @@ import {
     InsufficientStockError, NoSnapshotError, ProductSwitchReq, ReverseDecrementReq,
 } from "../port/inventories.port.js";
 import { makeInventoryRepository } from "../adapter/inventory.repository.js";
+import { resolveQuantity } from "../../../infrastructure/quantity.js";
 
 const inventoryLive = Layer.effect(InventoriesRepository, makeInventoryRepository);
 
@@ -33,6 +34,7 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
         const repo = yield* InventoriesRepository;
         const adjustmentId = randomUUID();
         const brandId = req.brandId ?? 'NA';
+        const { weightGb, weightGm, conversionFactor } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
         yield* repo.createStockGainAdjustment({
             id: adjustmentId,
@@ -40,9 +42,9 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
             brandId: req.brandId ?? null,
             origin: req.origin,
             productTypeId: req.productTypeId,
-            weightGb: req.weightGb,
-            weightGm: req.weightGm,
-            conversionFactor: req.conversionFactor,
+            weightGb,
+            weightGm,
+            conversionFactor,
             totalCost: req.totalCost,
             reason: req.reason,
             notes: req.notes ?? null,
@@ -55,8 +57,8 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
             brandId,
             origin: req.origin,
             productTypeId: req.productTypeId,
-            totalWeightGb: req.weightGb,
-            totalWeightGm: req.weightGm,
+            totalWeightGb: weightGb,
+            totalWeightGm: weightGm,
             totalCost: req.totalCost,
         });
 
@@ -68,8 +70,8 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
             productTypeId: req.productTypeId,
             referenceType: 'STOCK_GAIN',
             referenceId: adjustmentId,
-            weightGbDelta: req.weightGb,
-            weightGmDelta: req.weightGm,
+            weightGbDelta: weightGb,
+            weightGmDelta: weightGm,
             costDelta: req.totalCost,
             notes: req.notes ?? null,
             movedAt: new Date(),
@@ -85,6 +87,7 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
         const adjustmentId = randomUUID();
         const brandId = req.brandId ?? 'NA';
         const date = today();
+        const { weightGb, weightGm } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
         const snapshot = yield* repo.getDailySnapshot(
             { purityId: req.purityId, brandId, origin: req.origin, productTypeId: req.productTypeId },
@@ -97,7 +100,7 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
         }
 
         const snapshotRate = snapshot.totalCost / snapshot.weightGb;
-        const costDelta = req.weightGb * snapshotRate;
+        const costDelta = weightGb * snapshotRate;
 
         yield* repo.createStockLossAdjustment({
             id: adjustmentId,
@@ -105,8 +108,8 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
             brandId: req.brandId ?? null,
             origin: req.origin,
             productTypeId: req.productTypeId,
-            weightGb: req.weightGb,
-            weightGm: req.weightGm,
+            weightGb,
+            weightGm,
             reason: req.reason,
             notes: req.notes ?? null,
             auditedBy,
@@ -115,7 +118,7 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
 
         yield* repo.decrementBalance(
             { purityId: req.purityId, brandId, origin: req.origin, productTypeId: req.productTypeId },
-            req.weightGb, req.weightGm, costDelta,
+            weightGb, weightGm, costDelta,
         );
 
         yield* repo.createMovement({
@@ -126,8 +129,8 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
             productTypeId: req.productTypeId,
             referenceType: 'STOCK_LOSS',
             referenceId: adjustmentId,
-            weightGbDelta: -req.weightGb,
-            weightGmDelta: -req.weightGm,
+            weightGbDelta: -weightGb,
+            weightGmDelta: -weightGm,
             costDelta: -costDelta,
             notes: req.notes ?? null,
             movedAt: new Date(),
@@ -154,6 +157,7 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
         const repo = yield* InventoriesRepository;
         const date = today();
         const origin = 'foreign' as const;
+        const { weightGb, weightGm } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
         // get non-fungible balance to compute its WAC
         const nonFungibleBalance = yield* repo.getBalance({
@@ -162,13 +166,13 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
             origin,
             productTypeId: req.productTypeId,
         });
-        if (!nonFungibleBalance || nonFungibleBalance.totalWeightGb < req.weightGb) {
+        if (!nonFungibleBalance || nonFungibleBalance.totalWeightGb < weightGb) {
             const available = nonFungibleBalance?.totalWeightGb ?? 0;
-            return yield* Effect.fail(new InsufficientStockError({ requested: req.weightGb, available }));
+            return yield* Effect.fail(new InsufficientStockError({ requested: weightGb, available }));
         }
 
         const nonFungibleWac = nonFungibleBalance.totalCost / nonFungibleBalance.totalWeightGb;
-        const fromCostDelta = req.weightGb * nonFungibleWac;
+        const fromCostDelta = weightGb * nonFungibleWac;
 
         // get fungible (NA) snapshot for today's rate
         const fungibleSnapshot = yield* repo.getDailySnapshot(
@@ -181,12 +185,12 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
             }));
         }
         const fungibleRate = fungibleSnapshot.totalCost / fungibleSnapshot.weightGb;
-        const toCostDelta = req.weightGb * fungibleRate;
+        const toCostDelta = weightGb * fungibleRate;
 
         // decrement non-fungible pool
         yield* repo.decrementBalance(
             { purityId: req.purityId, brandId: req.fromBrandId, origin, productTypeId: req.productTypeId },
-            req.weightGb, req.weightGm, fromCostDelta,
+            weightGb, weightGm, fromCostDelta,
         );
 
         // increment fungible (NA) pool
@@ -195,8 +199,8 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
             brandId: 'NA',
             origin,
             productTypeId: req.productTypeId,
-            totalWeightGb: req.weightGb,
-            totalWeightGm: req.weightGm,
+            totalWeightGb: weightGb,
+            totalWeightGm: weightGm,
             totalCost: toCostDelta,
         });
 
@@ -204,8 +208,8 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
             purityId: req.purityId,
             productTypeId: req.productTypeId,
             fromBrandId: req.fromBrandId,
-            weightGb: req.weightGb,
-            weightGm: req.weightGm,
+            weightGb,
+            weightGm,
             fromCostDelta,
             toCostDelta,
             notes: req.notes ?? null,
@@ -223,8 +227,8 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
             productTypeId: req.productTypeId,
             referenceType: 'PRODUCT_SWITCH',
             referenceId: adjustmentId,
-            weightGbDelta: -req.weightGb,
-            weightGmDelta: -req.weightGm,
+            weightGbDelta: -weightGb,
+            weightGmDelta: -weightGm,
             costDelta: -fromCostDelta,
             notes: req.notes ?? null,
             movedAt: new Date(),
@@ -239,8 +243,8 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
             productTypeId: req.productTypeId,
             referenceType: 'PRODUCT_SWITCH',
             referenceId: adjustmentId,
-            weightGbDelta: req.weightGb,
-            weightGmDelta: req.weightGm,
+            weightGbDelta: weightGb,
+            weightGmDelta: weightGm,
             costDelta: toCostDelta,
             notes: req.notes ?? null,
             movedAt: new Date(),

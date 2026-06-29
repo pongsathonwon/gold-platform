@@ -48,9 +48,7 @@ export const stockGainSchema = z.object({
   brandId: z.string().optional(),
   origin: z.enum(['domestic', 'foreign']),
   productTypeId: z.string(),
-  weightGb: z.number().positive(),
-  weightGm: z.number().positive(),
-  conversionFactor: z.number().positive(),
+  weight: z.number().int().positive(),
   totalCost: z.number().positive(),
   reason: z.enum(['stock_count_gain', 'correction']),
   notes: z.string().optional(),
@@ -63,8 +61,7 @@ export const stockLossSchema = z.object({
   brandId: z.string().optional(),
   origin: z.enum(['domestic', 'foreign']),
   productTypeId: z.string(),
-  weightGb: z.number().positive(),
-  weightGm: z.number().positive(),
+  weight: z.number().int().positive(),
   reason: z.enum(['stock_count_loss', 'damage', 'lost', 'correction']),
   notes: z.string().optional(),
 })
@@ -75,8 +72,7 @@ export const productSwitchSchema = z.object({
   purityId: z.string(),
   productTypeId: z.string(),
   fromBrandId: z.string(),
-  weightGb: z.number().positive(),
-  weightGm: z.number().positive(),
+  weight: z.number().int().positive(),
   notes: z.string().optional(),
 })
 

@@ -96,8 +96,7 @@ export interface ProductSwitchReq {
     purityId: string
     productTypeId: string
     fromBrandId: string
-    weightGb: number
-    weightGm: number
+    weight: number
     notes?: string
 }
 
