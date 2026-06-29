@@ -78,14 +78,14 @@ export function InventoryPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Purity</TableCell>
-                <TableCell>Brand / Origin</TableCell>
-                <TableCell>Product Type</TableCell>
-                <TableCell align="right">Weight (GB)</TableCell>
-                <TableCell align="right">Weight (g)</TableCell>
-                <TableCell align="right">Total Cost</TableCell>
-                <TableCell align="right">WAC Rate (THB/GB)</TableCell>
-                <TableCell align="center">Today's Rate</TableCell>
+                <TableCell>% ทอง</TableCell>
+                <TableCell>แบรน</TableCell>
+                <TableCell>ประเภททอง</TableCell>
+                <TableCell align="right">น้ำหนัก (บาท)</TableCell>
+                <TableCell align="right">น้ำหนัก (กรัม)</TableCell>
+                <TableCell align="right">มูลค่า</TableCell>
+                <TableCell align="right">ราคาเฉลี่ย (บาท/บาททอง)</TableCell>
+                <TableCell align="center"></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -109,7 +109,7 @@ export function InventoryPage() {
                     <TableCell align="right">{wacRate.toFixed(2)}</TableCell>
                     <TableCell align="center">
                       <Chip
-                        label={isComputed ? "Computed" : "Not computed"}
+                        label={isComputed ? "ปิดยอดแล้ว" : "รอปิดยอด"}
                         color={isComputed ? "success" : "default"}
                         size="small"
                       />
@@ -120,7 +120,7 @@ export function InventoryPage() {
               {volumeRes.data.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={8} align="center">
-                    No inventory balance yet.
+                    ไม่พบรายการรับเข้า
                   </TableCell>
                 </TableRow>
               )}
