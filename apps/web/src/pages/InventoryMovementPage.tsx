@@ -9,32 +9,31 @@ import {
   TableCell,
   TableContainer,
   Paper,
-  Button,
   Box,
   CircularProgress,
   Alert,
-  Stack,
+  Chip,
 } from "@mui/material";
-import { Link as RouterLink } from "react-router-dom";
-import { useInventoryVolume } from "../hooks/useInventory";
+import { useInventoryMovements } from "../hooks/useInventory";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 
-type VolumeRow = {
+type MovementRow = {
+  id: string;
   purityId: string;
   brandId: string;
   origin: string;
   productTypeId: string;
-  totalWeightGb: number;
-  totalWeightGm: number;
-  totalCost: number;
+  referenceType: string;
+  weightGbDelta: number;
+  weightGmDelta: number;
+  costDelta: number;
+  movedAt: string;
+  movedBy: string;
+  notes: string | null;
 };
 
-function poolKey(row: { purityId: string; brandId: string; origin: string; productTypeId: string }) {
-  return `${row.purityId}-${row.brandId}-${row.origin}-${row.productTypeId}`;
-}
-
-export function InventoryPage() {
-  const { data: volumeRes, isPending, isError } = useInventoryVolume();
+export function InventoryMovementPage() {
+  const { data: movementsRes, isPending, isError } = useInventoryMovements();
   const { data: puritiesRes } = usePurities();
   const { data: brandsRes } = useBrands();
   const { data: productTypesRes } = useProductTypes();
@@ -43,17 +42,17 @@ export function InventoryPage() {
   const brandById = new Map((brandsRes?.data ?? []).map((b) => [b.id, b]));
   const productTypeById = new Map((productTypesRes?.data ?? []).map((pt) => [pt.id, pt]));
 
-  const rows: VolumeRow[] = volumeRes?.data ?? [];
-  const isNineNineNine = (row: VolumeRow) => purityById.get(row.purityId)?.percent === 99.9;
+  const rows: MovementRow[] = movementsRes?.data ?? [];
+  const isNineNineNine = (row: MovementRow) => purityById.get(row.purityId)?.percent === 99.9;
   const nineSixFive = rows.filter((r) => !isNineNineNine(r));
   const nineNineNine = rows.filter(isNineNineNine);
 
-  // 96.5% is measured in gold baht (บาท); 99.9% in kilograms (กก. = grams / 1000)
-  function renderSection(title: string, sectionRows: VolumeRow[], unit: "gb" | "kg") {
+  // 96.5% deltas are in gold baht (บาท); 99.9% in kilograms (กก. = grams / 1000)
+  function renderSection(title: string, sectionRows: MovementRow[], unit: "gb" | "kg") {
     const weightHeader = unit === "gb" ? "น้ำหนัก (บาท)" : "น้ำหนัก (กก.)";
-    const weightOf = (r: VolumeRow) => (unit === "gb" ? r.totalWeightGb : r.totalWeightGm / 1000);
+    const weightOf = (r: MovementRow) => (unit === "gb" ? r.weightGbDelta : r.weightGmDelta / 1000);
     const totalWeight = sectionRows.reduce((sum, r) => sum + weightOf(r), 0);
-    const totalCost = sectionRows.reduce((sum, r) => sum + (r.totalCost ?? 0), 0);
+    const totalCost = sectionRows.reduce((sum, r) => sum + r.costDelta, 0);
 
     return (
       <Box sx={{ mb: 4 }}>
@@ -64,12 +63,15 @@ export function InventoryPage() {
           <Table>
             <TableHead>
               <TableRow>
+                <TableCell>วันที่</TableCell>
                 <TableCell>% ทอง</TableCell>
                 <TableCell>แบรน</TableCell>
                 <TableCell>ประเภททอง</TableCell>
+                <TableCell>ประเภทรายการ</TableCell>
                 <TableCell align="right">{weightHeader}</TableCell>
                 <TableCell align="right">มูลค่า</TableCell>
-                <TableCell align="right">ราคาเฉลี่ย (บาท/บาททอง)</TableCell>
+                <TableCell>บันทึกโดย</TableCell>
+                <TableCell>หมายเหตุ</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -77,23 +79,33 @@ export function InventoryPage() {
                 const purity = purityById.get(row.purityId);
                 const brandOrOrigin =
                   unit === "kg" ? row.origin : brandById.get(row.brandId)?.brand ?? row.brandId;
-                const wacRate = row.totalWeightGb > 0 ? row.totalCost / row.totalWeightGb : 0;
+                const weight = weightOf(row);
+                const isPositive = row.weightGbDelta >= 0;
+                const deltaColor = isPositive ? "success.main" : "error.main";
 
                 return (
-                  <TableRow key={poolKey(row)}>
+                  <TableRow key={row.id}>
+                    <TableCell>{new Date(row.movedAt).toLocaleString()}</TableCell>
                     <TableCell>{purity?.label ?? row.purityId}</TableCell>
                     <TableCell>{brandOrOrigin}</TableCell>
                     <TableCell>{productTypeById.get(row.productTypeId)?.productType ?? row.productTypeId}</TableCell>
-                    <TableCell align="right">{weightOf(row).toFixed(4)}</TableCell>
-                    <TableCell align="right">{(row.totalCost ?? 0).toFixed(2)}</TableCell>
-                    <TableCell align="right">{wacRate.toFixed(2)}</TableCell>
+                    <TableCell>
+                      <Chip label={row.referenceType} size="small" />
+                    </TableCell>
+                    <TableCell align="right" sx={{ color: deltaColor }}>
+                      {isPositive ? "+" : ""}
+                      {weight.toFixed(4)}
+                    </TableCell>
+                    <TableCell align="right">{row.costDelta.toFixed(2)}</TableCell>
+                    <TableCell>{row.movedBy}</TableCell>
+                    <TableCell>{row.notes ?? ""}</TableCell>
                   </TableRow>
                 );
               })}
               {sectionRows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} align="center">
-                    ไม่พบรายการ
+                  <TableCell colSpan={9} align="center">
+                    ไม่พบรายการเคลื่อนไหว
                   </TableCell>
                 </TableRow>
               )}
@@ -101,16 +113,17 @@ export function InventoryPage() {
             {sectionRows.length > 0 && (
               <TableFooter>
                 <TableRow>
-                  <TableCell colSpan={3} sx={{ fontWeight: "bold", color: "text.primary" }}>
+                  <TableCell colSpan={5} sx={{ fontWeight: "bold", color: "text.primary" }}>
                     รวม
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
+                    {totalWeight >= 0 ? "+" : ""}
                     {totalWeight.toFixed(4)}
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
                     {totalCost.toFixed(2)}
                   </TableCell>
-                  <TableCell />
+                  <TableCell colSpan={2} />
                 </TableRow>
               </TableFooter>
             )}
@@ -123,21 +136,7 @@ export function InventoryPage() {
   return (
     <Container sx={{ py: 4 }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 3 }}>
-        <Typography variant="h2">Inventory</Typography>
-        <Stack direction="row" spacing={2}>
-          <Button component={RouterLink} to="/inventory/movements" variant="outlined">
-            Movement History
-          </Button>
-          <Button component={RouterLink} to="/inventory/gain" variant="outlined">
-            Stock Gain
-          </Button>
-          <Button component={RouterLink} to="/inventory/loss" variant="outlined">
-            Stock Loss
-          </Button>
-          <Button component={RouterLink} to="/inventory/switch" variant="outlined">
-            Product Switch
-          </Button>
-        </Stack>
+        <Typography variant="h2">Inventory Movement</Typography>
       </Box>
 
       {isPending && (
@@ -146,9 +145,9 @@ export function InventoryPage() {
         </Box>
       )}
 
-      {isError && <Alert severity="error">Failed to load inventory volume.</Alert>}
+      {isError && <Alert severity="error">Failed to load inventory movements.</Alert>}
 
-      {volumeRes && (
+      {movementsRes && (
         <>
           {renderSection("ทอง 96.5%", nineSixFive, "gb")}
           {renderSection("ทอง 99.9%", nineNineNine, "kg")}

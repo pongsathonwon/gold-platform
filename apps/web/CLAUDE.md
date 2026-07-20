@@ -115,7 +115,8 @@ Routes are declared in `App.tsx`. React Router v7 with `<Routes>` / `<Route>`.
 
 ```
 /login                    — login form (public)
-/inventory                — inventory balance view, today's WAC rate, snapshot trigger (protected)
+/inventory                — inventory balance view, split 96.5 (GB) / 99.9 (KG), per-purity totals (protected)
+/inventory/movements      — movement ledger, split by purity with per-purity totals (protected)
 /inventory/gain           — stock gain form (protected)
 /inventory/loss           — stock loss form (protected)
 /inventory/switch         — product switch form (protected)

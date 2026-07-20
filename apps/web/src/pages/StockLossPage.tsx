@@ -10,7 +10,7 @@ import {
   Box,
   Alert,
 } from "@mui/material";
-import { stockLossSchema } from "@gold-platform/types";
+import { stockLossSchema, TRANSACTION_TYPES } from "@gold-platform/types";
 import { useBrands, useProductTypePurities, useProductTypes } from "../hooks/useMasterData";
 import { useStockLoss } from "../hooks/useInventoryMutations";
 import { useToast } from "../components/ToastContext";
@@ -19,20 +19,13 @@ import { useDynamicForm } from "../forms/useDynamicForm";
 import { DynamicFormField } from "../forms/DynamicFormField";
 import { getVisibleFields, type FieldConfig } from "../forms/types";
 
-const LOSS_REASONS = [
-  { value: "stock_count_loss", label: "Stock Count Loss" },
-  { value: "damage", label: "Damage" },
-  { value: "lost", label: "Lost" },
-  { value: "correction", label: "Correction" },
-] as const;
-
 interface LossValues extends Record<string, string> {
   productTypeId: string;
   purityId: string;
   brandId: string;
   origin: string;
   weight: string;
-  reason: string;
+  referenceType: string;
   notes: string;
 }
 
@@ -42,7 +35,7 @@ const initialValues: LossValues = {
   brandId: "",
   origin: "foreign",
   weight: "",
-  reason: "stock_count_loss",
+  referenceType: TRANSACTION_TYPES[0].value,
   notes: "",
 };
 
@@ -122,11 +115,11 @@ export function StockLossPage() {
       },
     },
     {
-      name: "reason",
-      label: "Reason",
+      name: "referenceType",
+      label: "ประเภทรายการ",
       kind: "select",
       required: true,
-      getOptions: () => LOSS_REASONS.map((r) => ({ value: r.value, label: r.label })),
+      getOptions: () => TRANSACTION_TYPES.map((t) => ({ value: t.value, label: t.label })),
     },
     {
       name: "notes",
@@ -146,7 +139,7 @@ export function StockLossPage() {
       origin: values.origin as "domestic" | "foreign",
       productTypeId: values.productTypeId,
       weight: Number(values.weight),
-      reason: values.reason as "stock_count_loss" | "damage" | "lost" | "correction",
+      referenceType: values.referenceType,
       notes: values.notes || undefined,
     };
 

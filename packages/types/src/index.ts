@@ -43,14 +43,38 @@ export type AuthResponse = z.infer<typeof LoginResponseSchema>
 
 //inventory
 
+// Combined transaction-type list used as the "remark" dropdown on the gain/loss forms.
+// The selected value becomes the movement's referenceType. Each type migrates to its own
+// dedicated module later; until then all movements are recorded through gain/loss.
+export const TRANSACTION_TYPES = [
+  { value: 'WHOLESALE_BUY', label: 'ซื้อส่ง' },
+  { value: 'WHOLESALE_SELL', label: 'ขายส่ง' },
+  { value: 'RETAIL_BUY', label: 'ซื้อปลีก' },
+  { value: 'RETAIL_SELL', label: 'ขายปลีก' },
+  { value: 'RECEIVED', label: 'รับเข้า' },
+  { value: 'SMELTING', label: 'หลอม' },
+  { value: 'CONVERT_OUT', label: 'แปรสภาพออก' },
+  { value: 'PRODUCT_SWITCH', label: 'สลับสินค้า' },
+  { value: 'STOCK_COUNT', label: 'ตรวจนับสต๊อก' },
+  { value: 'DAMAGE', label: 'ชำรุด' },
+  { value: 'LOST', label: 'สูญหาย' },
+  { value: 'MANUAL_CORRECTION', label: 'แก้ไขด้วยตนเอง' },
+] as const
+
+export const transactionTypeSchema = z.enum(
+  TRANSACTION_TYPES.map((t) => t.value) as [string, ...string[]]
+)
+
+export type TransactionType = (typeof TRANSACTION_TYPES)[number]['value']
+
 export const stockGainSchema = z.object({
   purityId: z.string(),
   brandId: z.string().optional(),
   origin: z.enum(['domestic', 'foreign']),
   productTypeId: z.string(),
   weight: z.number().int().positive(),
-  totalCost: z.number().positive(),
-  reason: z.enum(['stock_count_gain', 'correction']),
+  pricePerGb: z.number().positive(),
+  referenceType: transactionTypeSchema,
   notes: z.string().optional(),
 })
 
@@ -62,7 +86,7 @@ export const stockLossSchema = z.object({
   origin: z.enum(['domestic', 'foreign']),
   productTypeId: z.string(),
   weight: z.number().int().positive(),
-  reason: z.enum(['stock_count_loss', 'damage', 'lost', 'correction']),
+  referenceType: transactionTypeSchema,
   notes: z.string().optional(),
 })
 

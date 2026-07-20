@@ -10,7 +10,7 @@ import {
   Box,
   Alert,
 } from "@mui/material";
-import { stockGainSchema } from "@gold-platform/types";
+import { stockGainSchema, TRANSACTION_TYPES } from "@gold-platform/types";
 import { useBrands, useProductTypePurities, useProductTypes } from "../hooks/useMasterData";
 import { useStockGain } from "../hooks/useInventoryMutations";
 import { useToast } from "../components/ToastContext";
@@ -19,19 +19,14 @@ import { useDynamicForm } from "../forms/useDynamicForm";
 import { DynamicFormField } from "../forms/DynamicFormField";
 import { getVisibleFields, type FieldConfig } from "../forms/types";
 
-const GAIN_REASONS = [
-  { value: "stock_count_gain", label: "Stock Count Gain" },
-  { value: "correction", label: "Correction" },
-] as const;
-
 interface GainValues extends Record<string, string> {
   productTypeId: string;
   purityId: string;
   brandId: string;
   origin: string;
   weight: string;
-  totalCost: string;
-  reason: string;
+  pricePerGb: string;
+  referenceType: string;
   notes: string;
 }
 
@@ -41,8 +36,8 @@ const initialValues: GainValues = {
   brandId: "",
   origin: "foreign",
   weight: "",
-  totalCost: "",
-  reason: "stock_count_gain",
+  pricePerGb: "",
+  referenceType: TRANSACTION_TYPES[0].value,
   notes: "",
 };
 
@@ -122,17 +117,17 @@ export function StockGainPage() {
       },
     },
     {
-      name: "totalCost",
-      label: "Total Cost",
+      name: "pricePerGb",
+      label: "ราคาต่อบาททอง",
       kind: "number",
       required: true,
     },
     {
-      name: "reason",
-      label: "Reason",
+      name: "referenceType",
+      label: "ประเภทรายการ",
       kind: "select",
       required: true,
-      getOptions: () => GAIN_REASONS.map((r) => ({ value: r.value, label: r.label })),
+      getOptions: () => TRANSACTION_TYPES.map((t) => ({ value: t.value, label: t.label })),
     },
     {
       name: "notes",
@@ -152,8 +147,8 @@ export function StockGainPage() {
       origin: values.origin as "domestic" | "foreign",
       productTypeId: values.productTypeId,
       weight: Number(values.weight),
-      totalCost: Number(values.totalCost),
-      reason: values.reason as "stock_count_gain" | "correction",
+      pricePerGb: Number(values.pricePerGb),
+      referenceType: values.referenceType,
       notes: values.notes || undefined,
     };
 

@@ -1,21 +1,27 @@
 import { Hono, type Context } from "hono";
+import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { runEffect } from "../../../infrastructure/runtime.js";
 import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
 import { stockGainSchema, stockLossSchema, productSwitchSchema } from "@gold-platform/types";
-import { InsufficientStockError, NoSnapshotError } from "../port/inventories.port.js";
+import { InsufficientStockError } from "../port/inventories.port.js";
 import { InvalidQuantityError, ProductTypePurityNotFoundError } from "../../../infrastructure/quantity.js";
 import { PurityNotFoundError, NoConversionRateError } from "../../../infrastructure/weight.js";
 import {
-    getInventoryVolume, stockGain, stockLoss, computeSnapshots, getTodaySnapshots, productSwitch,
+    getInventoryVolume, stockGain, stockLoss, productSwitch, getInventoryMovements,
 } from "../application/inventory.usecase.js";
+
+const movementsQuerySchema = z.object({
+    purityId: z.string().optional(),
+    brandId: z.string().optional(),
+    origin: z.enum(['domestic', 'foreign']).optional(),
+    productTypeId: z.string().optional(),
+    referenceType: z.string().optional(),
+})
 
 function toHttpError(error: unknown): [string, number] {
     if (error instanceof InsufficientStockError) {
         return [`Insufficient stock — requested ${error.requested} GB, available ${error.available} GB`, 422]
-    }
-    if (error instanceof NoSnapshotError) {
-        return [`Today's rate not set — compute snapshot first`, 422]
     }
     if (error instanceof ProductTypePurityNotFoundError) {
         return [`Purity ${error.purityId} is not valid for product type ${error.productTypeId}`, 422]
@@ -60,13 +66,9 @@ export const inventoriesRoutes = new Hono()
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
-    .post("/snapshots/compute", async (c) => {
-        const result = await runEffect(computeSnapshots())
-        if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
-    })
-    .get("/snapshots", async (c) => {
-        const result = await runEffect(getTodaySnapshots())
+    .get("/movements", zValidator("query", movementsQuerySchema), async (c) => {
+        const req = c.req.valid("query")
+        const result = await runEffect(getInventoryMovements(req))
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })

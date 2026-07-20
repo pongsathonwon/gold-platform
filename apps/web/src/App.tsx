@@ -8,6 +8,7 @@ import { ToastProvider } from "./components/ToastContext";
 import { NavBar } from "./components/NavBar";
 import { LoginPage } from "./pages/LoginPage";
 import { InventoryPage } from "./pages/InventoryPage";
+import { InventoryMovementPage } from "./pages/InventoryMovementPage";
 import { StockGainPage } from "./pages/StockGainPage";
 import { StockLossPage } from "./pages/StockLossPage";
 import { ProductSwitchPage } from "./pages/ProductSwitchPage";
@@ -27,6 +28,7 @@ export function App() {
               <Route element={<AuthGuard />}>
                 <Route path="/" element={<Navigate to="/inventory" replace />} />
                 <Route path="/inventory" element={<InventoryPage />} />
+                <Route path="/inventory/movements" element={<InventoryMovementPage />} />
                 <Route path="/inventory/gain" element={<StockGainPage />} />
                 <Route path="/inventory/loss" element={<StockLossPage />} />
                 <Route path="/inventory/switch" element={<ProductSwitchPage />} />

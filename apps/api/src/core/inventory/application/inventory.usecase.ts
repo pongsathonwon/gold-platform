@@ -2,15 +2,13 @@ import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
 import { StockGainReq, StockLossReq } from "@gold-platform/types";
 import {
-    DecrementReq, IncrementReq, InventoriesRepository, InventoryVolume,
-    InsufficientStockError, NoSnapshotError, ProductSwitchReq, ReverseDecrementReq,
+    DecrementReq, IncrementReq, InventoriesRepository, InventoryVolume, MovementFilter,
+    ProductSwitchReq, ReverseDecrementReq,
 } from "../port/inventories.port.js";
 import { makeInventoryRepository } from "../adapter/inventory.repository.js";
 import { resolveQuantity } from "../../../infrastructure/quantity.js";
 
 const inventoryLive = Layer.effect(InventoriesRepository, makeInventoryRepository);
-
-const today = () => new Date().toISOString().slice(0, 10);
 
 // --- Public usecases (HTTP) ---
 
@@ -35,6 +33,8 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
         const adjustmentId = randomUUID();
         const brandId = req.brandId ?? 'NA';
         const { weightGb, weightGm, conversionFactor } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
+        // operator enters price per gold baht (บาททอง); total cost is derived from the resolved GB weight
+        const totalCost = req.pricePerGb * weightGb;
 
         yield* repo.createStockGainAdjustment({
             id: adjustmentId,
@@ -45,8 +45,9 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
             weightGb,
             weightGm,
             conversionFactor,
-            totalCost: req.totalCost,
-            reason: req.reason,
+            pricePerGb: req.pricePerGb,
+            totalCost,
+            referenceType: req.referenceType,
             notes: req.notes ?? null,
             auditedBy,
             auditedAt: new Date(),
@@ -59,7 +60,7 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
             productTypeId: req.productTypeId,
             totalWeightGb: weightGb,
             totalWeightGm: weightGm,
-            totalCost: req.totalCost,
+            totalCost,
         });
 
         yield* repo.createMovement({
@@ -68,11 +69,11 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
             brandId,
             origin: req.origin,
             productTypeId: req.productTypeId,
-            referenceType: 'STOCK_GAIN',
+            referenceType: req.referenceType,
             referenceId: adjustmentId,
             weightGbDelta: weightGb,
             weightGmDelta: weightGm,
-            costDelta: req.totalCost,
+            costDelta: totalCost,
             notes: req.notes ?? null,
             movedAt: new Date(),
             movedBy: auditedBy,
@@ -86,21 +87,14 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
         const repo = yield* InventoriesRepository;
         const adjustmentId = randomUUID();
         const brandId = req.brandId ?? 'NA';
-        const date = today();
         const { weightGb, weightGm } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
-        const snapshot = yield* repo.getDailySnapshot(
+        // decrement first so an insufficient-stock failure leaves no adjustment record;
+        // cost removed is derived from the pool's live WAC inside the locked transaction
+        const costDelta = yield* repo.decrementBalance(
             { purityId: req.purityId, brandId, origin: req.origin, productTypeId: req.productTypeId },
-            date,
+            weightGb, weightGm,
         );
-        if (!snapshot) {
-            return yield* Effect.fail(new NoSnapshotError({
-                purityId: req.purityId, brandId, origin: req.origin, productTypeId: req.productTypeId, date,
-            }));
-        }
-
-        const snapshotRate = snapshot.totalCost / snapshot.weightGb;
-        const costDelta = weightGb * snapshotRate;
 
         yield* repo.createStockLossAdjustment({
             id: adjustmentId,
@@ -110,16 +104,11 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
             productTypeId: req.productTypeId,
             weightGb,
             weightGm,
-            reason: req.reason,
+            referenceType: req.referenceType,
             notes: req.notes ?? null,
             auditedBy,
             auditedAt: new Date(),
         });
-
-        yield* repo.decrementBalance(
-            { purityId: req.purityId, brandId, origin: req.origin, productTypeId: req.productTypeId },
-            weightGb, weightGm, costDelta,
-        );
 
         yield* repo.createMovement({
             id: randomUUID(),
@@ -127,7 +116,7 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
             brandId,
             origin: req.origin,
             productTypeId: req.productTypeId,
-            referenceType: 'STOCK_LOSS',
+            referenceType: req.referenceType,
             referenceId: adjustmentId,
             weightGbDelta: -weightGb,
             weightGmDelta: -weightGm,
@@ -140,58 +129,25 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
         return { id: adjustmentId };
     }).pipe(Effect.provide(inventoryLive))
 
-export const computeSnapshots = () =>
+export const getInventoryMovements = (filter: MovementFilter) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
-        return yield* repo.computeAllSnapshots(today());
-    }).pipe(Effect.provide(inventoryLive))
-
-export const getTodaySnapshots = () =>
-    Effect.gen(function* () {
-        const repo = yield* InventoriesRepository;
-        return yield* repo.listSnapshotsByDate(today());
+        return yield* repo.listMovements(filter);
     }).pipe(Effect.provide(inventoryLive))
 
 export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
-        const date = today();
         const origin = 'foreign' as const;
         const { weightGb, weightGm } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
-        // get non-fungible balance to compute its WAC
-        const nonFungibleBalance = yield* repo.getBalance({
-            purityId: req.purityId,
-            brandId: req.fromBrandId,
-            origin,
-            productTypeId: req.productTypeId,
-        });
-        if (!nonFungibleBalance || nonFungibleBalance.totalWeightGb < weightGb) {
-            const available = nonFungibleBalance?.totalWeightGb ?? 0;
-            return yield* Effect.fail(new InsufficientStockError({ requested: weightGb, available }));
-        }
-
-        const nonFungibleWac = nonFungibleBalance.totalCost / nonFungibleBalance.totalWeightGb;
-        const fromCostDelta = weightGb * nonFungibleWac;
-
-        // get fungible (NA) snapshot for today's rate
-        const fungibleSnapshot = yield* repo.getDailySnapshot(
-            { purityId: req.purityId, brandId: 'NA', origin, productTypeId: req.productTypeId },
-            date,
-        );
-        if (!fungibleSnapshot) {
-            return yield* Effect.fail(new NoSnapshotError({
-                purityId: req.purityId, brandId: 'NA', origin, productTypeId: req.productTypeId, date,
-            }));
-        }
-        const fungibleRate = fungibleSnapshot.totalCost / fungibleSnapshot.weightGb;
-        const toCostDelta = weightGb * fungibleRate;
-
-        // decrement non-fungible pool
-        yield* repo.decrementBalance(
+        // decrement non-fungible pool at its live WAC (returns the cost removed); the reclassification
+        // conserves cost value, so the fungible pool is credited with the same amount
+        const fromCostDelta = yield* repo.decrementBalance(
             { purityId: req.purityId, brandId: req.fromBrandId, origin, productTypeId: req.productTypeId },
-            weightGb, weightGm, fromCostDelta,
+            weightGb, weightGm,
         );
+        const toCostDelta = fromCostDelta;
 
         // increment fungible (NA) pool
         yield* repo.upsertBalance({
@@ -290,24 +246,11 @@ export const increment = (req: IncrementReq) =>
 export const decrement = (req: DecrementReq) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
-        const date = today();
 
-        const snapshot = yield* repo.getDailySnapshot(
+        // cost removed is derived from the pool's live WAC inside the locked transaction
+        const costDelta = yield* repo.decrementBalance(
             { purityId: req.purityId, brandId: req.brandId, origin: req.origin, productTypeId: req.productTypeId },
-            date,
-        );
-        if (!snapshot) {
-            return yield* Effect.fail(new NoSnapshotError({
-                purityId: req.purityId, brandId: req.brandId, origin: req.origin, productTypeId: req.productTypeId, date,
-            }));
-        }
-
-        const snapshotRate = snapshot.totalCost / snapshot.weightGb;
-        const costDelta = req.weightGb * snapshotRate;
-
-        yield* repo.decrementBalance(
-            { purityId: req.purityId, brandId: req.brandId, origin: req.origin, productTypeId: req.productTypeId },
-            req.weightGb, req.weightGm, costDelta,
+            req.weightGb, req.weightGm,
         );
 
         yield* repo.createMovement({

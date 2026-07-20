@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { client } from "../api/client";
 
 export interface InventoryVolumeRow {
@@ -11,15 +11,28 @@ export interface InventoryVolumeRow {
   totalCost: number;
 }
 
-export interface InventorySnapshotRow {
+export interface InventoryMovementRow {
+  id: string;
   purityId: string;
   brandId: string;
   origin: string;
   productTypeId: string;
-  snapshotDate: string;
-  weightGb: number;
-  weightGm: number;
-  totalCost: number;
+  referenceType: string;
+  referenceId: string;
+  weightGbDelta: number;
+  weightGmDelta: number;
+  costDelta: number;
+  notes: string | null;
+  movedAt: string;
+  movedBy: string;
+}
+
+export interface InventoryMovementFilter {
+  purityId?: string;
+  brandId?: string;
+  origin?: "domestic" | "foreign";
+  productTypeId?: string;
+  referenceType?: string;
 }
 
 export function useInventoryVolume() {
@@ -33,28 +46,13 @@ export function useInventoryVolume() {
   });
 }
 
-export function useTodaySnapshots() {
+export function useInventoryMovements(filter: InventoryMovementFilter = {}) {
   return useQuery({
-    queryKey: ["inventory", "snapshots", "today"],
+    queryKey: ["inventory", "movements", filter],
     queryFn: async () => {
-      const res = await client.inventory.snapshots.$get();
-      if (!res.ok) throw new Error("Failed to fetch today's snapshots");
-      return (await res.json()) as { data: InventorySnapshotRow[] };
-    },
-  });
-}
-
-export function useComputeSnapshot() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async () => {
-      const res = await client.inventory.snapshots.compute.$post();
-      if (!res.ok) throw new Error("Failed to compute snapshot");
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["inventory", "volume"] });
-      queryClient.invalidateQueries({ queryKey: ["inventory", "snapshots", "today"] });
+      const res = await client.inventory.movements.$get({ query: filter });
+      if (!res.ok) throw new Error("Failed to fetch inventory movements");
+      return (await res.json()) as { data: InventoryMovementRow[] };
     },
   });
 }
