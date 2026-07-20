@@ -5,16 +5,14 @@ import {
   Typography,
   Card,
   CardContent,
-  TextField,
   Button,
   Box,
   Alert,
 } from "@mui/material";
-import { stockGainSchema, TRANSACTION_TYPES } from "@gold-platform/types";
+import { stockGainSchema, GAIN_TRANSACTION_TYPES } from "@gold-platform/types";
 import { useBrands, useProductTypePurities, useProductTypes } from "../hooks/useMasterData";
 import { useStockGain } from "../hooks/useInventoryMutations";
 import { useToast } from "../components/ToastContext";
-import { useAuth } from "../auth/AuthContext";
 import { useDynamicForm } from "../forms/useDynamicForm";
 import { DynamicFormField } from "../forms/DynamicFormField";
 import { getVisibleFields, type FieldConfig } from "../forms/types";
@@ -37,7 +35,7 @@ const initialValues: GainValues = {
   origin: "foreign",
   weight: "",
   pricePerGb: "",
-  referenceType: TRANSACTION_TYPES[0].value,
+  referenceType: GAIN_TRANSACTION_TYPES[0].value,
   notes: "",
 };
 
@@ -50,7 +48,6 @@ const RESET_ON_CHANGE: Record<string, (keyof GainValues)[]> = {
 export function StockGainPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
-  const { user } = useAuth();
   const { data: productTypesRes } = useProductTypes();
   const { data: brandsRes } = useBrands();
   const stockGain = useStockGain();
@@ -127,7 +124,7 @@ export function StockGainPage() {
       label: "ประเภทรายการ",
       kind: "select",
       required: true,
-      getOptions: () => TRANSACTION_TYPES.map((t) => ({ value: t.value, label: t.label })),
+      getOptions: () => GAIN_TRANSACTION_TYPES.map((t) => ({ value: t.value, label: t.label })),
     },
     {
       name: "notes",
@@ -179,8 +176,6 @@ export function StockGainPage() {
             {getVisibleFields(fields, values).map((field) => (
               <DynamicFormField key={String(field.name)} field={field} values={values} onChange={handleChange} />
             ))}
-
-            <TextField label="Audited By" value={user?.username ?? ""} disabled />
 
             {fieldError && <Alert severity="error">{fieldError}</Alert>}
             {submitError && <Alert severity="error">{submitError}</Alert>}

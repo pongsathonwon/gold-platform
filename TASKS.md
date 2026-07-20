@@ -71,3 +71,11 @@ Update this file (mark done + notes) before moving to the next task.
 
 - [x] **1. InventoryMovementPage.tsx** — reference type now maps through `TRANSACTION_TYPES` Thai labels instead of the raw code; dropped the redundant `% ทอง` column (footer colspans adjusted); product type renders `Goldbar`→ทองแท่ง / `Gold Plate`→ทองแผ่น; cost delta uses the same success/error colour as weight and formats with thousands separators + sign (`+1,234.56`), including the `รวม` footer total.
 
+---
+
+# Stock Gain/Loss Form Cleanup (post-launch)
+
+- [x] **1. packages/types** — tagged each `TRANSACTION_TYPES` entry with a `direction` (`gain` / `loss` / `both` / `none`, derived from which usecase — `increment` vs `decrement` — each domain calls per `apps/api/CLAUDE.md`); exported `GAIN_TRANSACTION_TYPES` / `LOSS_TRANSACTION_TYPES` filtered views. `PRODUCT_SWITCH` is `none` — it's set internally by the product-switch flow, never user-selected.
+- [x] **2. StockGainPage.tsx / StockLossPage.tsx** — reference-type dropdown (and default value) now sources from the direction-filtered list instead of the full `TRANSACTION_TYPES`; dropped the "Audited By" field (already excluded from the submitted payload — was UI noise) and the now-unused `useAuth` import.
+- [x] **3. Tests** — `apps/web/src/pages/transactionTypes.test.ts`: gain/loss lists only contain their allowed directions, each excludes the other's exclusive types and `PRODUCT_SWITCH`, and `both`-tagged types appear in both lists.
+
