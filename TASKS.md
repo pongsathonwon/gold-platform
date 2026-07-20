@@ -65,3 +65,9 @@ Update this file (mark done + notes) before moving to the next task.
 - [x] **2. InventoryPage.tsx** — dropped the `% ทอง` table column (redundant with the `ทอง 96.5%` / `ทอง 99.9%` section titles); extracted the purity-split / weight-unit / WAC math into `src/utils/inventoryVolume.ts` (`poolKey`, `weightOf`, `wacRate`, `splitByPurity`).
 - [x] **3. Test infra** — added `vitest` to `apps/web` (`npm test` → `vitest run`), config in `vite.config.ts`; unit tests for the extracted helpers in `src/utils/inventoryVolume.test.ts` (6 tests, gb/kg conversion, WAC divide-by-zero guard, purity split). Verified the sidebar + column removal live via a Playwright smoke script (`playwright` added as a dev dependency for reuse).
 
+---
+
+# InventoryMovementPage Polish (post-launch)
+
+- [x] **1. InventoryMovementPage.tsx** — reference type now maps through `TRANSACTION_TYPES` Thai labels instead of the raw code; dropped the redundant `% ทอง` column (footer colspans adjusted); product type renders `Goldbar`→ทองแท่ง / `Gold Plate`→ทองแผ่น; cost delta uses the same success/error colour as weight and formats with thousands separators + sign (`+1,234.56`), including the `รวม` footer total.
+
