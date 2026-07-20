@@ -57,3 +57,11 @@ Update this file (mark done + notes) before moving to the next task.
 - Docs updated: `apps/api/CLAUDE.md` now describes live-WAC (report-only snapshots, `pricePerGb`, `TRANSACTION_TYPES`); open-item #9 marked resolved. `inventory.md` got a stale banner pointing to CLAUDE.md (it described a never-built lot/FIFO model).
 - `getDailySnapshot` (repo/port) is retained but no longer used by any usecase — kept for the opening-balance report feature.
 
+---
+
+# Inventory Nav Sidebar (post-launch)
+
+- [x] **1. InventoryLayout.tsx** — vertical `Tabs` sidebar (Inventory / Movement History / Stock Gain / Stock Loss / Product Switch) with active tab driven by `useLocation()`; nested `/inventory/*` routes under it in `App.tsx` (index route = `InventoryPage`). Replaces the per-page row of nav buttons.
+- [x] **2. InventoryPage.tsx** — dropped the `% ทอง` table column (redundant with the `ทอง 96.5%` / `ทอง 99.9%` section titles); extracted the purity-split / weight-unit / WAC math into `src/utils/inventoryVolume.ts` (`poolKey`, `weightOf`, `wacRate`, `splitByPurity`).
+- [x] **3. Test infra** — added `vitest` to `apps/web` (`npm test` → `vitest run`), config in `vite.config.ts`; unit tests for the extracted helpers in `src/utils/inventoryVolume.test.ts` (6 tests, gb/kg conversion, WAC divide-by-zero guard, purity split). Verified the sidebar + column removal live via a Playwright smoke script (`playwright` added as a dev dependency for reuse).
+

@@ -9,29 +9,13 @@ import {
   TableCell,
   TableContainer,
   Paper,
-  Button,
   Box,
   CircularProgress,
   Alert,
-  Stack,
 } from "@mui/material";
-import { Link as RouterLink } from "react-router-dom";
 import { useInventoryVolume } from "../hooks/useInventory";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
-
-type VolumeRow = {
-  purityId: string;
-  brandId: string;
-  origin: string;
-  productTypeId: string;
-  totalWeightGb: number;
-  totalWeightGm: number;
-  totalCost: number;
-};
-
-function poolKey(row: { purityId: string; brandId: string; origin: string; productTypeId: string }) {
-  return `${row.purityId}-${row.brandId}-${row.origin}-${row.productTypeId}`;
-}
+import { type VolumeRow, poolKey, weightOf, splitByPurity, wacRate } from "../utils/inventoryVolume";
 
 export function InventoryPage() {
   const { data: volumeRes, isPending, isError } = useInventoryVolume();
@@ -44,15 +28,14 @@ export function InventoryPage() {
   const productTypeById = new Map((productTypesRes?.data ?? []).map((pt) => [pt.id, pt]));
 
   const rows: VolumeRow[] = volumeRes?.data ?? [];
-  const isNineNineNine = (row: VolumeRow) => purityById.get(row.purityId)?.percent === 99.9;
-  const nineSixFive = rows.filter((r) => !isNineNineNine(r));
-  const nineNineNine = rows.filter(isNineNineNine);
+  const { nineSixFive, nineNineNine } = splitByPurity(
+    rows,
+    (row) => purityById.get(row.purityId)?.percent === 99.9,
+  );
 
-  // 96.5% is measured in gold baht (บาท); 99.9% in kilograms (กก. = grams / 1000)
   function renderSection(title: string, sectionRows: VolumeRow[], unit: "gb" | "kg") {
     const weightHeader = unit === "gb" ? "น้ำหนัก (บาท)" : "น้ำหนัก (กก.)";
-    const weightOf = (r: VolumeRow) => (unit === "gb" ? r.totalWeightGb : r.totalWeightGm / 1000);
-    const totalWeight = sectionRows.reduce((sum, r) => sum + weightOf(r), 0);
+    const totalWeight = sectionRows.reduce((sum, r) => sum + weightOf(r, unit), 0);
     const totalCost = sectionRows.reduce((sum, r) => sum + (r.totalCost ?? 0), 0);
 
     return (
@@ -64,7 +47,6 @@ export function InventoryPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>% ทอง</TableCell>
                 <TableCell>แบรน</TableCell>
                 <TableCell>ประเภททอง</TableCell>
                 <TableCell align="right">{weightHeader}</TableCell>
@@ -74,25 +56,22 @@ export function InventoryPage() {
             </TableHead>
             <TableBody>
               {sectionRows.map((row) => {
-                const purity = purityById.get(row.purityId);
                 const brandOrOrigin =
                   unit === "kg" ? row.origin : brandById.get(row.brandId)?.brand ?? row.brandId;
-                const wacRate = row.totalWeightGb > 0 ? row.totalCost / row.totalWeightGb : 0;
 
                 return (
                   <TableRow key={poolKey(row)}>
-                    <TableCell>{purity?.label ?? row.purityId}</TableCell>
                     <TableCell>{brandOrOrigin}</TableCell>
                     <TableCell>{productTypeById.get(row.productTypeId)?.productType ?? row.productTypeId}</TableCell>
-                    <TableCell align="right">{weightOf(row).toFixed(4)}</TableCell>
+                    <TableCell align="right">{weightOf(row, unit).toFixed(4)}</TableCell>
                     <TableCell align="right">{(row.totalCost ?? 0).toFixed(2)}</TableCell>
-                    <TableCell align="right">{wacRate.toFixed(2)}</TableCell>
+                    <TableCell align="right">{wacRate(row).toFixed(2)}</TableCell>
                   </TableRow>
                 );
               })}
               {sectionRows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} align="center">
+                  <TableCell colSpan={5} align="center">
                     ไม่พบรายการ
                   </TableCell>
                 </TableRow>
@@ -101,7 +80,7 @@ export function InventoryPage() {
             {sectionRows.length > 0 && (
               <TableFooter>
                 <TableRow>
-                  <TableCell colSpan={3} sx={{ fontWeight: "bold", color: "text.primary" }}>
+                  <TableCell colSpan={2} sx={{ fontWeight: "bold", color: "text.primary" }}>
                     รวม
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
@@ -122,22 +101,8 @@ export function InventoryPage() {
 
   return (
     <Container sx={{ py: 4 }}>
-      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 3 }}>
+      <Box sx={{ mb: 3 }}>
         <Typography variant="h2">Inventory</Typography>
-        <Stack direction="row" spacing={2}>
-          <Button component={RouterLink} to="/inventory/movements" variant="outlined">
-            Movement History
-          </Button>
-          <Button component={RouterLink} to="/inventory/gain" variant="outlined">
-            Stock Gain
-          </Button>
-          <Button component={RouterLink} to="/inventory/loss" variant="outlined">
-            Stock Loss
-          </Button>
-          <Button component={RouterLink} to="/inventory/switch" variant="outlined">
-            Product Switch
-          </Button>
-        </Stack>
       </Box>
 
       {isPending && (
