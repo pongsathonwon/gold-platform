@@ -79,3 +79,17 @@ Update this file (mark done + notes) before moving to the next task.
 - [x] **2. StockGainPage.tsx / StockLossPage.tsx** — reference-type dropdown (and default value) now sources from the direction-filtered list instead of the full `TRANSACTION_TYPES`; dropped the "Audited By" field (already excluded from the submitted payload — was UI noise) and the now-unused `useAuth` import.
 - [x] **3. Tests** — `apps/web/src/pages/transactionTypes.test.ts`: gain/loss lists only contain their allowed directions, each excludes the other's exclusive types and `PRODUCT_SWITCH`, and `both`-tagged types appear in both lists.
 
+---
+
+# Movement Cumulative Balance (post-launch)
+
+Tracking checklist for the approved plan (`~/.claude/plans/the-inventory-movements-page-user-clever-phoenix.md`).
+Update this file (mark done + notes) before moving to the next task.
+
+Running balance per purity (all brands mixed) on `/inventory/movements`, over a from–to date range (default today). Recompute-on-read from the append-only ledger — no stored `balanceAfter` column. Balance per line = per-purity opening (sum of deltas before `from`) + running sum forward through the window.
+
+- [x] **1. Backend** — `from`/`to` on `movementsQuerySchema` + `MovementFilter`; `listMovements` gains `gte`/`lte` on `movedAt` and ascending `(movedAt, id)` order; new `sumMovementsBefore` per-purity opening (first SQL aggregate in the repo; `coalesce(sum(...),0)::double precision`, skipped when no `from`); `getInventoryMovements` returns `{ movements, opening }`. _Done: shared `nonDateConditions` helper reused by both queries so opening covers the same pools as the window._
+- [x] **2. Frontend helper** — `withCumulative(rowsAsc, opening)` in `src/utils/inventoryVolume.ts` (per-`purityId` running total, seeds from opening, preserves input order) + 5 vitest cases in `inventoryVolume.test.ts` (opening seed, missing-opening=0, mixed-brand forward sum, independent purities, empty window). _Done: 18 web tests pass._
+- [x] **3. InventoryMovementPage** — from/to `type="date"` inputs (default today, MUI v9 `slotProps`), `คงเหลือสะสม` balance column per section (gb for 96.5, gm/1000 for 99.9), closing-balance footer. _Done: rows render ascending (oldest→newest) per operator preference; closing balance = last row._
+- [~] **4. Type-check both apps** + run the Verification flow. _Type-check PASSES for `apps/api` and `apps/web`; 18 web unit tests pass. **Live run blocked — Docker daemon down, Postgres 5432 closed.** Remaining: `docker compose up -d` + `pnpm dev`, then cross-check each section's closing balance (with `to = today`) against `SELECT purity_id, sum(total_weight_gb) FROM inventory_balance GROUP BY purity_id`._
+

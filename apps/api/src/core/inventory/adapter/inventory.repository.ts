@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, gte, lt, lte, sql } from "drizzle-orm";
 import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
 import {
     inventoryBalance, inventoryMovements,
@@ -7,6 +7,18 @@ import {
     CreateMovement, CreateProductSwitch, CreateStockGain, CreateStockLoss, UpsertBalance,
 } from "../../../infrastructure/db/schema/inventory.schema.js";
 import { BalanceKey, ForInventoriesRepository, InsufficientStockError, MovementFilter } from "../port/inventories.port.js";
+
+// non-date movement filters, shared by listMovements and sumMovementsBefore so the opening
+// balance is summed over the same pools the window shows
+function nonDateConditions(filter: MovementFilter) {
+    return [
+        filter.purityId ? eq(inventoryMovements.purityId, filter.purityId) : undefined,
+        filter.brandId ? eq(inventoryMovements.brandId, filter.brandId) : undefined,
+        filter.origin ? eq(inventoryMovements.origin, filter.origin) : undefined,
+        filter.productTypeId ? eq(inventoryMovements.productTypeId, filter.productTypeId) : undefined,
+        filter.referenceType ? eq(inventoryMovements.referenceType, filter.referenceType) : undefined,
+    ].filter(Boolean) as ReturnType<typeof eq>[];
+}
 
 const INSUFFICIENT = Symbol('InsufficientStockError')
 
@@ -147,19 +159,39 @@ class InventoryRepository implements ForInventoriesRepository {
 
     listMovements(filter: MovementFilter) {
         const conditions = [
-            filter.purityId ? eq(inventoryMovements.purityId, filter.purityId) : undefined,
-            filter.brandId ? eq(inventoryMovements.brandId, filter.brandId) : undefined,
-            filter.origin ? eq(inventoryMovements.origin, filter.origin) : undefined,
-            filter.productTypeId ? eq(inventoryMovements.productTypeId, filter.productTypeId) : undefined,
-            filter.referenceType ? eq(inventoryMovements.referenceType, filter.referenceType) : undefined,
+            ...nonDateConditions(filter),
+            filter.from ? gte(inventoryMovements.movedAt, new Date(filter.from)) : undefined,
+            filter.to ? lte(inventoryMovements.movedAt, new Date(filter.to)) : undefined,
         ].filter(Boolean) as ReturnType<typeof eq>[];
 
+        // ascending by (movedAt, id) so the caller can run a deterministic forward cumulative
         return Effect.tryPromise({
             try: () => this.db.select().from(inventoryMovements)
                 .where(conditions.length > 0 ? and(...conditions) : undefined)
-                .orderBy(desc(inventoryMovements.movedAt))
+                .orderBy(asc(inventoryMovements.movedAt), asc(inventoryMovements.id))
                 .execute(),
             catch: () => new RepositoryError({ message: "cannot list movements" }),
+        });
+    }
+
+    sumMovementsBefore(filter: MovementFilter) {
+        if (!filter.from) return Effect.succeed([]);
+
+        const conditions = [
+            ...nonDateConditions(filter),
+            lt(inventoryMovements.movedAt, new Date(filter.from)),
+        ] as ReturnType<typeof eq>[];
+
+        return Effect.tryPromise({
+            try: () => this.db.select({
+                purityId: inventoryMovements.purityId,
+                weightGb: sql<number>`coalesce(sum(${inventoryMovements.weightGbDelta}), 0)::double precision`,
+                weightGm: sql<number>`coalesce(sum(${inventoryMovements.weightGmDelta}), 0)::double precision`,
+            }).from(inventoryMovements)
+                .where(and(...conditions))
+                .groupBy(inventoryMovements.purityId)
+                .execute(),
+            catch: () => new RepositoryError({ message: "cannot sum movements" }),
         });
     }
 }

@@ -17,6 +17,9 @@ const movementsQuerySchema = z.object({
     origin: z.enum(['domestic', 'foreign']).optional(),
     productTypeId: z.string().optional(),
     referenceType: z.string().optional(),
+    // ISO datetimes: start-of-`from`-day and end-of-`to`-day; window is [from, to] inclusive
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
 })
 
 function toHttpError(error: unknown): [string, number] {

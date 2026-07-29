@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { poolKey, weightOf, splitByPurity, wacRate, type VolumeRow } from "./inventoryVolume";
+import {
+  poolKey, weightOf, splitByPurity, wacRate, withCumulative,
+  type VolumeRow, type MovementOpening,
+} from "./inventoryVolume";
 
 function row(overrides: Partial<VolumeRow> = {}): VolumeRow {
   return {
@@ -37,6 +40,42 @@ describe("wacRate", () => {
 
   it("returns 0 when totalWeightGb is 0 to avoid dividing by zero", () => {
     expect(wacRate(row({ totalWeightGb: 0, totalCost: 62750 }))).toBe(0);
+  });
+});
+
+describe("withCumulative", () => {
+  const mv = (purityId: string, gb: number, gm = 0) => ({ purityId, weightGbDelta: gb, weightGmDelta: gm });
+
+  it("seeds the first row's balance from the purity opening", () => {
+    const opening: MovementOpening[] = [{ purityId: "965", weightGb: 100, weightGm: 0 }];
+    const [first] = withCumulative([mv("965", 5)], opening);
+    expect(first.cumulativeWeightGb).toBe(105);
+  });
+
+  it("treats a missing opening as zero", () => {
+    const [first] = withCumulative([mv("965", 5)], []);
+    expect(first.cumulativeWeightGb).toBe(5);
+  });
+
+  it("runs a forward cumulative across mixed brands of one purity", () => {
+    const rows = [mv("965", 5), mv("965", -2), mv("965", 3)];
+    const result = withCumulative(rows, [{ purityId: "965", weightGb: 10, weightGm: 0 }]);
+    expect(result.map((r) => r.cumulativeWeightGb)).toEqual([15, 13, 16]);
+  });
+
+  it("accumulates each purity independently", () => {
+    const rows = [mv("965", 5, 0), mv("999", 0, 1000), mv("965", 1, 0), mv("999", 0, 500)];
+    const opening: MovementOpening[] = [
+      { purityId: "965", weightGb: 10, weightGm: 0 },
+      { purityId: "999", weightGb: 0, weightGm: 2000 },
+    ];
+    const result = withCumulative(rows, opening);
+    expect(result.map((r) => r.cumulativeWeightGb)).toEqual([15, 0, 16, 0]);
+    expect(result.map((r) => r.cumulativeWeightGm)).toEqual([0, 3000, 0, 3500]);
+  });
+
+  it("returns no rows for an empty window (opening is the closing balance)", () => {
+    expect(withCumulative([], [{ purityId: "965", weightGb: 10, weightGm: 0 }])).toEqual([]);
   });
 });
 

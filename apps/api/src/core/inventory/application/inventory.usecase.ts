@@ -132,7 +132,11 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
 export const getInventoryMovements = (filter: MovementFilter) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
-        return yield* repo.listMovements(filter);
+        // movements come back ascending by (movedAt, id); opening is the per-purity balance
+        // strictly before filter.from — together they let the client run a forward cumulative
+        const movements = yield* repo.listMovements(filter);
+        const opening = yield* repo.sumMovementsBefore(filter);
+        return { movements, opening };
     }).pipe(Effect.provide(inventoryLive))
 
 export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
