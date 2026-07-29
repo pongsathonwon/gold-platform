@@ -68,14 +68,14 @@ export function StockLossPage() {
   const fields: FieldConfig<LossValues>[] = [
     {
       name: "productTypeId",
-      label: "Product Type",
+      label: "ประเภททองคำ",
       kind: "select",
       required: true,
       getOptions: () => (productTypesRes?.data ?? []).map((pt) => ({ value: pt.id, label: pt.productType })),
     },
     {
       name: "purityId",
-      label: "Purity",
+      label: "% ทอง",
       kind: "select",
       required: true,
       isVisible: (v) => !!v.productTypeId,
@@ -83,7 +83,7 @@ export function StockLossPage() {
     },
     {
       name: "origin",
-      label: "Origin",
+      label: "ทอง 99",
       kind: "select",
       required: true,
       isVisible: (v) => matchingRule(v)?.percent === 99.9,
@@ -94,7 +94,7 @@ export function StockLossPage() {
     },
     {
       name: "brandId",
-      label: "Brand",
+      label: "ยี่ห้อ",
       kind: "select",
       required: true,
       isVisible: (v) => matchingRule(v)?.percent !== 99.9,
@@ -102,13 +102,13 @@ export function StockLossPage() {
     },
     {
       name: "weight",
-      label: (v) => (matchingRule(v)?.inputUnit === "kg" ? "Weight (kg)" : "Weight (GB)"),
+      label: (v) => (matchingRule(v)?.inputUnit === "kg" ? "น้ำหนัก (kg)" : "น้ำหนัก (บาท)"),
       kind: (v) => (matchingRule(v)?.allowedValues ? "select" : "number"),
       required: true,
       getOptions: (v) => (matchingRule(v)?.allowedValues ?? []).map((n) => ({ value: String(n), label: String(n) })),
       helperText: (v) => {
         const rule = matchingRule(v);
-        return rule && !rule.allowedValues ? `Minimum ${rule.minQuantity} GB` : undefined;
+        return rule && !rule.allowedValues ? `ขั้นต่ำ ${rule.minQuantity} บาททอง` : undefined;
       },
     },
     {
@@ -120,7 +120,7 @@ export function StockLossPage() {
     },
     {
       name: "notes",
-      label: "Notes",
+      label: "หมายเหตุ",
       kind: "multiline",
     },
   ];

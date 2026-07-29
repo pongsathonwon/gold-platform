@@ -63,7 +63,7 @@ export function InventoryPage() {
                   <TableRow key={poolKey(row)}>
                     <TableCell>{brandOrOrigin}</TableCell>
                     <TableCell>{productTypeById.get(row.productTypeId)?.productType ?? row.productTypeId}</TableCell>
-                    <TableCell align="right">{weightOf(row, unit).toFixed(4)}</TableCell>
+                    <TableCell align="right">{weightOf(row, unit)}</TableCell>
                     <TableCell align="right">{(row.totalCost ?? 0).toFixed(2)}</TableCell>
                     <TableCell align="right">{wacRate(row).toFixed(2)}</TableCell>
                   </TableRow>
@@ -84,12 +84,12 @@ export function InventoryPage() {
                     รวม
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
-                    {totalWeight.toFixed(4)}
+                    {totalWeight}
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
                     {totalCost.toFixed(2)}
                   </TableCell>
-                  <TableCell />
+                  <TableCell align="right" >{(totalCost/totalWeight).toFixed(2)}</TableCell>
                 </TableRow>
               </TableFooter>
             )}
