@@ -1,8 +1,8 @@
 import { Database, DrizzleClient, RepositoryError } from "../../../../infrastructure/db/client.js";
-import { productTypes } from "../../../../infrastructure/db/schema/master.schema.js";
-import { ForViewProductType, ProductTypeNotFound } from "../../port/product-type.port.js";
+import { productTypePurities, productTypes, purities } from "../../../../infrastructure/db/schema/master.schema.js";
+import { ForViewProductType, ProductTypeNotFound, ProductTypePurityRow } from "../../port/product-type.port.js";
 import { Effect } from "effect";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 class ProductTypeRepository implements ForViewProductType {
     constructor(private readonly db: Database) { }
@@ -24,6 +24,26 @@ class ProductTypeRepository implements ForViewProductType {
                 return Effect.succeed(res[0]);
             })
         );
+    }
+
+    findProductTypePurities(id: string): Effect.Effect<ProductTypePurityRow[], RepositoryError> {
+        return Effect.tryPromise({
+            try: () =>
+                this.db
+                    .select({
+                        purityId: purities.id,
+                        label: purities.label,
+                        percent: purities.percent,
+                        inputUnit: productTypePurities.inputUnit,
+                        minQuantity: productTypePurities.minQuantity,
+                        allowedValues: productTypePurities.allowedValues,
+                    })
+                    .from(productTypePurities)
+                    .innerJoin(purities, eq(productTypePurities.purityId, purities.id))
+                    .where(and(eq(productTypePurities.productTypeId, id), eq(productTypePurities.active, true)))
+                    .execute(),
+            catch: () => new RepositoryError({ message: `cannot find purities for product type id: ${id}` }),
+        });
     }
 }
 

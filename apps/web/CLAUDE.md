@@ -9,16 +9,16 @@
 
 ## 1. Stack
 
-| Concern | Choice |
-|---|---|
-| Framework | React 19 |
-| Build tool | Vite 6 |
-| UI library | MUI (Material UI) v9 + Emotion |
-| Data fetching | TanStack Query v5 |
-| API client | Hono RPC client (`hono/client`) — end-to-end type-safe |
-| Routing | React Router v7 |
-| Validation | Zod (shared via `@gold-platform/types`) |
-| Language | TypeScript (strict, ESM) |
+| Concern       | Choice                                                 |
+| ------------- | ------------------------------------------------------ |
+| Framework     | React 19                                               |
+| Build tool    | Vite 6                                                 |
+| UI library    | MUI (Material UI) v9 + Emotion                         |
+| Data fetching | TanStack Query v5                                      |
+| API client    | Hono RPC client (`hono/client`) — end-to-end type-safe |
+| Routing       | React Router v7                                        |
+| Validation    | Zod (shared via `@gold-platform/types`)                |
+| Language      | TypeScript (strict, ESM)                               |
 
 ---
 
@@ -51,12 +51,12 @@ export const client = hc<AppType>(import.meta.env.VITE_API_URL);
 
 ```typescript
 // GET request
-const res = await client.users.$get()
-if (!res.ok) throw new Error('Failed')
-const data = await res.json()
+const res = await client.users.$get();
+if (!res.ok) throw new Error("Failed");
+const data = await res.json();
 
 // POST request
-const res = await client['wholesale-buy'].$post({ json: payload })
+const res = await client["wholesale-buy"].$post({ json: payload });
 ```
 
 The client method names mirror the route paths. If a route changes on the API, TypeScript will surface the mismatch here automatically — do not cast or bypass the types.
@@ -70,18 +70,22 @@ All server state goes through **TanStack Query**. No direct `fetch` calls outsid
 ```typescript
 // Query
 const { data, isPending, isError } = useQuery({
-  queryKey: ['wholesale-buy', filters],
-  queryFn: () => client['wholesale-buy'].$get({ query: filters }).then(r => r.json()),
-})
+  queryKey: ["wholesale-buy", filters],
+  queryFn: () =>
+    client["wholesale-buy"].$get({ query: filters }).then((r) => r.json()),
+});
 
 // Mutation with cache invalidation
 const mutation = useMutation({
-  mutationFn: (payload) => client['wholesale-buy'].$post({ json: payload }).then(r => r.json()),
-  onSuccess: () => queryClient.invalidateQueries({ queryKey: ['wholesale-buy'] }),
-})
+  mutationFn: (payload) =>
+    client["wholesale-buy"].$post({ json: payload }).then((r) => r.json()),
+  onSuccess: () =>
+    queryClient.invalidateQueries({ queryKey: ["wholesale-buy"] }),
+});
 ```
 
 **Query key conventions:**
+
 - List: `[domain]` or `[domain, filters]`
 - Single item: `[domain, id]`
 - Settlement summary: `[domain, 'settlement', period]`
@@ -93,10 +97,10 @@ const mutation = useMutation({
 Zod schemas live in `packages/types/src/index.ts` and are consumed by both the API (request validation) and the web (form validation). Import from the package, never redefine locally.
 
 ```typescript
-import { stockGainSchema, type StockGainReq } from '@gold-platform/types'
+import { stockGainSchema, type StockGainReq } from "@gold-platform/types";
 
 // Use in a form:
-const parsed = stockGainSchema.safeParse(formData)
+const parsed = stockGainSchema.safeParse(formData);
 ```
 
 When adding a new transaction domain, add its request schema to `packages/types` so the web can reuse it for form validation without duplicating it.
@@ -111,7 +115,8 @@ Routes are declared in `App.tsx`. React Router v7 with `<Routes>` / `<Route>`.
 
 ```
 /login                    — login form (public)
-/inventory                — inventory balance view, today's WAC rate, snapshot trigger (protected)
+/inventory                — inventory balance view, split 96.5 (GB) / 99.9 (KG), per-purity totals (protected)
+/inventory/movements      — movement ledger, split by purity with per-purity totals (protected)
 /inventory/gain           — stock gain form (protected)
 /inventory/loss           — stock loss form (protected)
 /inventory/switch         — product switch form (protected)
@@ -186,4 +191,4 @@ Transaction entry screens (wholesale, retail, receive), the management dashboard
 
 ---
 
-*GoldOffice · Web Context · 2026-06-14 · Root context: `../../CONTEXT.md`*
+_GoldOffice · Web Context · 2026-06-14 · Root context: `../../CONTEXT.md`_

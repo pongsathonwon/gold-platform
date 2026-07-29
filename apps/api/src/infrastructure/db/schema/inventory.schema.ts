@@ -1,8 +1,5 @@
-import { date, decimal, pgEnum, pgTable, primaryKey, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { decimal, pgTable, primaryKey, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { brands, originEnum, productTypes, purities } from "./master.schema.js";
-
-export const gainReasonEnum = pgEnum('gain_reason', ['stock_count_gain', 'correction'])
-export const lossReasonEnum = pgEnum('loss_reason', ['stock_count_loss', 'damage', 'lost', 'correction'])
 
 // aggregate balance — one row per pool (purityId, brandId, origin, productTypeId)
 // 99.9% goldbar uses brandId='NA' as sentinel; origin is the meaningful pool key
@@ -55,8 +52,9 @@ export const stockGainAdjustments = pgTable('stock_gain_adjustments', {
     weightGb: decimal({ mode: 'number' }).notNull(),
     weightGm: decimal({ mode: 'number' }).notNull(),
     conversionFactor: decimal({ mode: 'number' }).notNull(),
+    pricePerGb: decimal({ mode: 'number' }).notNull(),
     totalCost: decimal({ mode: 'number' }).notNull(),
-    reason: gainReasonEnum().notNull(),
+    referenceType: varchar().notNull(),
     notes: text(),
     auditedBy: varchar().notNull(),
     auditedAt: timestamp().notNull().defaultNow(),
@@ -74,7 +72,7 @@ export const stockLossAdjustments = pgTable('stock_loss_adjustments', {
     productTypeId: varchar().notNull().references(() => productTypes.id),
     weightGb: decimal({ mode: 'number' }).notNull(),
     weightGm: decimal({ mode: 'number' }).notNull(),
-    reason: lossReasonEnum().notNull(),
+    referenceType: varchar().notNull(),
     notes: text(),
     auditedBy: varchar().notNull(),
     auditedAt: timestamp().notNull().defaultNow(),
@@ -100,23 +98,3 @@ export const productSwitchAdjustments = pgTable('product_switch_adjustments', {
 
 export type CreateProductSwitch = typeof productSwitchAdjustments.$inferInsert;
 export type ProductSwitchShape = typeof productSwitchAdjustments.$inferSelect;
-
-// end-of-day snapshot — write-once per pool per day (INSERT … ON CONFLICT DO NOTHING)
-// brandId is NOT NULL; 99.9% goldbar uses 'NA' sentinel to keep composite PK valid
-export const inventoryDailySnapshots = pgTable('inventory_daily_snapshots', {
-    purityId: varchar().notNull().references(() => purities.id),
-    brandId: varchar().notNull().references(() => brands.id),
-    origin: originEnum().notNull(),
-    productTypeId: varchar().notNull().references(() => productTypes.id),
-    snapshotDate: date().notNull(),
-    weightGb: decimal({ mode: 'number' }).notNull(),
-    weightGm: decimal({ mode: 'number' }).notNull(),
-    totalCost: decimal({ mode: 'number' }).notNull(),
-}, (table) => [
-    primaryKey({
-        columns: [table.purityId, table.brandId, table.origin, table.productTypeId, table.snapshotDate]
-    })
-])
-
-export type SnapshotShape = typeof inventoryDailySnapshots.$inferSelect;
-export type CreateSnapshot = typeof inventoryDailySnapshots.$inferInsert;

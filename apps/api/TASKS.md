@@ -94,7 +94,7 @@ Transaction domains (wholesale, retail, receive, smelting, convert-out) are Spri
 
 ## 8. Migration + Seed
 
-- [ ] Run `pnpm db:generate` after all schema edits are complete
-- [ ] Run `pnpm db:migrate` to apply
-- [ ] Seed: `INSERT INTO gold_brands (id, brand, non_fungible, active) VALUES ('NA', 'N/A', false, false)`
-- [ ] Smoke-test: `POST /inventory/snapshots/compute` on empty DB returns empty array without error
+- [x] Run `pnpm db:generate` after all schema edits are complete
+- [x] Run `pnpm db:migrate` to apply
+- [x] Seed: `INSERT INTO gold_brands (id, brand, non_fungible, active) VALUES ('NA', 'N/A', false, false)` — via `pnpm db:seed`
+- [x] Smoke-test: `POST /inventory/snapshots/compute` on empty DB returns empty array without error

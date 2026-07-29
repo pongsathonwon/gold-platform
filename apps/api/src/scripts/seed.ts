@@ -13,7 +13,7 @@ const client = postgres(DATABASE_URL);
 const db = drizzle(client, { casing: "snake_case" });
 
 // lazy imports so schema types resolve after casing is set
-const { brands, purities, productTypes, unitConversions } = await import(
+const { brands, purities, productTypes, unitConversions, productTypePurities } = await import(
     "../infrastructure/db/schema/master.schema.js"
 );
 const { users } = await import("../infrastructure/db/schema/user.schema.js");
@@ -59,6 +59,17 @@ async function seed() {
         .values([{ factorValue: 15.244, effectiveDate: "2024-01-01", changeBy: null }])
         .onConflictDoNothing();
     console.log("  ✓ unit conversion (1 baht = 15.244 g)");
+
+    // --- Product type × purity rules (valid combinations + weight input unit) ---
+    await db
+        .insert(productTypePurities)
+        .values([
+            { productTypeId: "BAR", purityId: "999", inputUnit: "kg", minQuantity: 1, allowedValues: [1, 2, 3, 4, 5], active: true },
+            { productTypeId: "BAR", purityId: "965", inputUnit: "gb", minQuantity: 10, allowedValues: null, active: true },
+            { productTypeId: "PLATE", purityId: "965", inputUnit: "gb", minQuantity: 1, allowedValues: null, active: true },
+        ])
+        .onConflictDoNothing();
+    console.log("  ✓ product type × purity rules");
 
     // --- Admin user ---
     const username = process.env.SEED_USERNAME ?? "admin";

@@ -1,12 +1,24 @@
 import { Effect } from "effect";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, gte, lt, lte, sql } from "drizzle-orm";
 import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
 import {
-    inventoryBalance, inventoryMovements, inventoryDailySnapshots,
+    inventoryBalance, inventoryMovements,
     stockGainAdjustments, stockLossAdjustments, productSwitchAdjustments,
-    CreateMovement, CreateProductSwitch, CreateSnapshot, CreateStockGain, CreateStockLoss, UpsertBalance,
+    CreateMovement, CreateProductSwitch, CreateStockGain, CreateStockLoss, UpsertBalance,
 } from "../../../infrastructure/db/schema/inventory.schema.js";
-import { BalanceKey, ForInventoriesRepository, InsufficientStockError, SnapshotKey } from "../port/inventories.port.js";
+import { BalanceKey, ForInventoriesRepository, InsufficientStockError, MovementFilter } from "../port/inventories.port.js";
+
+// non-date movement filters, shared by listMovements and sumMovementsBefore so the opening
+// balance is summed over the same pools the window shows
+function nonDateConditions(filter: MovementFilter) {
+    return [
+        filter.purityId ? eq(inventoryMovements.purityId, filter.purityId) : undefined,
+        filter.brandId ? eq(inventoryMovements.brandId, filter.brandId) : undefined,
+        filter.origin ? eq(inventoryMovements.origin, filter.origin) : undefined,
+        filter.productTypeId ? eq(inventoryMovements.productTypeId, filter.productTypeId) : undefined,
+        filter.referenceType ? eq(inventoryMovements.referenceType, filter.referenceType) : undefined,
+    ].filter(Boolean) as ReturnType<typeof eq>[];
+}
 
 const INSUFFICIENT = Symbol('InsufficientStockError')
 
@@ -54,10 +66,13 @@ class InventoryRepository implements ForInventoriesRepository {
         }).pipe(Effect.map(() => undefined as void));
     }
 
-    decrementBalance(key: BalanceKey, weightGb: number, weightGm: number, costDelta: number) {
+    // Cost is derived from the current balance's live weighted-average cost (WAC) inside the same
+    // locked transaction that reads it — so a pool refilled after hitting zero always decrements at
+    // the correct rate, with no dependency on a daily snapshot. Returns the cost removed.
+    decrementBalance(key: BalanceKey, weightGb: number, weightGm: number) {
         return Effect.tryPromise({
             try: async () => {
-                await this.db.transaction(async (tx) => {
+                return await this.db.transaction(async (tx) => {
                     const rows = await tx.select().from(inventoryBalance)
                         .where(and(
                             eq(inventoryBalance.purityId, key.purityId),
@@ -74,6 +89,10 @@ class InventoryRepository implements ForInventoriesRepository {
                         throw { [INSUFFICIENT]: true, available }
                     }
 
+                    // live WAC — safe from divide-by-zero: available >= weightGb > 0 here
+                    const rate = balance.totalWeightGb > 0 ? balance.totalCost / balance.totalWeightGb : 0;
+                    const costDelta = weightGb * rate;
+
                     await tx.update(inventoryBalance)
                         .set({
                             totalWeightGb: sql`${inventoryBalance.totalWeightGb} - ${weightGb}`,
@@ -87,6 +106,8 @@ class InventoryRepository implements ForInventoriesRepository {
                             eq(inventoryBalance.productTypeId, key.productTypeId),
                         ))
                         .execute();
+
+                    return costDelta;
                 });
             },
             catch: (e) => {
@@ -95,7 +116,7 @@ class InventoryRepository implements ForInventoriesRepository {
                 }
                 return new RepositoryError({ message: "cannot decrement balance" });
             },
-        }).pipe(Effect.map(() => undefined as void));
+        });
     }
 
     createMovement(req: CreateMovement) {
@@ -119,60 +140,6 @@ class InventoryRepository implements ForInventoriesRepository {
         }).pipe(Effect.map(() => undefined as void));
     }
 
-    getDailySnapshot(key: SnapshotKey, date: string) {
-        return Effect.tryPromise({
-            try: () => this.db.select().from(inventoryDailySnapshots).where(and(
-                eq(inventoryDailySnapshots.purityId, key.purityId),
-                eq(inventoryDailySnapshots.brandId, key.brandId),
-                eq(inventoryDailySnapshots.origin, key.origin),
-                eq(inventoryDailySnapshots.productTypeId, key.productTypeId),
-                eq(inventoryDailySnapshots.snapshotDate, date),
-            )).execute(),
-            catch: () => new RepositoryError({ message: "cannot get daily snapshot" }),
-        }).pipe(Effect.map((rows) => rows[0] ?? null));
-    }
-
-    upsertDailySnapshotOnce(req: CreateSnapshot) {
-        return Effect.tryPromise({
-            try: () => this.db.insert(inventoryDailySnapshots)
-                .values(req)
-                .onConflictDoNothing()
-                .execute(),
-            catch: () => new RepositoryError({ message: "cannot upsert daily snapshot" }),
-        }).pipe(Effect.map(() => undefined as void));
-    }
-
-    computeAllSnapshots(date: string) {
-        return Effect.tryPromise({
-            try: async () => {
-                const balances = await this.db.select().from(inventoryBalance).execute();
-                if (balances.length === 0) return [];
-
-                const snapshotRows: CreateSnapshot[] = balances.map((b) => ({
-                    purityId: b.purityId,
-                    brandId: b.brandId,
-                    origin: b.origin,
-                    productTypeId: b.productTypeId,
-                    snapshotDate: date,
-                    weightGb: b.totalWeightGb,
-                    weightGm: b.totalWeightGm,
-                    totalCost: b.totalCost,
-                }));
-
-                await this.db.insert(inventoryDailySnapshots)
-                    .values(snapshotRows)
-                    .onConflictDoNothing()
-                    .execute();
-
-                // return what exists for this date (includes previously written snapshots)
-                return this.db.select().from(inventoryDailySnapshots)
-                    .where(eq(inventoryDailySnapshots.snapshotDate, date))
-                    .execute();
-            },
-            catch: () => new RepositoryError({ message: "cannot compute snapshots" }),
-        });
-    }
-
     createProductSwitchAdjustment(req: CreateProductSwitch) {
         return Effect.tryPromise({
             try: () => this.db.insert(productSwitchAdjustments).values(req).returning().execute(),
@@ -187,6 +154,44 @@ class InventoryRepository implements ForInventoriesRepository {
                 eq(inventoryMovements.referenceId, referenceId),
             )).execute(),
             catch: () => new RepositoryError({ message: `cannot find movements for ${referenceType}:${referenceId}` }),
+        });
+    }
+
+    listMovements(filter: MovementFilter) {
+        const conditions = [
+            ...nonDateConditions(filter),
+            filter.from ? gte(inventoryMovements.movedAt, new Date(filter.from)) : undefined,
+            filter.to ? lte(inventoryMovements.movedAt, new Date(filter.to)) : undefined,
+        ].filter(Boolean) as ReturnType<typeof eq>[];
+
+        // ascending by (movedAt, id) so the caller can run a deterministic forward cumulative
+        return Effect.tryPromise({
+            try: () => this.db.select().from(inventoryMovements)
+                .where(conditions.length > 0 ? and(...conditions) : undefined)
+                .orderBy(asc(inventoryMovements.movedAt), asc(inventoryMovements.id))
+                .execute(),
+            catch: () => new RepositoryError({ message: "cannot list movements" }),
+        });
+    }
+
+    sumMovementsBefore(filter: MovementFilter) {
+        if (!filter.from) return Effect.succeed([]);
+
+        const conditions = [
+            ...nonDateConditions(filter),
+            lt(inventoryMovements.movedAt, new Date(filter.from)),
+        ] as ReturnType<typeof eq>[];
+
+        return Effect.tryPromise({
+            try: () => this.db.select({
+                purityId: inventoryMovements.purityId,
+                weightGb: sql<number>`coalesce(sum(${inventoryMovements.weightGbDelta}), 0)::double precision`,
+                weightGm: sql<number>`coalesce(sum(${inventoryMovements.weightGmDelta}), 0)::double precision`,
+            }).from(inventoryMovements)
+                .where(and(...conditions))
+                .groupBy(inventoryMovements.purityId)
+                .execute(),
+            catch: () => new RepositoryError({ message: "cannot sum movements" }),
         });
     }
 }

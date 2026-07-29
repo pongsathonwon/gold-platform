@@ -1,5 +1,7 @@
 # Inventory Domain
 
+> ⚠️ **STALE — do not design against this file.** It describes an early **lot-based FIFO** design (`inventory_lots`, `remainingWeightGb`, FIFO picking) that was never implemented. The shipped model is **aggregate balance + live WAC, no lots**. Source of truth is [`apps/api/CLAUDE.md`](../../../CLAUDE.md) → "Inventory Domain" and the code in `application/inventory.usecase.ts` / `adapter/inventory.repository.ts`. Key differences: one `inventory_balance` row per pool (not lots); outbound cost = live `totalCost/totalWeightGb` computed in the locked decrement (not FIFO, not a daily snapshot); gain takes `pricePerGb`; gain/loss `referenceType` comes from the shared `TRANSACTION_TYPES` list. Kept only for historical context.
+
 ## Core Concept
 
 Gold has no physical lot stamp. The company tracks inventory as anonymous weight pools by brand and purity. A **lot** is a virtual accounting bucket — not a physical bar identity. The **transaction** that created the gold (received, stock gain) is the real business identity. Lot movements are accounting side effects of transaction status changes.

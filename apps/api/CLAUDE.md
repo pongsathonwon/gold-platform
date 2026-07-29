@@ -18,7 +18,7 @@ src/
 │   ├── auth/
 │   ├── user/
 │   ├── master/               — brands, purities, suppliers, branches, products, sizes, product-purity rules
-│   ├── inventory/            — balance tracking, WAC outbound, movement ledger, daily snapshots
+│   ├── inventory/            — balance tracking, live-WAC outbound, movement ledger
 │   ├── wholesale-buy/
 │   ├── wholesale-sell/
 │   ├── retail-buy/
@@ -137,7 +137,7 @@ Internal service — not called over HTTP from other domains. Cross-domain calls
 
 ### Model: Aggregate Balance (no lots)
 
-Stock is tracked as a single aggregate row per pool `(purityId, brandId, origin, productTypeId)` in `inventoryBalance`. There are no per-lot records. Cost basis is **WAC (Weighted Average Cost)** using the daily opening snapshot.
+Stock is tracked as a single aggregate row per pool `(purityId, brandId, origin, productTypeId)` in `inventoryBalance`. There are no per-lot records. Cost basis is **live WAC (Weighted Average Cost)** — the outbound rate is `balance.totalCost / balance.totalWeightGb` read from the current balance inside the decrement's locked transaction, so it stays correct even for pools (e.g. 99.9% `NA`) that hit zero and refill within the same day.
 
 ### Origin
 
@@ -156,29 +156,28 @@ All domain callers hardcode their origin. Only `convert_out` accepts `origin` as
 | Function | Caller | Effect |
 |----------|--------|--------|
 | `increment(req)` | wholesale-buy at `RECEIVED`, receive at `CONFIRMED`, smelting at `CONFIRMED` | upsert balance `+delta`, insert movement |
-| `decrement(req)` | wholesale-sell/retail-sell at `SHIPPED`, convert-out at `CONFIRMED` | read daily snapshot → WAC cost → update balance `-delta` → insert movement. Fails `NoSnapshotError` if no snapshot today. |
+| `decrement(req)` | wholesale-sell/retail-sell at `SHIPPED`, convert-out at `CONFIRMED` | `decrementBalance` computes cost from the pool's live WAC inside the locked transaction and returns it → insert movement `-delta`. Fails `InsufficientStockError` if balance short. |
 | `reverseDecrement(req)` | (not yet wired) | find movements by reference → reverse balance delta → insert reverse movements |
-| `computeSnapshots()` | `POST /inventory/snapshots/compute` | aggregate balances → upsert `inventoryDailySnapshots`. Write-once per day — `INSERT … ON CONFLICT DO NOTHING`. |
-| `productSwitch(req)` | `POST /inventory/product-switch` | decrement non-fungible brand pool at its WAC → increment `'NA'` pool at fungible daily rate. Same purity + productType only. Atomic. |
-| `stockGain(req)` | `POST /inventory/gain` | insert adjustment record → upsert balance `+delta` → insert movement |
-| `stockLoss(req)` | `POST /inventory/loss` | insert adjustment record → update balance `-delta` → insert movement. Fails `InsufficientStockError` if balance short. |
+| `productSwitch(req)` | `POST /inventory/product-switch` | decrement non-fungible brand pool at its live WAC (`fromCostDelta`) → increment `'NA'` pool with the same value (`toCostDelta = fromCostDelta`, cost conserved). Same purity + productType only. Atomic. |
+| `stockGain(req)` | `POST /inventory/gain` | operator enters `pricePerGb`; `totalCost = pricePerGb × weightGb` → insert adjustment record → upsert balance `+delta` → insert movement |
+| `stockLoss(req)` | `POST /inventory/loss` | decrement balance `-delta` at live WAC first (fails `InsufficientStockError` if short) → insert adjustment record → insert movement |
 
-### WAC / Daily Snapshot Flow
+### WAC Flow (live)
 
-`POST /inventory/snapshots/compute` freezes today's opening rate per pool:
-- `snapshotRate = balance.totalCost / balance.totalWeightGb`
-- Write-once per day — second call returns the existing snapshot, never overwrites
-- `decrement()` reads the snapshot before applying cost: `costDelta = weightGb × snapshotRate`
-- `decrement()` before snapshot exists → `NoSnapshotError → 422`
+Outbound cost is derived from the current balance at decrement time — **no daily-snapshot dependency**:
+- `decrementBalance` selects the pool row `FOR UPDATE`, checks sufficiency, then computes `rate = totalCost / totalWeightGb` and `costDelta = weightGb × rate` inside the same transaction, and returns `costDelta`.
+- Safe from divide-by-zero: `available ≥ weightGb > 0` at that point, so a decrement never runs on a zero-weight pool.
+- Because every `increment` updates `totalCost`/`totalWeightGb`, a pool refilled after hitting zero always decrements at the up-to-date average — this is what fixed the 99.9% zero-inventory cost bug.
+- The daily-snapshot machinery (`inventory_daily_snapshots` table, `computeSnapshots`, `GET/POST /inventory/snapshots*`, the "Compute Today's Rate" button) was **removed** — nothing consumed it after the switch to live WAC. Past balances are reconstructable from the `inventory_movements` ledger if a point-in-time valuation is ever needed.
 
-`referenceType` on `inventory_movements` is a **free-text varchar** (not an enum — new domains just register a new string). Current values: `WHOLESALE_BUY`, `WHOLESALE_SELL`, `RETAIL_SELL`, `RECEIVED`, `STOCK_GAIN`, `STOCK_LOSS`, `PRODUCT_SWITCH`.
+`referenceType` on `inventory_movements` is a **free-text varchar** (not an enum). The gain/loss forms now set it from the shared `TRANSACTION_TYPES` list in `@gold-platform/types` (`WHOLESALE_BUY`, `WHOLESALE_SELL`, `RETAIL_BUY`, `RETAIL_SELL`, `RECEIVED`, `SMELTING`, `CONVERT_OUT`, `PRODUCT_SWITCH`, `STOCK_COUNT`, `DAMAGE`, `LOST`, `MANUAL_CORRECTION`) so all movement types can be recorded through core inventory until each gets its own module. Cross-domain callers still register their own string.
 
 ## Schema Files
 
 | File | Tables |
 |------|--------|
 | `master.schema.ts` | `gold_product_type`, `gold_brands`, `purities`, `bar_sizes`, `suppliers`, `supplier_product_types`, `suppler_brands`, `unit_conversion`, `branches`, `product_type_purities` (planned) |
-| `inventory.schema.ts` | `inventory_balance`, `inventory_movements`, `stock_gain_adjustments`, `stock_loss_adjustments`, `inventory_daily_snapshots`, `product_switch_adjustments` |
+| `inventory.schema.ts` | `inventory_balance`, `inventory_movements`, `stock_gain_adjustments`, `stock_loss_adjustments`, `product_switch_adjustments` |
 | `wholesale-buy.schema.ts` | `whole_buy_transactions`, `whole_buy_statuses` |
 | `wholesale-sell.schema.ts` | `whole_sell_transactions`, `whole_sell_statuses` |
 | `retail-buy.schema.ts` | `retail_buy_transactions`, `retail_buy_statuses` |
@@ -207,7 +206,7 @@ All domain callers hardcode their origin. Only `convert_out` accepts `origin` as
 6. **Goldbar-to-goldbar conversion** — resolved: `smelting` increments domestic 99.9% pool; `convert_out` decrements domestic or foreign pool. No separate conversion domain needed.
 7. **Jewelry inventory** — deferred. Non-fungible tracking in Sprint 1 uses `productSwitch` to reclassify into the fungible pool when legacy POS discrepancy occurs. True item-level non-fungible tracking is a future phase.
 8. **`reverseDecrement()`** — not yet wired to any domain transition. Works without lot lookup — movements now carry pool keys directly, so reversal finds and restores the correct balance row.
-9. **Daily snapshot as hard gate** — `decrement()` fails if no snapshot exists for today. Operations team must call `POST /inventory/snapshots/compute` at day-open before any outbound transaction is processed.
+9. ~~**Daily snapshot as hard gate**~~ — resolved: outbound cost now uses live WAC from the balance at decrement time (`decrementBalance`). The daily-snapshot table and endpoints were removed entirely; no day-open compute is required before outbound transactions.
 
 ## Dev Commands
 

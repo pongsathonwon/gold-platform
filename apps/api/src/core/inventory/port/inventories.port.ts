@@ -1,7 +1,7 @@
 import { Context, Data, Effect } from "effect";
 import {
-    BalanceShape, CreateMovement, CreateProductSwitch, CreateSnapshot, CreateStockGain, CreateStockLoss,
-    MovementShape, ProductSwitchShape, SnapshotShape, UpsertBalance,
+    BalanceShape, CreateMovement, CreateProductSwitch, CreateStockGain, CreateStockLoss,
+    MovementShape, ProductSwitchShape, UpsertBalance,
 } from "../../../infrastructure/db/schema/inventory.schema.js";
 import { RepositoryError } from "../../../infrastructure/db/client.js";
 
@@ -23,21 +23,28 @@ export class NoSnapshotError extends Data.TaggedError("NoSnapshotError")<{
 // --- Repository port (outbound) ---
 
 export type BalanceKey = Pick<BalanceShape, 'purityId' | 'brandId' | 'origin' | 'productTypeId'>
-export type SnapshotKey = Pick<SnapshotShape, 'purityId' | 'brandId' | 'origin' | 'productTypeId'>
+export type MovementFilter = Partial<Pick<MovementShape, 'purityId' | 'brandId' | 'origin' | 'productTypeId' | 'referenceType'>>
+    & { from?: string; to?: string }
+
+// per-purity opening balance (sum of movement deltas strictly before `from`) — seeds the
+// running cumulative on the movements page
+export type MovementOpening = { purityId: string; weightGb: number; weightGm: number }
 
 export interface ForInventoriesRepository {
     listBalances(): Effect.Effect<BalanceShape[], RepositoryError>
     getBalance(key: BalanceKey): Effect.Effect<BalanceShape | null, RepositoryError>
     upsertBalance(req: UpsertBalance): Effect.Effect<void, RepositoryError>
-    decrementBalance(key: BalanceKey, weightGb: number, weightGm: number, costDelta: number): Effect.Effect<void, RepositoryError | InsufficientStockError>
+    // returns the cost removed, derived from the pool's live WAC inside the locked transaction
+    decrementBalance(key: BalanceKey, weightGb: number, weightGm: number): Effect.Effect<number, RepositoryError | InsufficientStockError>
     createMovement(req: CreateMovement): Effect.Effect<void, RepositoryError>
     createStockGainAdjustment(req: CreateStockGain): Effect.Effect<void, RepositoryError>
     createStockLossAdjustment(req: CreateStockLoss): Effect.Effect<void, RepositoryError>
-    getDailySnapshot(key: SnapshotKey, date: string): Effect.Effect<SnapshotShape | null, RepositoryError>
-    upsertDailySnapshotOnce(req: CreateSnapshot): Effect.Effect<void, RepositoryError>
-    computeAllSnapshots(date: string): Effect.Effect<SnapshotShape[], RepositoryError>
     createProductSwitchAdjustment(req: CreateProductSwitch): Effect.Effect<ProductSwitchShape, RepositoryError>
     findMovementsByReference(referenceType: string, referenceId: string): Effect.Effect<MovementShape[], RepositoryError>
+    listMovements(filter: MovementFilter): Effect.Effect<MovementShape[], RepositoryError>
+    // per-purity sum of deltas strictly before filter.from (respecting the same non-date filters);
+    // empty when filter.from is absent
+    sumMovementsBefore(filter: MovementFilter): Effect.Effect<MovementOpening[], RepositoryError>
 }
 
 export class InventoriesRepository extends Context.Tag('inventories/repository')<InventoriesRepository, ForInventoriesRepository>() {}
@@ -95,10 +102,8 @@ export interface ProductSwitchReq {
     purityId: string
     productTypeId: string
     fromBrandId: string
-    weightGb: number
-    weightGm: number
+    weight: number
     notes?: string
-    switchedBy: string
 }
 
 export type { ProductSwitchShape };

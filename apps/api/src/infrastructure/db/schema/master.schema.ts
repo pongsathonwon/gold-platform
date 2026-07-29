@@ -34,6 +34,22 @@ export const purities = pgTable("purities", {
 
 export type Purity = typeof purities.$inferSelect
 
+// which purities are valid for a given product type, and how weight is entered for that pairing
+export const weightInputUnitEnum = pgEnum('weight_input_unit', ['kg', 'gb'])
+
+export const productTypePurities = pgTable('product_type_purities', {
+    productTypeId: varchar({ length: 10 }).notNull().references(() => productTypes.id),
+    purityId: varchar({ length: 4 }).notNull().references(() => purities.id),
+    inputUnit: weightInputUnitEnum().notNull(),
+    minQuantity: integer().notNull(),
+    allowedValues: integer().array(), // null = free integer >= minQuantity; set = closed list (e.g. kg bar sizes)
+    active: boolean().default(true).notNull(),
+}, (table) => [
+    primaryKey({ columns: [table.productTypeId, table.purityId] })
+])
+
+export type ProductTypePurity = typeof productTypePurities.$inferSelect
+
 export const barSizes = pgTable('bar_sizes', {
     id: varchar({ length: 3 }).primaryKey(),
     weight: integer().notNull(),

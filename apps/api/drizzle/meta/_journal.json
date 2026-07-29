@@ -22,6 +22,27 @@
       "when": 1781515756390,
       "tag": "0002_flaky_vulture",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782723926850,
+      "tag": "0003_massive_cerise",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784515627741,
+      "tag": "0004_flat_referral",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784517614860,
+      "tag": "0005_drop_daily_snapshots",
+      "breakpoints": true
     }
   ]
 }
