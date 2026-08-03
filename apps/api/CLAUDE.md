@@ -122,20 +122,28 @@ CREATED ─┬─> CONFIRMED ─┬─> PAID ──> RECEIVED ─┬─> CHECKED
 - **Note required** on every failure-branch transition (`NoteRequiredError` → 422). The status log
   is the audit trail and "why" cannot be reconstructed from anywhere else.
 - **No cancelling after payment** — `PAID`/`RECEIVED`/`DISPUTED` exit via `RETURNED`, not `CANCELLED`.
-- **Inventory moves once, on entering `CHECKED`** — verified, not merely arrived. An optional
-  `actualWeight` at check time is what enters stock, so short deliveries book what really arrived.
+- **Inventory moves once, on entering `CHECKED`** — verified, not merely arrived, and always
+  `origin: 'foreign'` at **every** purity (only smelting makes domestic stock).
+- **Acceptance is all-or-nothing.** `actualWeight` at check time must equal the ordered weight;
+  anything else diverts the transaction to `DISPUTED` with nothing entering inventory, and the
+  discrepancy appended to the status note. A short delivery is for a human to settle with the
+  supplier, not something to book at a pro-rated cost. Accepting later clears the recorded
+  discrepancy — a `CHECKED` transaction always matches its order.
 - **Post-`CHECKED` corrections** go through `POST /inventory/loss|gain` with
   `referenceType: WHOLESALE_BUY`. Terminal transactions are never reopened.
-- **Edit window** — `confirmDueAt = recordedAt + WHOLESALE_BUY_EDIT_WINDOW_HOURS` (default 6,
-  clamped 1–12). `PATCH /wholesale-buy/:id` works only while `CREATED` and before that instant;
-  `POST /wholesale-buy/auto-confirm` (cron entry point, idempotent) confirms everything overdue as
-  `BOT-CONFIRM`.
+- **Confirmation is a bulk sweep, not a per-order deadline.** `POST /wholesale-buy/confirm-all`
+  moves *every* `CREATED` transaction to `CONFIRMED`; the nightly cron calls it (logged as
+  `BOT-CONFIRM`), and `?manual=true` is the operator's mid-day run (logged under their username).
+  `PATCH /wholesale-buy/:id` is accepted while `CREATED` and refused after — confirmation is the
+  lock. `confirmDueAt` (`WHOLESALE_BUY_AUTO_CONFIRM_HOUR`, default midnight) records when the next
+  sweep lands and is **informational only**; nothing tests against it.
 - **`POST /wholesale-buy/:id/receive-check`** does `PAID → RECEIVED → CHECKED` in one call because
   that is one operator action today. Both status rows are still written, so splitting the steps
-  later needs no migration.
-- **Dual pricing** — every transaction records both `pricePerGb965` and `pricePerGb999`
-  (`= 965 × 99.9/96.5`, operator-calculated). The item's purity picks which one drives
-  `totalAmount`. The shared `derivePricePerGb999()` only pre-fills the web form.
+  later needs no migration. Like `/status`, it returns the status actually reached.
+- **One price in, two stored.** The operator enters `pricePerGb965` only; the server derives
+  `pricePerGb999 = 965 × 99.9/96.5` via the shared `derivePricePerGb999()`. The create schema does
+  not accept the 99.9% quote — two typed prices could disagree, a derived one cannot. The item's
+  purity picks which drives `totalAmount`.
 
 The transition map is `WHOLE_BUY_TRANSITIONS` in `@gold-platform/types`, shared with the web app so
 the UI offers exactly the moves the API accepts; the port re-types it against the DB enum, so any
@@ -267,7 +275,7 @@ DATABASE_URL=postgres://postgres:password@localhost:5432/gold_platform
 PORT=3000
 JWT_SECRET=<32-char random secret>
 
-# optional — how long a CREATED wholesale-buy stays editable before auto-confirm
-# takes it. Default 6, clamped to 1–12.
-WHOLESALE_BUY_EDIT_WINDOW_HOURS=6
+# optional — the hour (0–23) the nightly wholesale-buy confirm sweep runs. Only used to
+# display when an order stops being editable; set it to match the real cron. Default 0.
+WHOLESALE_BUY_AUTO_CONFIRM_HOUR=0
 ```

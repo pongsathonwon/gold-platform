@@ -45,8 +45,10 @@ export const wholeBuyTransactions = pgTable('whole_buy_transactions', {
     pricePerGb999: decimal('price_per_gb_999', { mode: 'number' }).notNull(),
     totalAmount: decimal({ mode: 'number' }).notNull(), // orderedWeightGb * the purity-matched price
 
-    // what physically arrived, filled in at CHECKED. Null until then, and stays null when the
-    // delivery matched the order exactly.
+    // The measured weight of a delivery that did NOT match the order — set when a check is
+    // diverted to DISPUTED, and cleared again if the shipment is later accepted. Null therefore
+    // always means "no outstanding discrepancy", which is what a CHECKED transaction must show:
+    // acceptance is all-or-nothing, so an accepted delivery equals its order by definition.
     actualWeightGb: decimal({ mode: 'number' }),
     actualWeightGm: decimal({ mode: 'number' }),
     actualAmount: decimal({ mode: 'number' }), // actualWeightGb * the purity-matched price

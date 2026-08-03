@@ -22,11 +22,18 @@ export class NoteRequiredError extends Data.TaggedError("WholeBuyNoteRequiredErr
     status: WholeBuyStatus
 }> {}
 
-// edits are only accepted while CREATED and before confirmDueAt
-export class EditWindowExpiredError extends Data.TaggedError("WholeBuyEditWindowExpiredError")<{
+// edits are only accepted while the transaction is still CREATED — confirmation is the lock
+export class NotEditableError extends Data.TaggedError("WholeBuyNotEditableError")<{
     id: string
     currentStatus: WholeBuyStatus
-    confirmDueAt: Date
+}> {}
+
+// the delivery must match the order exactly to be accepted into stock
+export class WeightMismatchError extends Data.TaggedError("WholeBuyWeightMismatchError")<{
+    id: string
+    ordered: number
+    actual: number
+    unit: 'kg' | 'gb'
 }> {}
 
 // --- Repository port (outbound) ---
@@ -48,10 +55,10 @@ export interface ForWholeBuyRepository {
     listTransactions(req: ListFilter): Effect.Effect<WholeBuyTransactionShape[], RepositoryError>
     updateTransaction(id: string, fields: UpdateTransactionFields): Effect.Effect<WholeBuyTransactionShape, RepositoryError | TransactionNotFoundError>
     updateCurrentStatus(id: string, status: WholeBuyStatus): Effect.Effect<void, RepositoryError>
-    // records what physically arrived; written once, as part of the move to CHECKED
+    // records what physically arrived; written once, when the shipment is checked
     recordCheckedWeights(id: string, fields: CheckedFields): Effect.Effect<void, RepositoryError>
-    // CREATED transactions whose confirmDueAt has passed — the auto-confirm job's work list
-    listOverdueCreated(now: Date): Effect.Effect<WholeBuyTransactionShape[], RepositoryError>
+    // everything still awaiting confirmation — the confirm-all job's work list
+    listCreated(): Effect.Effect<WholeBuyTransactionShape[], RepositoryError>
     createStatus(req: CreateWholeBuyStatus): Effect.Effect<void, RepositoryError>
     listStatuses(transactionId: string): Effect.Effect<WholeBuyStatusShape[], RepositoryError>
 }
@@ -68,8 +75,8 @@ export interface CreateTransactionReq {
     brandId?: string
     productTypeId: string
     weight: number
+    // the only price supplied; the 99.9% quote is derived from it
     pricePerGb965: number
-    pricePerGb999: number
     notes?: string
     recordedBy: string
 }
@@ -82,7 +89,6 @@ export interface UpdateTransactionReq {
     productTypeId?: string
     weight?: number
     pricePerGb965?: number
-    pricePerGb999?: number
     notes?: string
     updatedBy: string
 }
@@ -118,16 +124,26 @@ export const NOTE_REQUIRED_STATUSES: WholeBuyStatus[] =
 // not when it arrives
 export const INVENTORY_STATUS: WholeBuyStatus = WHOLE_BUY_INVENTORY_STATUS
 
-// How long a CREATED transaction stays editable before the auto-confirm job takes it.
-// Configurable per operating conditions; clamped to the 1–12 hour band the business runs on.
-const DEFAULT_EDIT_WINDOW_HOURS = 6
-const MIN_EDIT_WINDOW_HOURS = 1
-const MAX_EDIT_WINDOW_HOURS = 12
+// where a delivery goes when it does not match the order
+export const MISMATCH_STATUS: WholeBuyStatus = 'DISPUTED'
 
-export function editWindowHours(): number {
-    const raw = Number(process.env.WHOLESALE_BUY_EDIT_WINDOW_HOURS)
-    if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_EDIT_WINDOW_HOURS
-    return Math.min(Math.max(raw, MIN_EDIT_WINDOW_HOURS), MAX_EDIT_WINDOW_HOURS)
+// The hour the nightly confirm job runs. It is not a deadline the API enforces — the job is the
+// cutoff — but knowing when the next run lands is what lets the UI tell an operator how long
+// their order stays editable. Default midnight; override to match the actual cron schedule.
+const DEFAULT_AUTO_CONFIRM_HOUR = 0
+
+export function autoConfirmHour(): number {
+    const raw = Number(process.env.WHOLESALE_BUY_AUTO_CONFIRM_HOUR)
+    if (!Number.isInteger(raw) || raw < 0 || raw > 23) return DEFAULT_AUTO_CONFIRM_HOUR
+    return raw
+}
+
+/** The next time the nightly job will run, at or after `from`. */
+export function nextAutoConfirmAt(from: Date): Date {
+    const next = new Date(from)
+    next.setHours(autoConfirmHour(), 0, 0, 0)
+    if (next <= from) next.setDate(next.getDate() + 1)
+    return next
 }
 
 export const BOT_CONFIRM_ACTOR = 'BOT-CONFIRM'

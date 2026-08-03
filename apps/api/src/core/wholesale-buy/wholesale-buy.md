@@ -24,7 +24,7 @@ CREATED ─┬─> CONFIRMED ─┬─> PAID ──> RECEIVED ─┬─> CHECKED
 
 | Status | Meaning | Terminal |
 |---|---|---|
-| `CREATED` | Order recorded. Legacy system status **1**. Editable until `confirmDueAt`. | no |
+| `CREATED` | Order recorded. Legacy system status **1**. Editable for as long as it stays here. | no |
 | `CONFIRMED` | Committed to the supplier. Legacy system status **2**. | no |
 | `PAID` | Payment sent and accepted. | no |
 | `RECEIVED` | Goods physically arrived. Nothing has entered inventory yet. | no |
@@ -50,35 +50,43 @@ DB enum and the shared list ever diverge, the API stops compiling.
 
 ---
 
-## 2. Confirmation and the Edit Window
+## 2. Confirmation — a Scheduled Sweep, Not a Per-Order Deadline
 
 `CONFIRMED` is a real status, not a derived query condition — the legacy system's status 2 maps
 onto it, and the log records who confirmed and when.
 
-At creation the server stamps `confirmDueAt = recordedAt + WHOLESALE_BUY_EDIT_WINDOW_HOURS`
-(default **6**, clamped to the 1–12 hour band the business runs on).
+Confirmation happens in **bulk**: `POST /wholesale-buy/confirm-all` moves *every* transaction still
+in `CREATED` to `CONFIRMED`. There is no per-transaction deadline the API enforces — the run itself
+is the cutoff.
 
-- **While `CREATED` and before `confirmDueAt`:** `PATCH /wholesale-buy/:id` accepts edits.
-  Weight, purity, product type and prices all recompute `weightGb`/`weightGm`/`totalAmount`.
-- **After it:** edits fail with `422 no longer editable`.
-- **`POST /wholesale-buy/auto-confirm`** moves every overdue `CREATED` transaction to `CONFIRMED`
-  as `BOT-CONFIRM`. Idempotent — once a transaction leaves `CREATED` it stops matching. Point a
-  cron at it at whatever interval suits; the deadline, not the schedule, is what decides.
+| Caller | Actor in the log | Note |
+|---|---|---|
+| the nightly scheduled job | `BOT-CONFIRM` | `ยืนยันอัตโนมัติรอบกลางคืน` |
+| an operator hitting the button mid-day (`?manual=true`) | their username | `ยืนยันทั้งหมด (manual)` |
 
-A manual confirm still works at any time while `CREATED`.
+Idempotent — once a transaction leaves `CREATED` it stops matching, so the job can run as often as
+you like. A per-transaction manual confirm through `/status` still works too.
+
+**Editability follows from this**: `PATCH /wholesale-buy/:id` is accepted while the transaction is
+`CREATED` and refused (`422 no longer editable`) once it is not. Confirmation *is* the lock,
+whichever route produced it.
+
+`confirmDueAt` records when the next nightly run lands (`WHOLESALE_BUY_AUTO_CONFIRM_HOUR`, default
+midnight — set it to match the real cron). It is **informational**: nothing in the API tests
+against it. It exists so the UI can tell an operator how long their order stays editable.
 
 ---
 
-## 3. Pricing — Both Purities on Every Transaction
+## 3. Pricing — One Entered Price, One Derived
 
-Gold is quoted per **gold baht (บาททอง)**. 99.9% is quoted off the 96.5% price by the purity ratio:
+Gold is quoted per **gold baht (บาททอง)**. The operator enters exactly one number: the **96.5%
+quote**. The 99.9% quote is arithmetic off it and is derived server-side:
 
 ```
 pricePerGb999 = pricePerGb965 × (99.9 / 96.5)
 ```
 
-The operator calculates and enters that value; the server stores what they typed. Both quotes are
-recorded on every transaction regardless of the item's purity — the item's own purity then selects
+Both are stored on every transaction whatever the item's purity, and the item's own purity selects
 which one drives the amount:
 
 | Purity | `unitOfMeasure` | Price used | Amount |
@@ -86,25 +94,38 @@ which one drives the amount:
 | 96.5% | `gb` | `pricePerGb965` | `weightGb × pricePerGb965` |
 | 99.9% | `g` | `pricePerGb999` | `weightGb × pricePerGb999` |
 
-`derivePricePerGb999()` in `@gold-platform/types` pre-fills the field on the web form. It is a
-convenience only — it never overwrites an entered value.
+`createWholeBuySchema` does not accept `pricePerGb999` at all — two independently-entered prices
+could disagree, a derived one cannot. `derivePricePerGb999()` in `@gold-platform/types` is the
+single implementation, used by the server to store it and by the web form to preview it.
 
 ---
 
-## 4. Delivered Weight and Variance
+## 4. Acceptance is All-or-Nothing
 
 At `CHECKED` the operator may supply `actualWeight` — what physically arrived, in the same unit as
-the ordered weight. When present:
+the ordered weight. **It must equal the ordered weight exactly.**
 
-- `actualWeightGb` / `actualWeightGm` / `actualAmount` are written to the transaction.
-- **Inventory increments the actual weight**, at cost `actualWeightGb × the purity-matched price`.
-- The ordered figures are left untouched, so the variance stays visible in the list and detail views.
+| `actualWeight` | Result |
+|---|---|
+| omitted, or equal to the order | → `CHECKED`. The **ordered** weight enters inventory. |
+| anything else | → `DISPUTED`. **Nothing enters inventory.** The measured weight is recorded on the transaction and the discrepancy is appended to the status note. |
+
+A short or long delivery is a discrepancy for a human to settle with the supplier, not something to
+book at a pro-rated cost. The caller asks for `CHECKED`; the goods decide otherwise, and the
+response body returns the status actually reached.
+
+Resolving a dispute means re-checking with the correct weight. On acceptance the recorded
+discrepancy is **cleared back to null** — acceptance implies the delivery matched, so a `CHECKED`
+transaction must never display a delivered weight different from its order. The `DISPUTED` entry in
+the status log is where that history lives.
+
+The equality test compares in the pairing's **input unit** (kg or gold baht), not in GB. GB for a
+99.9% order is derived through a per-transaction `conversionFactor` snapshot, so a master-rate
+change between order and delivery would otherwise make two identical kg figures compare unequal.
 
 `actualWeight` resolves through `resolveMeasuredQuantity()`, not `resolveQuantity()` — a delivery
-arriving 11.95 GB against a 12 GB order is a legitimate short delivery, not invalid input, so the
+arriving 11.95 GB against a 12 GB order is a real short delivery, not invalid input, so the
 orderable-quantity rules (`minQuantity`, `allowedValues`) must not apply to it.
-
-Omit `actualWeight` and the ordered weight is what enters inventory.
 
 ---
 
@@ -112,11 +133,16 @@ Omit `actualWeight` and the ordered weight is what enters inventory.
 
 | When | Effect |
 |---|---|
-| Entering `CHECKED` (from `RECEIVED` or `DISPUTED`) | `increment()` — one balance upsert + one movement row, `referenceType: 'WHOLESALE_BUY'`, `referenceId` = transaction id |
-| Every other status | nothing |
+| Entering `CHECKED` (from `RECEIVED` or `DISPUTED`) | `increment()` of the **ordered** weight — one balance upsert + one movement row, `referenceType: 'WHOLESALE_BUY'`, `referenceId` = transaction id |
+| Every other status, including `DISPUTED` | nothing |
 
-Always `origin: 'foreign'` — only smelting produces domestic stock. For 99.9% the server forces
-`brandId = 'NA'` (those pools are keyed by origin, not brand), so the caller omits the brand.
+**Always `origin: 'foreign'`, at every purity.** Only smelting produces domestic stock, and only
+`convert_out` may consume it — a wholesale purchase is an import by definition, so 99.9% orders
+land in the foreign pool exactly like 96.5% ones. The constant is hardcoded in the usecase and is
+not caller-supplied.
+
+For 99.9% the server also forces `brandId = 'NA'` (those pools are keyed by origin, not brand), so
+the caller omits the brand entirely.
 
 **Corrections after `CHECKED`** do not reopen the transaction. It is terminal by design. Post a
 manual adjustment through `POST /inventory/loss` (or `/gain`) with `referenceType: WHOLESALE_BUY`
@@ -131,13 +157,13 @@ All require a JWT. `recordedBy` / `updatedBy` come from the token, never the bod
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/wholesale-buy` | create; `settlementPeriod` is derived server-side |
+| `POST` | `/wholesale-buy` | create; one price in, `settlementPeriod` derived server-side |
 | `GET` | `/wholesale-buy` | filters: `currentStatus`, `settlementPeriod`, `supplierId`. Newest first |
 | `GET` | `/wholesale-buy/:id` | `{ transaction, statuses }`, status log oldest→newest |
-| `PATCH` | `/wholesale-buy/:id` | edit; `CREATED` and inside the window only |
-| `POST` | `/wholesale-buy/:id/status` | `{ toStatus, note?, actualWeight? }` |
-| `POST` | `/wholesale-buy/:id/receive-check` | `{ actualWeight?, note? }` — `PAID → RECEIVED → CHECKED` in one call |
-| `POST` | `/wholesale-buy/auto-confirm` | the cron job's entry point |
+| `PATCH` | `/wholesale-buy/:id` | edit; `CREATED` only |
+| `POST` | `/wholesale-buy/:id/status` | `{ toStatus, note?, actualWeight? }` → `{ status }`, the status actually reached |
+| `POST` | `/wholesale-buy/:id/receive-check` | `{ actualWeight?, note? }` — `PAID → RECEIVED → CHECKED` in one call, same return |
+| `POST` | `/wholesale-buy/confirm-all` | bulk confirm. `?manual=true` attributes it to the operator; without it, `BOT-CONFIRM` |
 
 ### Why `receive-check` exists
 
@@ -159,8 +185,9 @@ reassigned.
 
 `whole_buy_transactions` — one row per item. `price_per_gb` is the 96.5% quote (the column keeps
 its original name; the `pricePerGb965` field name just makes the meaning explicit),
-`price_per_gb_999` the 99.9% one. `actual_weight_gb` / `actual_weight_gm` / `actual_amount` are
-null until the shipment is checked, and stay null when it matched the order.
+`price_per_gb_999` the derived 99.9% one. `actual_weight_gb` / `actual_weight_gm` / `actual_amount`
+hold an **outstanding discrepancy** only: set when a check is diverted to `DISPUTED`, cleared again
+if the shipment is later accepted. Null therefore always means "matches the order".
 
 `whole_buy_statuses` — append-only log, never updated or deleted. `current_status` on the
 transaction is a write-through cache of the latest entry and is recomputable from this table.
@@ -174,7 +201,7 @@ transaction is a write-through cache of the latest entry and is recomputable fro
 | `TransactionNotFoundError` | 404 | id does not exist |
 | `InvalidTransitionError` | 422 | `toStatus` is not a legal next state |
 | `NoteRequiredError` | 422 | failure-branch transition with no note |
-| `EditWindowExpiredError` | 422 | edit attempted after `confirmDueAt` or outside `CREATED` |
+| `NotEditableError` | 422 | edit attempted on a transaction that is no longer `CREATED` |
 | `ProductTypePurityNotFoundError` | 422 | purity is not configured for that product type |
 | `InvalidQuantityError` | 422 | ordered weight breaks the pairing's quantity rule |
 

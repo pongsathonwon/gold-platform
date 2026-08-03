@@ -6,9 +6,11 @@ import {
 } from "@mui/material";
 import { WHOLE_BUY_STATUSES } from "@gold-platform/types";
 import { useWholesaleBuyList, type WholeBuyTransaction } from "../hooks/useWholesaleBuy";
+import { useConfirmAllWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
 import { useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterData";
+import { useToast } from "../components/ToastContext";
 import { splitByPurity } from "../utils/inventoryVolume";
-import { countsTowardTotal, formatNumber, statusColor, statusLabel } from "../utils/wholeBuyStatus";
+import { countsTowardTotal, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeBuyStatus";
 
 // 96.5% is ordered in gold baht, 99.9% in kilograms — the same split the inventory pages use.
 // Sectioning by purity is what lets each table state one unit in its header instead of showing
@@ -33,6 +35,8 @@ export function WholesaleBuyListPage() {
     ...(supplierId ? { supplierId } : {}),
   };
   const { data, isPending, isError, error } = useWholesaleBuyList(filter);
+  const confirmAll = useConfirmAllWholesaleBuy();
+  const { showToast } = useToast();
   const { data: suppliersRes } = useSuppliers();
   const { data: productTypesRes } = useProductTypes();
   const { data: puritiesRes } = usePurities();
@@ -46,6 +50,17 @@ export function WholesaleBuyListPage() {
     data ?? [],
     (t) => purityById.get(t.purityId)?.percent === 99.9,
   );
+
+  // counts only what is on screen; with a status filter applied the button follows the filter,
+  // but the endpoint always sweeps every CREATED transaction — so the count is a floor, not a cap
+  const createdCount = (data ?? []).filter((t) => t.currentStatus === "CREATED").length;
+
+  function handleConfirmAll() {
+    confirmAll.mutate(undefined, {
+      onSuccess: (res) => showToast(`ยืนยันแล้ว ${res.data.confirmed} รายการ`),
+      onError: (err) => showToast(err instanceof Error ? err.message : "ยืนยันไม่สำเร็จ", "error"),
+    });
+  }
 
   function renderSection(title: string, rows: WholeBuyTransaction[], unit: Unit) {
     const weightHeader = unit === "gb" ? "น้ำหนัก (บาท)" : "น้ำหนัก (กก.)";
@@ -94,10 +109,10 @@ export function WholesaleBuyListPage() {
                     <TableCell>{supplierName(t.supplierId)}</TableCell>
                     <TableCell>{productTypeName(t.productTypeId)}</TableCell>
                     <TableCell align="right">
-                      {formatNumber(delivered, unit === "kg" ? 3 : 2)}
+                      {formatWeight(delivered)}
                       {short && (
                         <Typography component="span" variant="caption" color="warning.main" sx={{ ml: 0.5 }}>
-                          (สั่ง {formatNumber(ordered, unit === "kg" ? 3 : 2)})
+                          (สั่ง {formatWeight(ordered)})
                         </Typography>
                       )}
                     </TableCell>
@@ -133,7 +148,7 @@ export function WholesaleBuyListPage() {
                     )}
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
-                    {formatNumber(totalWeight, unit === "kg" ? 3 : 2)}
+                    {formatWeight(totalWeight)}
                   </TableCell>
                   <TableCell />
                   <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
@@ -155,6 +170,11 @@ export function WholesaleBuyListPage() {
         <Typography variant="h2" sx={{ flexGrow: 1 }}>
           ซื้อส่ง
         </Typography>
+        {/* the nightly job does this automatically; the button is the mid-day run for when the
+            day's orders need locking before then */}
+        <Button variant="outlined" onClick={handleConfirmAll} disabled={confirmAll.isPending || createdCount === 0}>
+          {confirmAll.isPending ? "กำลังยืนยัน…" : `ยืนยันทั้งหมด (${createdCount})`}
+        </Button>
         <Button component={RouterLink} to="/wholesale-buy/new">
           สร้างรายการ
         </Button>

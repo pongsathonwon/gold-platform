@@ -170,9 +170,9 @@ export const WHOLE_BUY_TRANSITIONS: Record<WholeBuyStatusValue, WholeBuyStatusVa
 // not when it arrived.
 export const WHOLE_BUY_INVENTORY_STATUS = 'CHECKED' satisfies WholeBuyStatusValue
 
-// 99.9% gold is quoted off the 96.5% price by the purity ratio. The operator enters the
-// 96.5% price and calculates the 99.9% price themselves — this helper only pre-fills the
-// field, it is never used to overwrite what they typed.
+// The operator enters exactly one price: the 96.5% quote per gold baht. The 99.9% quote is
+// pure arithmetic off it, so the server derives and stores it rather than accepting it —
+// two independently-entered prices could disagree, a derived one cannot.
 export const PURITY_RATIO_999_TO_965 = 99.9 / 96.5
 
 export const derivePricePerGb999 = (pricePerGb965: number) =>
@@ -186,10 +186,9 @@ export const createWholeBuySchema = z.object({
   productTypeId: z.string().min(1),
   // in the unit product_type_purities defines for this pairing (kg or gold baht)
   weight: z.number().int().positive(),
-  // both quotes are recorded on every transaction regardless of the item's purity;
-  // the one matching the item's purity is what totalAmount is computed from
+  // the only price the operator enters. The 99.9% quote is derived from it server-side;
+  // both end up stored, and the item's purity decides which one drives the amount.
   pricePerGb965: z.number().positive(),
-  pricePerGb999: z.number().positive(),
   notes: z.string().optional(),
 })
 
@@ -203,8 +202,8 @@ export type UpdateWholeBuyReq = z.infer<typeof updateWholeBuySchema>
 export const advanceWholeBuyStatusSchema = z.object({
   toStatus: wholeBuyStatusSchema,
   note: z.string().optional(),
-  // only meaningful on a transition into CHECKED (e.g. resolving a DISPUTED shipment):
-  // what physically arrived, in the same unit as the ordered weight
+  // only read on a transition into CHECKED: what physically arrived, in the same unit as the
+  // ordered weight. It must match the order exactly — a mismatch diverts to DISPUTED.
   actualWeight: z.number().positive().optional(),
 })
 
@@ -213,7 +212,8 @@ export type AdvanceWholeBuyStatusReq = z.infer<typeof advanceWholeBuyStatusSchem
 // Combined receive + check — one operator action today, split into two transitions later
 // without touching the status log, which records both entries either way.
 export const receiveCheckWholeBuySchema = z.object({
-  // what physically arrived, in the same unit as the ordered weight; omit when it matches
+  // what physically arrived, in the same unit as the ordered weight; omit when it matches.
+  // Anything other than the ordered weight sends the transaction to DISPUTED instead of CHECKED.
   actualWeight: z.number().positive().optional(),
   note: z.string().optional(),
 })

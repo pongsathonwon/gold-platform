@@ -126,12 +126,41 @@ status machine with its failure branches. Inventory increments on entering `CHEC
   over the row shape so the wholesale-buy list reuses it. New `countsTowardTotal()` keeps
   cancelled/rejected/returned orders out of the totals (4 new tests, 32 web tests pass).
 
+- [x] **9. Operator revisions (2026-08-03)** — six changes after reviewing the first cut:
+  1. **One price on the create form.** `pricePerGb965` is the only input; `createWholeBuySchema` no
+     longer accepts `pricePerGb999` and the server derives it. Two typed prices could disagree, a
+     derived one cannot. The form previews the derived figure in helper text.
+  2. **99.9% confirmed to land in `foreign`.** Already hardcoded; now asserted end-to-end and
+     documented as a rule (only smelting makes domestic stock).
+  3. **Acceptance is strictly all-or-nothing.** A delivered weight that is not exactly the ordered
+     weight now diverts to `DISPUTED` with **nothing entering inventory**, instead of booking the
+     actual weight at a pro-rated cost. `/status` and `/receive-check` return the status actually
+     reached so the UI can say so. Equality is compared in the pairing's input unit, not GB, so a
+     `conversionFactor` change cannot make identical kg figures compare unequal.
+  4. **Confirmation is a nightly bulk sweep.** `POST /wholesale-buy/confirm-all` confirms *every*
+     `CREATED` transaction (`BOT-CONFIRM`), with `?manual=true` as the operator's mid-day run,
+     wired to a "ยืนยันทั้งหมด (n)" button on the list. The per-order edit window is gone: edits are
+     allowed while `CREATED`, full stop, and `confirmDueAt` is now just when the next sweep lands
+     (`WHOLESALE_BUY_AUTO_CONFIRM_HOUR`, default midnight).
+  5. **Weights render as entered.** New `formatWeight()` — "2" not "2.000" — on both the list and
+     detail pages; money keeps its two decimals.
+  6. **Bug found while verifying:** a shipment disputed at 14 and then accepted at 15 kept showing
+     the stale 14 as delivered. The recorded discrepancy is now cleared on acceptance, so a
+     `CHECKED` transaction always matches its order; the `DISPUTED` log entry keeps the history.
+
+  _Verified live: derived price 48,250 → 49,950; a mismatched receive-check landed on `DISPUTED`
+  with 0 movements, then accepted at the ordered weight and moved the balance 71.95 → 86.95; a
+  99.9% order booked to `foreign`/`NA`; nightly sweep confirmed 3 as `BOT-CONFIRM` and the manual
+  run 1 as `admin`; edit after confirmation rejected. 36 web tests pass, all packages type-check._
+
 ## Follow-ups not done
 
 - `GET /wholesale-buy/settlement/:period/summary` — belongs to the Phase 4 position work.
 - The other transaction domains still take `settlementPeriod` from the caller; they should move onto
   `resolveSettlementPeriod` too.
-- No scheduler is wired to `POST /wholesale-buy/auto-confirm` — the endpoint exists, the cron does not.
+- No scheduler is wired to `POST /wholesale-buy/confirm-all` — the endpoint and the manual button
+  exist, the nightly cron does not. It also needs an identity to authenticate as; today any caller
+  without `?manual=true` is logged as `BOT-CONFIRM` regardless of whose token was used.
 
 ---
 

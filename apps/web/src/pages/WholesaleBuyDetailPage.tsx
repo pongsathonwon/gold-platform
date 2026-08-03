@@ -10,7 +10,7 @@ import { useWholesaleBuyDetail } from "../hooks/useWholesaleBuy";
 import { useAdvanceWholesaleBuyStatus, useReceiveCheckWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
 import { useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
-import { formatNumber, nextStatuses, requiresNote, statusColor, statusLabel } from "../utils/wholeBuyStatus";
+import { formatNumber, formatWeight, nextStatuses, requiresNote, statusColor, statusLabel } from "../utils/wholeBuyStatus";
 
 // the combined receive+check action, offered alongside the plain transitions
 const RECEIVE_CHECK = "RECEIVE_CHECK" as const;
@@ -68,8 +68,15 @@ export function WholesaleBuyDetailPage() {
       return;
     }
 
-    const onSuccess = () => {
-      showToast("อัปเดตสถานะแล้ว");
+    // the server returns the status actually reached — a mismatched delivery lands on รอตรวจสอบ
+    // rather than ตรวจรับแล้ว, and the operator has to be told that, not just "saved"
+    const onSuccess = (res: unknown) => {
+      const reached = (res as { data?: { status?: string } })?.data?.status;
+      const diverted = collectsWeight && reached && reached !== "CHECKED";
+      showToast(
+        diverted ? `น้ำหนักไม่ตรงกับที่สั่ง — เปลี่ยนเป็น "${statusLabel(reached)}"` : "อัปเดตสถานะแล้ว",
+        diverted ? "error" : "success",
+      );
       closeDialog();
     };
     const onError = (err: unknown) =>
@@ -100,14 +107,19 @@ export function WholesaleBuyDetailPage() {
     ["ประเภททองคำ", productTypeName],
     ["% ทอง", is999 ? "99.9%" : "96.5%"],
     ["ยี่ห้อ", t.brandId === "NA" ? "—" : t.brandId],
-    ["น้ำหนักที่สั่ง", `${formatNumber(is999 ? t.weightGm : t.weightGb)} ${weightUnit}`],
+    ["น้ำหนักที่สั่ง", `${formatWeight(is999 ? t.weightGm : t.weightGb)} ${weightUnit}`],
     ["ราคาต่อบาททอง 96.5%", formatNumber(t.pricePerGb965)],
     ["ราคาต่อบาททอง 99.9%", formatNumber(t.pricePerGb999)],
     ["ยอดรวมที่สั่ง", formatNumber(t.totalAmount)],
     ["งวดชำระ", t.settlementPeriod],
     ["บันทึกโดย", `${t.recordedBy} · ${new Date(t.recordedAt).toLocaleString("th-TH")}`],
-    ["แก้ไขได้ถึง", new Date(t.confirmDueAt).toLocaleString("th-TH")],
   ];
+
+  // editable only while CREATED, and the nightly job is what ends that — so the deadline is
+  // worth showing on exactly the transactions it still applies to
+  if (t.currentStatus === "CREATED") {
+    rows.push(["ยืนยันอัตโนมัติ", new Date(t.confirmDueAt).toLocaleString("th-TH")]);
+  }
 
   if (t.actualWeightGb !== null) {
     const orderedGb = t.weightGb;
@@ -115,10 +127,10 @@ export function WholesaleBuyDetailPage() {
     rows.push([
       "น้ำหนักที่รับจริง",
       <Box component="span">
-        {formatNumber(is999 ? (t.actualWeightGm ?? 0) : t.actualWeightGb)} {weightUnit}
+        {formatWeight(is999 ? (t.actualWeightGm ?? 0) : t.actualWeightGb)} {weightUnit}
         {variance !== 0 && (
           <Typography component="span" variant="caption" color={variance < 0 ? "error.main" : "success.main"} sx={{ ml: 1 }}>
-            ({variance > 0 ? "+" : ""}{formatNumber(variance)} บาท เทียบกับที่สั่ง)
+            ({variance > 0 ? "+" : ""}{formatWeight(variance)} บาท เทียบกับที่สั่ง)
           </Typography>
         )}
       </Box>,
@@ -229,7 +241,7 @@ export function WholesaleBuyDetailPage() {
                   type="number"
                   value={actualWeight}
                   onChange={(e) => setActualWeight(e.target.value)}
-                  helperText="เว้นว่างไว้หากตรงกับที่สั่ง — ยอดที่เข้าสต๊อกจะคิดตามน้ำหนักที่กรอก"
+                  helperText={`เว้นว่างไว้หากตรงกับที่สั่ง (${formatWeight(is999 ? t.weightGm / 1000 : t.weightGb)} ${is999 ? "kg" : "บาท"}) — ถ้าไม่ตรง รายการจะถูกส่งไป "รอตรวจสอบ" และไม่เข้าสต๊อก`}
                 />
                 <Divider />
               </>

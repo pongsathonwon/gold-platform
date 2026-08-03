@@ -8,11 +8,11 @@ import {
 import { runEffect } from "../../../infrastructure/runtime.js";
 import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
 import {
-    advanceStatus, autoConfirmOverdue, createTransaction, getTransaction,
+    advanceStatus, confirmAllCreated, createTransaction, getTransaction,
     listTransactions, receiveAndCheck, updateTransaction,
 } from "../application/wholesale-buy.usecase.js";
 import {
-    EditWindowExpiredError, InvalidTransitionError,
+    InvalidTransitionError, NotEditableError,
     NoteRequiredError, TransactionNotFoundError,
 } from "../port/wholesale-buy.port.js";
 import { InvalidQuantityError, ProductTypePurityNotFoundError } from "../../../infrastructure/quantity.js";
@@ -24,11 +24,8 @@ function toHttpError(error: unknown): [string, number] {
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
     if (error instanceof NoteRequiredError) return [`a note is required when moving to ${error.status}`, 422]
-    if (error instanceof EditWindowExpiredError) {
-        return [
-            `transaction ${error.id} is no longer editable (status ${error.currentStatus}, edit window closed ${error.confirmDueAt.toISOString()})`,
-            422,
-        ]
+    if (error instanceof NotEditableError) {
+        return [`transaction ${error.id} is no longer editable — it is already ${error.currentStatus}`, 422]
     }
     if (error instanceof ProductTypePurityNotFoundError) {
         return [`purity ${error.purityId} is not valid for product type ${error.productTypeId}`, 422]
@@ -73,10 +70,13 @@ export const wholesaleBuyRoutes = new Hono()
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
-    // the auto-confirm job's entry point — closes the edit window on everything still CREATED.
-    // Declared before /:id so "auto-confirm" is never read as a transaction id.
-    .post("/auto-confirm", async (c) => {
-        const result = await runEffect(autoConfirmOverdue())
+    // Bulk confirm — everything still CREATED. Declared before /:id so the path is never read as
+    // a transaction id.
+    //   ?manual=true  operator-triggered mid-day run, logged under their username
+    //   (default)     the nightly scheduled run, logged as BOT-CONFIRM
+    .post("/confirm-all", zValidator("query", z.object({ manual: z.enum(["true", "false"]).optional() })), async (c) => {
+        const manual = c.req.valid("query").manual === "true"
+        const result = await runEffect(confirmAllCreated(manual ? currentUsername(c) : undefined))
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
@@ -101,7 +101,8 @@ export const wholesaleBuyRoutes = new Hono()
             toStatus: req.toStatus as WholeBuyStatus,
             updatedBy: currentUsername(c),
         }))
-        if (result.result === "success") return c.json({}, 200)
+        // returns the status actually reached — a mismatched delivery lands on DISPUTED, not CHECKED
+        if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
     // receive + check as one operator action; both status entries are still logged
@@ -110,6 +111,7 @@ export const wholesaleBuyRoutes = new Hono()
         const result = await runEffect(receiveAndCheck({
             transactionId: c.req.param("id"), ...req, updatedBy: currentUsername(c),
         }))
-        if (result.result === "success") return c.json({}, 200)
+        // returns the status actually reached — a mismatched delivery lands on DISPUTED, not CHECKED
+        if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })

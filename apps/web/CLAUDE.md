@@ -182,7 +182,7 @@ Three pages plus one shared helper:
 | File | Role |
 | --- | --- |
 | `pages/WholesaleBuyListPage.tsx` | split into `ทอง 96.5%` (บาท) and `ทอง 99.9%` (กก.) sections like the inventory pages, each with its own `รวม` footer. Status/supplier filters. Shows the delivered weight, with the ordered one beside it when they differ |
-| `pages/WholesaleBuyCreatePage.tsx` | create form on the shared `useDynamicForm` / `DynamicFormField` pattern. The 99.9% price auto-fills from the 96.5% one via `derivePricePerGb999()` and stays editable |
+| `pages/WholesaleBuyCreatePage.tsx` | create form on the shared `useDynamicForm` / `DynamicFormField` pattern. **One price field only** — the 96.5% quote; `derivePricePerGb999()` previews the 99.9% figure in helper text, and the server does the real conversion |
 | `pages/WholesaleBuyDetailPage.tsx` | summary, status timeline, action buttons + confirm dialog |
 | `utils/wholeBuyStatus.ts` | chip colours, Thai labels, `nextStatuses()`, `requiresNote()` |
 
@@ -191,8 +191,15 @@ API validates against, so the UI cannot offer a move the server will reject. Nev
 status list in a component.
 
 The dialog collects a **note** (mandatory for failure-branch moves, which the API rejects without
-one) and, on any move into `CHECKED`, an optional **delivered weight**. Leaving the weight blank
-books the ordered weight.
+one) and, on any move into `CHECKED`, an optional **delivered weight**. Leaving it blank books the
+ordered weight. Entering anything that is not the ordered weight sends the transaction to
+`DISPUTED` instead — acceptance is all-or-nothing — so the mutation's `onSuccess` reads the
+returned status and toasts an **error** when the move was diverted. Never assume a 200 means the
+requested status was reached.
+
+**Weights render as-is** via `formatWeight()` — a 2 kg order shows "2", not "2.000". Only money
+goes through `formatNumber()`'s fixed two decimals. `formatWeight` strips binary floating-point
+residue so a summed column cannot print 17 digits.
 
 **Never show a 99.9% weight in gold baht.** It is ordered in kilograms, so a 2 kg order displayed
 as its 131.20 GB equivalent is a number nobody typed. Sectioning by purity is what lets each table

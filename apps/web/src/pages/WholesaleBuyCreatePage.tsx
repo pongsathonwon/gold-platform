@@ -20,7 +20,6 @@ interface BuyValues extends Record<string, string> {
   brandId: string;
   weight: string;
   pricePerGb965: string;
-  pricePerGb999: string;
   notes: string;
 }
 
@@ -31,7 +30,6 @@ const initialValues: BuyValues = {
   brandId: "",
   weight: "",
   pricePerGb965: "",
-  pricePerGb999: "",
   notes: "",
 };
 
@@ -60,13 +58,6 @@ export function WholesaleBuyCreatePage() {
   function handleChange(name: keyof BuyValues, value: string) {
     setValue(name, value);
     RESET_ON_CHANGE[name as string]?.forEach((dep) => setValue(dep, ""));
-    // the 99.9% quote is the 96.5% quote scaled by the purity ratio. Pre-fill it so the
-    // operator does not retype the arithmetic — they stay free to overwrite it, and whatever
-    // sits in the field at submit time is what gets stored.
-    if (name === "pricePerGb965") {
-      const base = Number(value);
-      setValue("pricePerGb999", base > 0 ? String(derivePricePerGb999(base)) : "");
-    }
   }
 
   const fields: FieldConfig<BuyValues>[] = [
@@ -115,20 +106,18 @@ export function WholesaleBuyCreatePage() {
       },
     },
     {
+      // One price only. The 99.9% quote is arithmetic off this one, so the server derives it —
+      // two separately-typed prices could disagree, a derived one cannot. For a 99.9% order the
+      // helper text shows what it works out to, so the operator can sanity-check the conversion.
       name: "pricePerGb965",
-      label: "ราคาต่อบาททอง 96.5%",
+      label: "ราคาต่อบาททอง (96.5%)",
       kind: "number",
       required: true,
-    },
-    {
-      name: "pricePerGb999",
-      label: "ราคาต่อบาททอง 99.9%",
-      kind: "number",
-      required: true,
-      helperText: (v) =>
-        matchingRule(v)?.percent === 99.9
-          ? "ราคานี้ใช้คำนวณยอดรวมของรายการนี้"
-          : "คำนวณจากราคา 96.5% × (99.9/96.5) — แก้ไขได้",
+      helperText: (v) => {
+        const base = Number(v.pricePerGb965);
+        if (matchingRule(v)?.percent !== 99.9 || !(base > 0)) return undefined;
+        return `ทอง 99.9% = ${derivePricePerGb999(base).toLocaleString("en-US")} บาท/บาททอง`;
+      },
     },
     {
       name: "notes",
@@ -149,7 +138,6 @@ export function WholesaleBuyCreatePage() {
       productTypeId: values.productTypeId,
       weight: Number(values.weight),
       pricePerGb965: Number(values.pricePerGb965),
-      pricePerGb999: Number(values.pricePerGb999),
       notes: values.notes || undefined,
     };
 

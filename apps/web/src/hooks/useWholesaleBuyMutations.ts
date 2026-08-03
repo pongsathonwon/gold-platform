@@ -59,6 +59,23 @@ export function useAdvanceWholesaleBuyStatus(id: string) {
   });
 }
 
+/**
+ * Manual mid-day run of the same bulk confirm the nightly job performs: every transaction still
+ * in CREATED moves to CONFIRMED. `manual=true` is what makes the log attribute it to the operator
+ * instead of BOT-CONFIRM.
+ */
+export function useConfirmAllWholesaleBuy() {
+  const invalidate = useInvalidateWholesaleBuy();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await client["wholesale-buy"]["confirm-all"].$post({ query: { manual: "true" } });
+      if (!res.ok) throw new Error(await parseErrorMessage(res));
+      return (await res.json()) as { data: { confirmed: number; ids: string[] } };
+    },
+    onSuccess: invalidate,
+  });
+}
+
 // receive + check in one action — the two status entries are still recorded server-side
 export function useReceiveCheckWholesaleBuy(id: string) {
   const invalidate = useInvalidateWholesaleBuy();

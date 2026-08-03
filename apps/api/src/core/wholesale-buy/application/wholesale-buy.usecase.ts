@@ -1,10 +1,11 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
+import { derivePricePerGb999 } from "@gold-platform/types";
 import {
     AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CreateTransactionReq,
-    editWindowHours, EditWindowExpiredError, INVENTORY_STATUS, InvalidTransitionError,
-    ListFilter, NOTE_REQUIRED_STATUSES, NoteRequiredError, ReceiveAndCheckReq,
-    UpdateTransactionFields, UpdateTransactionReq, WholeBuyRepository,
+    INVENTORY_STATUS, InvalidTransitionError, ListFilter, MISMATCH_STATUS,
+    nextAutoConfirmAt, NOTE_REQUIRED_STATUSES, NotEditableError, NoteRequiredError,
+    ReceiveAndCheckReq, UpdateTransactionFields, UpdateTransactionReq, WholeBuyRepository,
 } from "../port/wholesale-buy.port.js";
 import { makeWholeBuyRepository } from "../adapter/wholesale-buy.repository.js";
 import { WholeBuyStatus, WholeBuyTransactionShape } from "../../../infrastructure/db/schema/wholesale-buy.schema.js";
@@ -28,7 +29,12 @@ const applicablePrice = (unitOfMeasure: 'g' | 'gb', pricePerGb965: number, price
 const brandFor = (unitOfMeasure: 'g' | 'gb', brandId?: string) =>
     unitOfMeasure === 'g' ? NA_BRAND : (brandId ?? NA_BRAND)
 
-const addHours = (from: Date, hours: number) => new Date(from.getTime() + hours * 60 * 60 * 1000)
+// The stored weight expressed in the unit the operator types for this pairing. Comparing in the
+// input unit rather than in GB is what makes the equality check stable: GB for a 99.9% order is a
+// derived figure, and `conversionFactor` is snapshotted per transaction, so a master-rate change
+// between order and delivery would make two identical kg figures compare unequal.
+const orderedWeightIn = (inputUnit: 'kg' | 'gb', transaction: WholeBuyTransactionShape) =>
+    inputUnit === 'kg' ? transaction.weightGm / 1000 : transaction.weightGb
 
 // --- Commands ---
 
@@ -42,7 +48,9 @@ export const createTransaction = (req: CreateTransactionReq) =>
         const { weightGb, weightGm, conversionFactor, unitOfMeasure } =
             yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
-        const price = applicablePrice(unitOfMeasure, req.pricePerGb965, req.pricePerGb999);
+        // the operator enters one price; the 99.9% quote is arithmetic off it, never re-typed
+        const pricePerGb999 = derivePricePerGb999(req.pricePerGb965);
+        const price = applicablePrice(unitOfMeasure, req.pricePerGb965, pricePerGb999);
 
         const transaction = yield* repo.createTransaction({
             id,
@@ -54,7 +62,7 @@ export const createTransaction = (req: CreateTransactionReq) =>
             weightGm,
             conversionFactor,
             pricePerGb965: req.pricePerGb965,
-            pricePerGb999: req.pricePerGb999,
+            pricePerGb999,
             totalAmount: weightGb * price,
             actualWeightGb: null,
             actualWeightGm: null,
@@ -62,7 +70,8 @@ export const createTransaction = (req: CreateTransactionReq) =>
             // callers never supply the period — it is derived from the recording time and frozen
             settlementPeriod: resolveSettlementPeriod(now),
             currentStatus: 'CREATED',
-            confirmDueAt: addHours(now, editWindowHours()),
+            // informational: when the nightly job will sweep this up if nobody confirms it first
+            confirmDueAt: nextAutoConfirmAt(now),
             notes: req.notes ?? null,
             recordedBy: req.recordedBy,
             recordedAt: now,
@@ -81,20 +90,18 @@ export const createTransaction = (req: CreateTransactionReq) =>
     }).pipe(Effect.provide(wholeBuyLive))
 
 /**
- * Edits are accepted only while the transaction is still CREATED and inside its edit window.
- * Once the window closes the auto-confirm job takes the transaction to CONFIRMED, which is the
- * point the order is treated as committed to the supplier.
+ * Edits are accepted only while the transaction is still CREATED. Confirmation is the lock —
+ * whether it came from the nightly job, the manual bulk trigger, or a per-transaction confirm.
  */
 export const updateTransaction = (req: UpdateTransactionReq) =>
     Effect.gen(function* () {
         const repo = yield* WholeBuyRepository;
         const transaction = yield* repo.findTransactionById(req.transactionId);
 
-        if (transaction.currentStatus !== 'CREATED' || new Date() >= transaction.confirmDueAt) {
-            return yield* Effect.fail(new EditWindowExpiredError({
+        if (transaction.currentStatus !== 'CREATED') {
+            return yield* Effect.fail(new NotEditableError({
                 id: transaction.id,
                 currentStatus: transaction.currentStatus,
-                confirmDueAt: transaction.confirmDueAt,
             }));
         }
 
@@ -107,10 +114,10 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
         const purityId = req.purityId ?? transaction.purityId;
         const productTypeId = req.productTypeId ?? transaction.productTypeId;
         const pricePerGb965 = req.pricePerGb965 ?? transaction.pricePerGb965;
-        const pricePerGb999 = req.pricePerGb999 ?? transaction.pricePerGb999;
+        const pricePerGb999 = derivePricePerGb999(pricePerGb965);
         const pricingChanged =
             req.weight !== undefined || req.purityId !== undefined || req.productTypeId !== undefined ||
-            req.pricePerGb965 !== undefined || req.pricePerGb999 !== undefined || req.brandId !== undefined;
+            req.pricePerGb965 !== undefined || req.brandId !== undefined;
 
         if (pricingChanged) {
             // when the weight itself is unchanged it still has to be re-expressed in the target
@@ -138,12 +145,16 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
     }).pipe(Effect.provide(wholeBuyLive))
 
 /**
- * Moves gold into inventory. Runs exactly once per transaction, on the move to CHECKED — stock
- * enters when it has been verified, not when it arrived. When the delivery came up short or long,
- * `actualWeight` is what enters inventory and what the cost is pro-rated against; the ordered
- * figures on the transaction are left untouched so the variance stays visible.
+ * Verifies a delivery against its order. Acceptance is **strictly all-or-nothing**: the delivered
+ * weight must equal the ordered weight exactly. Anything else is a discrepancy for a human to
+ * settle with the supplier, not something to book at a pro-rated cost.
+ *
+ * Returns the status the transaction actually reaches:
+ *  - equal (or no weight supplied) → `CHECKED`, and the ordered weight enters inventory
+ *  - anything else                 → `DISPUTED`, nothing enters inventory; the measured weight is
+ *                                    still recorded so the discrepancy is on the record
  */
-const checkIntoInventory = (
+const checkDelivery = (
     transaction: WholeBuyTransactionShape,
     actualWeight: number | undefined,
     actor: string,
@@ -151,43 +162,68 @@ const checkIntoInventory = (
     Effect.gen(function* () {
         const repo = yield* WholeBuyRepository;
 
-        let weightGb = transaction.weightGb;
-        let weightGm = transaction.weightGm;
-        let totalCost = transaction.totalAmount;
-
         if (actualWeight !== undefined) {
-            // a measured weight, not an ordered one — the orderable-quantity rule must not apply
-            const measured = yield* resolveMeasuredQuantity(
-                transaction.productTypeId, transaction.purityId, actualWeight,
-            );
-            const price = applicablePrice(
-                measured.unitOfMeasure, transaction.pricePerGb965, transaction.pricePerGb999,
-            );
-            weightGb = measured.weightGb;
-            weightGm = measured.weightGm;
-            totalCost = measured.weightGb * price;
+            const rule = yield* findQuantityRule(transaction.productTypeId, transaction.purityId);
+            const ordered = orderedWeightIn(rule.inputUnit, transaction);
 
+            if (actualWeight !== ordered) {
+                // a measured weight, not an ordered one — the orderable-quantity rule must not
+                // apply to it; a supplier can deliver 11.95 GB against a 12 GB order
+                const measured = yield* resolveMeasuredQuantity(
+                    transaction.productTypeId, transaction.purityId, actualWeight,
+                );
+                const price = applicablePrice(
+                    measured.unitOfMeasure, transaction.pricePerGb965, transaction.pricePerGb999,
+                );
+
+                yield* repo.recordCheckedWeights(transaction.id, {
+                    actualWeightGb: measured.weightGb,
+                    actualWeightGm: measured.weightGm,
+                    actualAmount: measured.weightGb * price,
+                });
+
+                return { status: MISMATCH_STATUS, ordered, actual: actualWeight, unit: rule.inputUnit };
+            }
+        }
+
+        // Accepted: by definition the delivery equals the order, so there is no discrepancy to
+        // carry. Clearing matters on a re-check — a shipment that was DISPUTED at 14 and then
+        // accepted at 15 would otherwise keep showing the stale 14 as what arrived. The DISPUTED
+        // entry in the status log is where that history belongs, and it stays there.
+        if (transaction.actualWeightGb !== null) {
             yield* repo.recordCheckedWeights(transaction.id, {
-                actualWeightGb: weightGb,
-                actualWeightGm: weightGm,
-                actualAmount: totalCost,
+                actualWeightGb: null, actualWeightGm: null, actualAmount: null,
             });
         }
 
         yield* increment({
             purityId: transaction.purityId,
             brandId: transaction.brandId,
+            // wholesale-buy never produces domestic stock, whatever the purity — only smelting does
             origin: ORIGIN,
             productTypeId: transaction.productTypeId,
-            weightGb,
-            weightGm,
+            weightGb: transaction.weightGb,
+            weightGm: transaction.weightGm,
             conversionFactor: transaction.conversionFactor,
-            totalCost,
+            totalCost: transaction.totalAmount,
             referenceType: REFERENCE_TYPE,
             referenceId: transaction.id,
             createdBy: actor,
         });
+
+        return { status: INVENTORY_STATUS, ordered: 0, actual: 0, unit: 'gb' as const };
     })
+
+// the note written when a delivery is diverted to DISPUTED — the operator's own note still wins
+// if they gave one, with the measured discrepancy appended so the log carries the numbers
+const mismatchNote = (
+    result: { ordered: number; actual: number; unit: 'kg' | 'gb' },
+    note: string | undefined,
+) => {
+    const unit = result.unit === 'kg' ? 'kg' : 'บาท'
+    const detail = `รับจริง ${result.actual} ${unit} ไม่ตรงกับที่สั่ง ${result.ordered} ${unit}`
+    return note?.trim() ? `${note.trim()} — ${detail}` : detail
+}
 
 // writes the append-only log entry and refreshes the write-through currentStatus cache
 const applyStatus = (transactionId: string, status: WholeBuyStatus, note: string | undefined, actor: string) =>
@@ -222,11 +258,21 @@ export const advanceStatus = (req: AdvanceStatusReq) =>
 
         yield* assertTransitionAllowed(transaction.currentStatus, req.toStatus, req.note);
 
-        if (req.toStatus === INVENTORY_STATUS) {
-            yield* checkIntoInventory(transaction, req.actualWeight, req.updatedBy);
+        if (req.toStatus !== INVENTORY_STATUS) {
+            yield* applyStatus(transaction.id, req.toStatus, req.note, req.updatedBy);
+            return { status: req.toStatus };
         }
 
-        yield* applyStatus(transaction.id, req.toStatus, req.note, req.updatedBy);
+        // a check that does not match the order lands on DISPUTED instead — the caller asked for
+        // CHECKED, the goods decided otherwise
+        const result = yield* checkDelivery(transaction, req.actualWeight, req.updatedBy);
+        const diverted = result.status !== INVENTORY_STATUS;
+        yield* applyStatus(
+            transaction.id, result.status,
+            diverted ? mismatchNote(result, req.note) : req.note,
+            req.updatedBy,
+        );
+        return { status: result.status };
     }).pipe(Effect.provide(wholeBuyLive))
 
 /**
@@ -243,29 +289,42 @@ export const receiveAndCheck = (req: ReceiveAndCheckReq) =>
         yield* assertTransitionAllowed('RECEIVED', 'CHECKED', req.note);
 
         yield* applyStatus(transaction.id, 'RECEIVED', req.note, req.updatedBy);
-        yield* checkIntoInventory(transaction, req.actualWeight, req.updatedBy);
-        yield* applyStatus(transaction.id, 'CHECKED', req.note, req.updatedBy);
+
+        // same all-or-nothing rule as a standalone check: a short or long delivery ends on
+        // DISPUTED with nothing in inventory, not on CHECKED with a pro-rated cost
+        const result = yield* checkDelivery(transaction, req.actualWeight, req.updatedBy);
+        const diverted = result.status !== INVENTORY_STATUS;
+        yield* applyStatus(
+            transaction.id, result.status,
+            diverted ? mismatchNote(result, req.note) : req.note,
+            req.updatedBy,
+        );
+        return { status: result.status };
     }).pipe(Effect.provide(wholeBuyLive))
 
 /**
- * Auto-confirm job. Everything still CREATED past its confirmDueAt moves to CONFIRMED under the
- * BOT-CONFIRM actor — the edit window has closed, so the order counts as committed. Safe to call
- * repeatedly: once a transaction leaves CREATED it stops matching.
+ * Bulk confirm — moves **every** transaction still sitting in CREATED to CONFIRMED. There is no
+ * per-transaction deadline: this run is the cutoff, which is why a nightly schedule is what
+ * decides when the day's orders lock.
+ *
+ * Two callers, distinguished only by the actor recorded in the log:
+ *  - the nightly job, which passes no actor and is logged as `BOT-CONFIRM`
+ *  - an operator hitting the manual trigger mid-day, logged under their own username
+ *
+ * Safe to call repeatedly — once a transaction leaves CREATED it stops matching.
  */
-export const autoConfirmOverdue = () =>
+export const confirmAllCreated = (actor?: string) =>
     Effect.gen(function* () {
         const repo = yield* WholeBuyRepository;
-        const overdue = yield* repo.listOverdueCreated(new Date());
+        const pending = yield* repo.listCreated();
+        const by = actor ?? BOT_CONFIRM_ACTOR;
+        const note = actor ? 'ยืนยันทั้งหมด (manual)' : 'ยืนยันอัตโนมัติรอบกลางคืน';
 
-        for (const transaction of overdue) {
-            yield* applyStatus(
-                transaction.id, 'CONFIRMED',
-                `auto-confirmed after the ${editWindowHours()}h edit window`,
-                BOT_CONFIRM_ACTOR,
-            );
+        for (const transaction of pending) {
+            yield* applyStatus(transaction.id, 'CONFIRMED', note, by);
         }
 
-        return { confirmed: overdue.length, ids: overdue.map((t) => t.id) };
+        return { confirmed: pending.length, ids: pending.map((t) => t.id) };
     }).pipe(Effect.provide(wholeBuyLive))
 
 // --- Queries ---

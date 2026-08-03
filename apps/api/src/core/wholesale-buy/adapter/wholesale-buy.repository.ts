@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { and, desc, eq, lte } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
 import {
     CreateWholeBuyStatus, CreateWholeBuyTransaction,
@@ -86,15 +86,12 @@ class WholeBuyRepositoryImpl implements ForWholeBuyRepository {
         }).pipe(Effect.map(() => undefined as void));
     }
 
-    listOverdueCreated(now: Date) {
+    listCreated() {
         return Effect.tryPromise({
             try: () => this.db.select().from(wholeBuyTransactions)
-                .where(and(
-                    eq(wholeBuyTransactions.currentStatus, 'CREATED'),
-                    lte(wholeBuyTransactions.confirmDueAt, now),
-                ))
+                .where(eq(wholeBuyTransactions.currentStatus, 'CREATED'))
                 .execute(),
-            catch: () => new RepositoryError({ message: "cannot list overdue wholesale buy transactions" }),
+            catch: () => new RepositoryError({ message: "cannot list unconfirmed wholesale buy transactions" }),
         });
     }
 

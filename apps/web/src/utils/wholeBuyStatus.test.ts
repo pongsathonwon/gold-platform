@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { WHOLE_BUY_STATUSES, WHOLE_BUY_TRANSITIONS, derivePricePerGb999 } from "@gold-platform/types";
-import { countsTowardTotal, isTerminal, nextStatuses, requiresNote, statusLabel } from "./wholeBuyStatus";
+import {
+  countsTowardTotal, formatWeight, isTerminal, nextStatuses, requiresNote, statusLabel,
+} from "./wholeBuyStatus";
 
 describe("whole buy status machine", () => {
   it("walks the happy path to CHECKED", () => {
@@ -85,6 +87,29 @@ describe("list totals", () => {
 
   it("excludes an unknown status rather than guessing", () => {
     expect(countsTowardTotal("NOT_A_STATUS")).toBe(false);
+  });
+});
+
+describe("weight rendering", () => {
+  it("renders whole numbers without padding", () => {
+    // a 2 kg order is "2", not "2.000" — the operator typed 2
+    expect(formatWeight(2)).toBe("2");
+    expect(formatWeight(12)).toBe("12");
+  });
+
+  it("keeps the decimals that are really there", () => {
+    expect(formatWeight(11.95)).toBe("11.95");
+    expect(formatWeight(0.5)).toBe("0.5");
+  });
+
+  it("strips floating-point residue from summed weights", () => {
+    expect(formatWeight(0.1 + 0.2)).toBe("0.3");
+    expect(formatWeight(11.95 + 12)).toBe("23.95");
+  });
+
+  it("handles zero and negatives (variance figures)", () => {
+    expect(formatWeight(0)).toBe("0");
+    expect(formatWeight(-0.05)).toBe("-0.05");
   });
 });
 
