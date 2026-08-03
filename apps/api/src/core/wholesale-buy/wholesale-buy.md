@@ -1,125 +1,190 @@
-# Wholesale Buy Domain
+# wholesale-buy — Domain Spec
 
-## Core Concept
+Company buys gold **from a supplier**. Counts in Net Company Orders for the period.
 
-A wholesale buy is the shop **buying gold from a supplier**. The deal is agreed first (`DRAFT → CONFIRMED`), then physical gold arrives at the branch (`CONFIRMED → RECEIVED`), then the money is settled (`RECEIVED → SETTLED`). Inventory increments **at receiving** — the stock is gained when it physically arrives, not when the deal is struck.
-
-Mirrors wholesale-sell in structure: one transaction per deal, one line item, append-only status log, `currentStatus` as write-through cache.
-
----
-
-## Tables
-
-### `whole_buy_transactions`
-
-One record per deal. Created once, never deleted. Only `currentStatus` is mutated (write-through from status log).
-
-| Field                                | Description                                                      |
-| ------------------------------------ | ---------------------------------------------------------------- |
-| `id`                                 | UUID primary key                                                 |
-| `supplierId`                         | FK → `suppliers.id` — who the gold is bought from               |
-| `purityId / brandId / productTypeId` | What kind of gold                                                |
-| `weightGb / weightGm`                | Agreed weight                                                    |
-| `conversionFactor`                   | GB-to-GM ratio snapshotted at creation time                      |
-| `pricePerGb`                         | Agreed price per Gold Bath                                       |
-| `totalAmount`                        | `weightGb * pricePerGb` — computed and stored at creation        |
-| `settlementPeriod`                   | Week index (Fri–Thu) the deal belongs to                         |
-| `currentStatus`                      | Denormalized latest status — `DRAFT \| CONFIRMED \| RECEIVED \| SETTLED \| CANCELLED` |
-| `recordedBy`                         | Who created the transaction                                      |
-| `recordedAt`                         | Creation timestamp                                               |
+**One item per transaction.** There is no line-item table — a multi-item order is recorded as
+multiple transactions. This is deliberate: it keeps the status machine per-item, so a partial
+delivery or a single disputed bar never puts a whole order into an ambiguous state.
 
 ---
 
-### `whole_buy_statuses`
-
-Append-only status log. Never updated or deleted. Every status transition writes one row here and updates `currentStatus` on the transaction — both in the same DB transaction.
-
-| Field           | Description                                              |
-| --------------- | -------------------------------------------------------- |
-| `id`            | UUID primary key                                         |
-| `transactionId` | FK → `whole_buy_transactions.id`                         |
-| `status`        | `DRAFT \| CONFIRMED \| RECEIVED \| SETTLED \| CANCELLED` |
-| `note`          | Optional free-text reason (required when CANCELLED)      |
-| `createdBy`     | Who triggered this transition                            |
-| `createdAt`     | Timestamp of the transition                              |
-
----
-
-## Status Flow
+## 1. State Machine
 
 ```
-DRAFT → CONFIRMED → RECEIVED → SETTLED
-  ↓          ↓
-CANCELLED  CANCELLED
+CREATED ─┬─> CONFIRMED ─┬─> PAID ──> RECEIVED ─┬─> CHECKED        (inventory increments here)
+         │              │                      ├─> DISPUTED ─┬─> CHECKED
+         │              │                      │             └─> RETURNED
+         │              │                      └─> RETURNED
+         │              └─> PAYMENT_FAILED ─┬─> PAID
+         │                                  ├─> CANCELLED
+         │                                  └─> REJECTED
+         ├─> CANCELLED
+         └─> REJECTED
 ```
 
-| Transition              | Guard | Inventory effect                                                    |
-| ----------------------- | ----- | ------------------------------------------------------------------- |
-| `DRAFT → CONFIRMED`     | none  | none                                                                |
-| `CONFIRMED → RECEIVED`  | none  | `increment(...)` — creates a new lot, writes `+delta` movement      |
-| `RECEIVED → SETTLED`    | none  | none — financial bookkeeping only                                   |
-| `DRAFT → CANCELLED`     | none  | none                                                                |
-| `CONFIRMED → CANCELLED` | none  | none — stock was never incremented                                  |
+| Status | Meaning | Terminal |
+|---|---|---|
+| `CREATED` | Order recorded. Legacy system status **1**. Editable until `confirmDueAt`. | no |
+| `CONFIRMED` | Committed to the supplier. Legacy system status **2**. | no |
+| `PAID` | Payment sent and accepted. | no |
+| `RECEIVED` | Goods physically arrived. Nothing has entered inventory yet. | no |
+| `CHECKED` | Goods verified. **The only status that moves inventory.** | yes |
+| `PAYMENT_FAILED` | Transfer bounced or the amount was wrong. Retryable back to `PAID`. | no |
+| `DISPUTED` | Arrived but failed verification; held pending resolution. | no |
+| `CANCELLED` | We backed out, before the supplier committed. | yes |
+| `REJECTED` | The supplier declined. Tracked separately from `CANCELLED` — the counterparty killed it, which is what supplier-reliability reporting needs. | yes |
+| `RETURNED` | Shipment sent back. Nothing ever enters inventory. | yes |
 
-> `RECEIVED → CANCELLED` is **not allowed**. Once gold has entered inventory the lot exists — removing it requires a `stockLoss` adjustment, not a cancellation.
+Rules the server enforces on every transition:
 
-> **No partial receiving.** A wholesale buy transaction represents exactly one receipt of the full agreed weight. `increment` is called once at `CONFIRMED → RECEIVED` for the full `weightGb`. Splitting a deal into multiple receipts is out of scope — create separate transactions instead.
+1. **The move must be in `allowedTransitions`**, else `422 invalid transition`.
+2. **Failure branches require a note** (`PAYMENT_FAILED`, `DISPUTED`, `CANCELLED`, `REJECTED`,
+   `RETURNED`), else `422 a note is required`. The status log is the audit trail and "why" is the
+   only thing it cannot reconstruct.
+3. **Cancellation is impossible once paid.** `PAID`, `RECEIVED` and `DISPUTED` have no route to
+   `CANCELLED` — money has moved, so the exit is `RETURNED`, which is a physical-goods event.
 
----
-
-## Exposed Usecases
-
-| Usecase              | HTTP                                | Description                                          |
-| -------------------- | ----------------------------------- | ---------------------------------------------------- |
-| `createTransaction`  | `POST /wholesale-buy`               | Creates transaction + initial `DRAFT` status row     |
-| `advanceStatus`      | `POST /wholesale-buy/:id/status`    | Appends a status row, updates `currentStatus`, fires inventory side-effect if applicable |
-| `getTransaction`     | `GET /wholesale-buy/:id`            | Returns transaction + full status history            |
-| `listTransactions`   | `GET /wholesale-buy`                | List transactions, filterable by `currentStatus` and `settlementPeriod` |
-
----
-
-## Cross-domain Inventory Coupling
-
-| Event                   | Call                                                                                         |
-| ----------------------- | -------------------------------------------------------------------------------------------- |
-| `CONFIRMED → RECEIVED`  | `increment({ sourceId: transaction.id, purityId, brandId, productTypeId, weightGb, weightGm, conversionFactor, totalCost: totalAmount, referenceType: 'WHOLESALE_BUY', referenceId: transaction.id, createdBy })` |
-
-`referenceType: 'WHOLESALE_BUY'` is the registration string this domain owns in the inventory movements ledger.
-
-`totalCost` passed to `increment` is `totalAmount` — the agreed purchase price becomes the cost basis of the lot.
+The transition map lives in `@gold-platform/types` (`WHOLE_BUY_TRANSITIONS`) so the web app offers
+exactly the moves the API accepts. The port assigns it to a `Record<WholeBuyStatus, …>`, so if the
+DB enum and the shared list ever diverge, the API stops compiling.
 
 ---
 
-## `advanceStatus` Transition Rules
+## 2. Confirmation and the Edit Window
+
+`CONFIRMED` is a real status, not a derived query condition — the legacy system's status 2 maps
+onto it, and the log records who confirmed and when.
+
+At creation the server stamps `confirmDueAt = recordedAt + WHOLESALE_BUY_EDIT_WINDOW_HOURS`
+(default **6**, clamped to the 1–12 hour band the business runs on).
+
+- **While `CREATED` and before `confirmDueAt`:** `PATCH /wholesale-buy/:id` accepts edits.
+  Weight, purity, product type and prices all recompute `weightGb`/`weightGm`/`totalAmount`.
+- **After it:** edits fail with `422 no longer editable`.
+- **`POST /wholesale-buy/auto-confirm`** moves every overdue `CREATED` transaction to `CONFIRMED`
+  as `BOT-CONFIRM`. Idempotent — once a transaction leaves `CREATED` it stops matching. Point a
+  cron at it at whatever interval suits; the deadline, not the schedule, is what decides.
+
+A manual confirm still works at any time while `CREATED`.
+
+---
+
+## 3. Pricing — Both Purities on Every Transaction
+
+Gold is quoted per **gold baht (บาททอง)**. 99.9% is quoted off the 96.5% price by the purity ratio:
 
 ```
-allowed transitions:
-  DRAFT      → CONFIRMED | CANCELLED
-  CONFIRMED  → RECEIVED  | CANCELLED
-  RECEIVED   → SETTLED
-  SETTLED    → (terminal)
-  CANCELLED  → (terminal)
+pricePerGb999 = pricePerGb965 × (99.9 / 96.5)
 ```
 
-Invalid transition → `InvalidTransitionError` (domain error, maps to HTTP 422).
+The operator calculates and enters that value; the server stores what they typed. Both quotes are
+recorded on every transaction regardless of the item's purity — the item's own purity then selects
+which one drives the amount:
+
+| Purity | `unitOfMeasure` | Price used | Amount |
+|---|---|---|---|
+| 96.5% | `gb` | `pricePerGb965` | `weightGb × pricePerGb965` |
+| 99.9% | `g` | `pricePerGb999` | `weightGb × pricePerGb999` |
+
+`derivePricePerGb999()` in `@gold-platform/types` pre-fills the field on the web form. It is a
+convenience only — it never overwrites an entered value.
 
 ---
 
-## Domain Errors
+## 4. Delivered Weight and Variance
 
-| Error                      | When                                            |
-| -------------------------- | ----------------------------------------------- |
-| `InvalidTransitionError`   | Requested `toStatus` is not a legal next state  |
-| `TransactionNotFoundError` | Transaction ID does not exist                   |
+At `CHECKED` the operator may supply `actualWeight` — what physically arrived, in the same unit as
+the ordered weight. When present:
+
+- `actualWeightGb` / `actualWeightGm` / `actualAmount` are written to the transaction.
+- **Inventory increments the actual weight**, at cost `actualWeightGb × the purity-matched price`.
+- The ordered figures are left untouched, so the variance stays visible in the list and detail views.
+
+`actualWeight` resolves through `resolveMeasuredQuantity()`, not `resolveQuantity()` — a delivery
+arriving 11.95 GB against a 12 GB order is a legitimate short delivery, not invalid input, so the
+orderable-quantity rules (`minQuantity`, `allowedValues`) must not apply to it.
+
+Omit `actualWeight` and the ordered weight is what enters inventory.
 
 ---
 
-## Open Issues
+## 5. Inventory Hook
 
-1. **No user FK** — `recordedBy / createdBy` are plain `varchar`. Replace with FK after auth domain is settled.
+| When | Effect |
+|---|---|
+| Entering `CHECKED` (from `RECEIVED` or `DISPUTED`) | `increment()` — one balance upsert + one movement row, `referenceType: 'WHOLESALE_BUY'`, `referenceId` = transaction id |
+| Every other status | nothing |
 
-2. **`RECEIVED → CANCELLED` recovery path** — if received gold needs to be returned, the correct flow is a new `whole_sell_transaction` back to the supplier. No cancellation path is supported here.
+Always `origin: 'foreign'` — only smelting produces domestic stock. For 99.9% the server forces
+`brandId = 'NA'` (those pools are keyed by origin, not brand), so the caller omits the brand.
 
-3. **`conversionFactor` source** — must be snapshotted at creation time from `unit_conversions ORDER BY effectiveDate DESC LIMIT 1`, same invariant as inventory lots.
+**Corrections after `CHECKED`** do not reopen the transaction. It is terminal by design. Post a
+manual adjustment through `POST /inventory/loss` (or `/gain`) with `referenceType: WHOLESALE_BUY`
+and a note pointing at the transaction — the correction then shows up in the movement ledger
+alongside the original, which a silent edit never would.
 
-4. **`wholeBuyTransactions` in whole.schema.ts** — the existing table is superseded by this domain's schema. It had no supplierId, no status, and a typo (`purcahsedAt`). The new table replaces it.
+---
+
+## 6. Endpoints
+
+All require a JWT. `recordedBy` / `updatedBy` come from the token, never the body.
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/wholesale-buy` | create; `settlementPeriod` is derived server-side |
+| `GET` | `/wholesale-buy` | filters: `currentStatus`, `settlementPeriod`, `supplierId`. Newest first |
+| `GET` | `/wholesale-buy/:id` | `{ transaction, statuses }`, status log oldest→newest |
+| `PATCH` | `/wholesale-buy/:id` | edit; `CREATED` and inside the window only |
+| `POST` | `/wholesale-buy/:id/status` | `{ toStatus, note?, actualWeight? }` |
+| `POST` | `/wholesale-buy/:id/receive-check` | `{ actualWeight?, note? }` — `PAID → RECEIVED → CHECKED` in one call |
+| `POST` | `/wholesale-buy/auto-confirm` | the cron job's entry point |
+
+### Why `receive-check` exists
+
+Receiving and checking are one operator action today — a handful of people work the floor and
+splitting it would create conflict, not control. The endpoint still writes **both** status entries,
+so when the two steps do get separated later, nothing already recorded needs migrating.
+
+---
+
+## 7. Settlement Period
+
+Derived server-side from `recordedAt` by `resolveSettlementPeriod()` (`infrastructure/settlement.ts`)
+using the Fri 00:00 → Thu 23:59 boundary, and frozen. Callers never supply it, and it is never
+reassigned.
+
+---
+
+## 8. Tables
+
+`whole_buy_transactions` — one row per item. `price_per_gb` is the 96.5% quote (the column keeps
+its original name; the `pricePerGb965` field name just makes the meaning explicit),
+`price_per_gb_999` the 99.9% one. `actual_weight_gb` / `actual_weight_gm` / `actual_amount` are
+null until the shipment is checked, and stay null when it matched the order.
+
+`whole_buy_statuses` — append-only log, never updated or deleted. `current_status` on the
+transaction is a write-through cache of the latest entry and is recomputable from this table.
+
+---
+
+## 9. Domain Errors
+
+| Error | HTTP | When |
+|---|---|---|
+| `TransactionNotFoundError` | 404 | id does not exist |
+| `InvalidTransitionError` | 422 | `toStatus` is not a legal next state |
+| `NoteRequiredError` | 422 | failure-branch transition with no note |
+| `EditWindowExpiredError` | 422 | edit attempted after `confirmDueAt` or outside `CREATED` |
+| `ProductTypePurityNotFoundError` | 422 | purity is not configured for that product type |
+| `InvalidQuantityError` | 422 | ordered weight breaks the pairing's quantity rule |
+
+---
+
+## 10. Open Issues
+
+1. **No user FK** — `recordedBy` / `createdBy` are plain `varchar`, blocked on the employee/user
+   identity decision shared with every other domain.
+2. **No settlement summary endpoint yet** — `GET /wholesale-buy/settlement/:period/summary` is
+   part of the Phase 4 position work, not built here.
+3. **No partial receiving.** One transaction is one receipt. A split delivery is recorded as
+   separate transactions, not as multiple receipts against one.

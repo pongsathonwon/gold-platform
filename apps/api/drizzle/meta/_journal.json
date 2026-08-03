@@ -43,6 +43,13 @@
       "when": 1784517614860,
       "tag": "0005_drop_daily_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785727771979,
+      "tag": "0006_wholesale_buy_domain",
+      "breakpoints": true
     }
   ]
 }

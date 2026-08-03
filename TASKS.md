@@ -81,6 +81,60 @@ Update this file (mark done + notes) before moving to the next task.
 
 ---
 
+# Wholesale Buy Domain (2026-08-03)
+
+Full build of the wholesale-buy (ซื้อส่ง) domain — one item per transaction, supplier + gold type +
+purity + brand, dual purity pricing, and the `CREATED → CONFIRMED → PAID → RECEIVED → CHECKED`
+status machine with its failure branches. Inventory increments on entering `CHECKED`.
+
+**Decisions taken with the operator:**
+- Bad paths: the full set — `CANCELLED`, `REJECTED`, `RETURNED`, `PAYMENT_FAILED`, `DISPUTED`.
+- Quantity mismatch at check: capture the actual weight and increment what really arrived.
+- Confirm: `CONFIRMED` stays a distinct status (legacy status 2) + an edit-window deadline + a cron
+  endpoint. All three, not one or the other.
+- Post-`CHECKED` corrections: existing stock-loss/gain forms, no `REVERSED` status.
+
+- [x] **1. packages/types** — `WHOLE_BUY_STATUSES` (Thai labels, `kind`, `terminal`),
+  `WHOLE_BUY_TRANSITIONS` (shared state machine), `derivePricePerGb999()`, create/update/advance/
+  receive-check schemas. _The transition map is shared so the UI can only offer moves the API accepts._
+- [x] **2. Schema + migration** — new 10-value `whole_buy_status` enum, `price_per_gb_999`,
+  `actual_weight_gb/gm`, `actual_amount`, `confirm_due_at`, `notes`. `drizzle/0006_wholesale_buy_domain.sql`
+  generated then hand-hardened (legacy `DRAFT→CREATED` / `SETTLED→CHECKED` remap, backfilled NOT NULL
+  adds). **Applied to the local Postgres.**
+- [x] **3. infrastructure** — new `settlement.ts` (`resolveSettlementPeriod`, Fri–Thu → ISO week);
+  `quantity.ts` split into `resolveQuantity` (validated) + `resolveMeasuredQuantity` (as-weighed);
+  `resolveWeights` now returns `unitOfMeasure` so callers can price per purity.
+- [x] **4. Port + usecase + routes** — `createTransaction`, `updateTransaction` (edit window),
+  `advanceStatus`, `receiveAndCheck`, `autoConfirmOverdue`, `getTransaction`, `listTransactions`.
+  Routes now behind `authMiddleware`; actor comes from the JWT, `settlementPeriod` from the server.
+- [x] **5. Web** — list / create / detail pages, `useWholesaleBuy*` hooks, `utils/wholeBuyStatus.ts`,
+  routes + navbar link, `useSuppliers()` added to `useMasterData`.
+- [x] **6. Seed** — two suppliers with fixed UUIDs (idempotent); the domain could not record
+  anything without one.
+- [x] **7. Verification** — type-check passes for all three packages; 28 web unit tests pass
+  (10 new). Drove the live API end-to-end: happy path with a short delivery (12 GB ordered →
+  11.95 GB checked → balance 60 → 71.95 GB, cost +576,587.50, exactly one movement row); 99.9%
+  kg path priced off the 999 quote with the `NA` brand forced; auto-confirm job (0 then 1);
+  `DISPUTED → RETURNED` left inventory untouched. Rejections verified: invalid transition, missing
+  note, edit after window, cancel after payment, move from a terminal state, invalid purity/product
+  pairing. Playwright smoke of all three pages: no console errors.
+
+- [x] **8. List split by purity** — `WholesaleBuyListPage` now renders `ทอง 96.5%` (บาท) and
+  `ทอง 99.9%` (กก.) sections with per-section `รวม` footers, matching InventoryPage. A 2 kg order
+  reads `2.000 กก.` instead of its 131.20 gold-baht equivalent, and the list no longer contradicts
+  the detail page. Dropped the now-redundant `% ทอง` column. `splitByPurity()` relaxed to be generic
+  over the row shape so the wholesale-buy list reuses it. New `countsTowardTotal()` keeps
+  cancelled/rejected/returned orders out of the totals (4 new tests, 32 web tests pass).
+
+## Follow-ups not done
+
+- `GET /wholesale-buy/settlement/:period/summary` — belongs to the Phase 4 position work.
+- The other transaction domains still take `settlementPeriod` from the caller; they should move onto
+  `resolveSettlementPeriod` too.
+- No scheduler is wired to `POST /wholesale-buy/auto-confirm` — the endpoint exists, the cron does not.
+
+---
+
 # Movement Cumulative Balance (post-launch)
 
 Tracking checklist for the approved plan (`~/.claude/plans/the-inventory-movements-page-user-clever-phoenix.md`).

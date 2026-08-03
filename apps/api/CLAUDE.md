@@ -29,7 +29,8 @@ src/
 └── infrastructure/
     ├── runtime.ts            — AppLayer composition, ManagedRuntime, runEffect()
     ├── weight.ts             — resolveWeights() shared Effect
-    ├── settlement.ts         — (planned) resolveSettlementPeriod(date) using Fri–Thu boundary
+    ├── quantity.ts           — resolveQuantity() (validated) / resolveMeasuredQuantity() (as-weighed)
+    ├── settlement.ts         — resolveSettlementPeriod(date) using the Fri–Thu boundary
     ├── db/
     │   ├── client.ts         — Drizzle connection pool, RepositoryError
     │   └── schema/index.ts   — re-exports all domain schemas
@@ -92,7 +93,7 @@ All domains share the same status-log pattern: two tables (`*_transactions` + `*
 
 | Domain | Status Flow | Inventory Hook |
 |--------|-------------|----------------|
-| wholesale-buy | `DRAFT → CONFIRMED → RECEIVED → SETTLED` \| `DRAFT/CONFIRMED → CANCELLED` | `increment` at `CONFIRMED → RECEIVED` |
+| wholesale-buy | `CREATED → CONFIRMED → PAID → RECEIVED → CHECKED`, plus the failure branches below | `increment` on entering `CHECKED` |
 | wholesale-sell | `DRAFT → CONFIRMED → SHIPPED → SETTLED` \| `DRAFT/CONFIRMED → CANCELLED` | `decrement` at `CONFIRMED → SHIPPED` |
 | retail-buy | `DRAFT → CONFIRMED` \| `DRAFT/CONFIRMED → CANCELLED` | none |
 | retail-sell | `DRAFT → CONFIRMED → SHIPPED` \| `DRAFT/CONFIRMED → CANCELLED` | `decrement` at `CONFIRMED → SHIPPED` |
@@ -102,9 +103,49 @@ All domains share the same status-log pattern: two tables (`*_transactions` + `*
 
 Grace-period domains (receive, smelting, convert-out): cancel only allowed within **2 hours** of the initial status entry. A bot job auto-confirms after the grace period using `createdBy: 'BOT-CONFIRM'`.
 
+### wholesale-buy in full — the reference implementation
+
+It is the only domain built out with failure branches. See `core/wholesale-buy/wholesale-buy.md`.
+
+```
+CREATED ─┬─> CONFIRMED ─┬─> PAID ──> RECEIVED ─┬─> CHECKED   (increment fires here)
+         │              │                      ├─> DISPUTED ─┬─> CHECKED
+         │              │                      │             └─> RETURNED
+         │              │                      └─> RETURNED
+         │              └─> PAYMENT_FAILED ─┬─> PAID | CANCELLED | REJECTED
+         ├─> CANCELLED
+         └─> REJECTED
+```
+
+- **`CANCELLED` vs `REJECTED`** — we backed out vs the supplier declined. Separate states because
+  supplier reliability is reportable; both are terminal.
+- **Note required** on every failure-branch transition (`NoteRequiredError` → 422). The status log
+  is the audit trail and "why" cannot be reconstructed from anywhere else.
+- **No cancelling after payment** — `PAID`/`RECEIVED`/`DISPUTED` exit via `RETURNED`, not `CANCELLED`.
+- **Inventory moves once, on entering `CHECKED`** — verified, not merely arrived. An optional
+  `actualWeight` at check time is what enters stock, so short deliveries book what really arrived.
+- **Post-`CHECKED` corrections** go through `POST /inventory/loss|gain` with
+  `referenceType: WHOLESALE_BUY`. Terminal transactions are never reopened.
+- **Edit window** — `confirmDueAt = recordedAt + WHOLESALE_BUY_EDIT_WINDOW_HOURS` (default 6,
+  clamped 1–12). `PATCH /wholesale-buy/:id` works only while `CREATED` and before that instant;
+  `POST /wholesale-buy/auto-confirm` (cron entry point, idempotent) confirms everything overdue as
+  `BOT-CONFIRM`.
+- **`POST /wholesale-buy/:id/receive-check`** does `PAID → RECEIVED → CHECKED` in one call because
+  that is one operator action today. Both status rows are still written, so splitting the steps
+  later needs no migration.
+- **Dual pricing** — every transaction records both `pricePerGb965` and `pricePerGb999`
+  (`= 965 × 99.9/96.5`, operator-calculated). The item's purity picks which one drives
+  `totalAmount`. The shared `derivePricePerGb999()` only pre-fills the web form.
+
+The transition map is `WHOLE_BUY_TRANSITIONS` in `@gold-platform/types`, shared with the web app so
+the UI offers exactly the moves the API accepts; the port re-types it against the DB enum, so any
+divergence is a compile error.
+
 ## Settlement Period
 
 `settlementPeriod` is a reporting bucket — a week label (e.g. `"2026-W24"`) auto-computed from `recordedAt` using a fixed Fri–Thu boundary. Callers never supply it.
+
+`resolveSettlementPeriod(date)` lives in `infrastructure/settlement.ts`. It shifts the date back 4 days before computing the ISO week, which maps each Fri–Thu span onto exactly one Mon–Sun ISO week so no two periods collide. **wholesale-buy uses it; the other transaction domains still take `settlementPeriod` from the caller and should be migrated onto it.**
 
 Each domain exposes a summary endpoint for net position reporting:
 - `GET /retail-buy/settlement/:period/summary`
@@ -118,7 +159,9 @@ Endpoints are split per domain (not merged) to keep domains isolated. Client cal
 
 Not all purities are valid for every product type (e.g. gold-plate can only be 96.5). Admin configures valid combinations at go-live via `product_type_purities` join table.
 
-`resolveProductPurity(productTypeId, purityId)` — shared Effect called by every `createTransaction` usecase. Fails with `InvalidProductPurityError` → 422 if the combination is not configured.
+`resolveQuantity(productTypeId, purityId, weight)` in `infrastructure/quantity.ts` — the shared Effect every `createTransaction` usecase calls. It looks the pairing up, validates the weight against that pairing's `minQuantity` / `allowedValues`, converts from the pairing's input unit (kg or gb), and delegates to `resolveWeights()`. Fails `ProductTypePurityNotFoundError` or `InvalidQuantityError` → 422.
+
+`resolveMeasuredQuantity(...)` is the same thing **without** the quantity validation, for weights that were *measured* rather than ordered — a delivery arriving 11.95 GB against a 12 GB order is a short delivery, not invalid input. Use it for any as-weighed figure; never for an ordered one.
 
 ## Weight & Purity Resolution
 
@@ -192,7 +235,7 @@ Outbound cost is derived from the current balance at decrement time — **no dai
 |--------|---------|
 | retail-buy | `currentStatus`, `settlementPeriod`, `branchCode` |
 | retail-sell | `currentStatus`, `settlementPeriod`, `branchCode` |
-| wholesale-buy | `currentStatus`, `settlementPeriod` |
+| wholesale-buy | `currentStatus`, `settlementPeriod`, `supplierId` |
 | wholesale-sell | `currentStatus`, `settlementPeriod` |
 | receive | `currentStatus`, `settlementPeriod`, `branchCode` |
 
@@ -223,4 +266,8 @@ npm run db:migrate   # drizzle-kit migrate
 DATABASE_URL=postgres://postgres:password@localhost:5432/gold_platform
 PORT=3000
 JWT_SECRET=<32-char random secret>
+
+# optional — how long a CREATED wholesale-buy stays editable before auto-confirm
+# takes it. Default 6, clamped to 1–12.
+WHOLESALE_BUY_EDIT_WINDOW_HOURS=6
 ```

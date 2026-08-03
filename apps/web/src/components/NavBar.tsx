@@ -2,6 +2,11 @@ import { AppBar, Toolbar, Typography, Button, Box } from "@mui/material";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
+const navLinks = [
+  { to: "/inventory", label: "Inventory" },
+  { to: "/wholesale-buy", label: "ซื้อส่ง" },
+];
+
 export function NavBar() {
   const { isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
@@ -19,18 +24,21 @@ export function NavBar() {
         <Typography variant="h5" sx={{ flexGrow: 1, color: "inherit" }}>
           GoldOffice
         </Typography>
-        <Box
-          component={NavLink}
-          to="/inventory"
-          sx={{
-            color: "inherit",
-            textDecoration: "none",
-            fontWeight: 600,
-            "&.active": { textDecoration: "underline" },
-          }}
-        >
-          Inventory
-        </Box>
+        {navLinks.map((link) => (
+          <Box
+            key={link.to}
+            component={NavLink}
+            to={link.to}
+            sx={{
+              color: "inherit",
+              textDecoration: "none",
+              fontWeight: 600,
+              "&.active": { textDecoration: "underline" },
+            }}
+          >
+            {link.label}
+          </Box>
+        ))}
         <Button color="inherit" variant="text" onClick={handleLogout}>
           Logout
         </Button>

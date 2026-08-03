@@ -23,6 +23,13 @@ interface ProductType {
   active: boolean;
 }
 
+export interface Supplier {
+  id: string;
+  supplierName: string;
+  brandLock: boolean;
+  active: boolean;
+}
+
 export interface ProductTypePurity {
   purityId: string;
   label: string;
@@ -61,6 +68,17 @@ export function useProductTypes() {
       const res = await client["master-data"]["product-types"].$get();
       if (!res.ok) throw new Error("Failed to fetch product types");
       return (await res.json()) as { data: ProductType[] };
+    },
+  });
+}
+
+export function useSuppliers() {
+  return useQuery({
+    queryKey: ["master-data", "suppliers"],
+    queryFn: async () => {
+      const res = await client["master-data"].suppliers.$get();
+      if (!res.ok) throw new Error("Failed to fetch suppliers");
+      return (await res.json()) as { data: Supplier[] };
     },
   });
 }

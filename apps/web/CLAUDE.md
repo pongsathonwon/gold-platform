@@ -120,14 +120,15 @@ Routes are declared in `App.tsx`. React Router v7 with `<Routes>` / `<Route>`.
 /inventory/gain           — stock gain form (protected)
 /inventory/loss           — stock loss form (protected)
 /inventory/switch         — product switch form (protected)
+/wholesale-buy            — wholesale buy list, filterable by status + supplier (protected)
+/wholesale-buy/new        — create form (protected)
+/wholesale-buy/:id        — detail, status timeline, status actions (protected)
 ```
 
 **Deferred to Sprint 2+:**
 
 ```
 /                         — management dashboard (current period net)
-/wholesale-buy            — wholesale buy list + create
-/wholesale-buy/:id        — wholesale buy detail + status advance
 /wholesale-sell
 /wholesale-sell/:id
 /retail-buy
@@ -173,6 +174,35 @@ npm run type-check   # tsc --noEmit
 The API must be running at `VITE_API_URL` for data fetching to work in dev. Run both together from the repo root with `pnpm dev`.
 
 ---
+
+## 9b. Wholesale Buy UI
+
+Three pages plus one shared helper:
+
+| File | Role |
+| --- | --- |
+| `pages/WholesaleBuyListPage.tsx` | split into `ทอง 96.5%` (บาท) and `ทอง 99.9%` (กก.) sections like the inventory pages, each with its own `รวม` footer. Status/supplier filters. Shows the delivered weight, with the ordered one beside it when they differ |
+| `pages/WholesaleBuyCreatePage.tsx` | create form on the shared `useDynamicForm` / `DynamicFormField` pattern. The 99.9% price auto-fills from the 96.5% one via `derivePricePerGb999()` and stays editable |
+| `pages/WholesaleBuyDetailPage.tsx` | summary, status timeline, action buttons + confirm dialog |
+| `utils/wholeBuyStatus.ts` | chip colours, Thai labels, `nextStatuses()`, `requiresNote()` |
+
+**Action buttons come from `WHOLE_BUY_TRANSITIONS` in `@gold-platform/types`** — the same map the
+API validates against, so the UI cannot offer a move the server will reject. Never hard-code a
+status list in a component.
+
+The dialog collects a **note** (mandatory for failure-branch moves, which the API rejects without
+one) and, on any move into `CHECKED`, an optional **delivered weight**. Leaving the weight blank
+books the ordered weight.
+
+**Never show a 99.9% weight in gold baht.** It is ordered in kilograms, so a 2 kg order displayed
+as its 131.20 GB equivalent is a number nobody typed. Sectioning by purity is what lets each table
+state one unit in its header. `splitByPurity()` in `utils/inventoryVolume.ts` is generic over the
+row shape and is the shared helper for this.
+
+List totals exclude `CANCELLED` / `REJECTED` / `RETURNED` rows via `countsTowardTotal()` — those
+orders delivered no gold and settled no money. The footer renders whenever the section has rows,
+even when every one is excluded: an explicit `0` with the exclusion caption is an answer, a missing
+footer looks like a bug.
 
 ## 10. Current State
 

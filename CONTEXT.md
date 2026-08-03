@@ -75,7 +75,8 @@ pnpm docker:down    # docker compose down
 | ① | Master data routes | Complete |
 | ② | Inventory — balance model, WAC, origin, daily snapshot | In progress |
 | ② | Manual adjustments (stock gain, stock loss, product switch) | In progress |
-| ③ | wholesale-buy, wholesale-sell, retail-buy, retail-sell, receive | Deferred to Sprint 2 |
+| ③ | wholesale-buy | **Complete** — full status machine incl. failure branches, API + UI |
+| ③ | wholesale-sell, retail-buy, retail-sell, receive | Deferred to Sprint 2 |
 | ③ | smelting, convert-out | Deferred to Sprint 3 |
 | ④ | Position / Period Net | Deferred |
 | ⑤ | หลอมทอง | Deferred |
