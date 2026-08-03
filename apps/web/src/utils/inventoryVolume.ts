@@ -17,7 +17,9 @@ export function weightOf(row: VolumeRow, unit: "gb" | "kg") {
   return unit === "gb" ? row.totalWeightGb : row.totalWeightGm / 1000;
 }
 
-export function splitByPurity<T extends VolumeRow>(
+// Generic over the row shape — the 96.5/99.9 split is a presentation rule shared by the inventory
+// pages and the wholesale-buy list, and only the caller's predicate knows how to read the purity.
+export function splitByPurity<T>(
   rows: T[],
   isNineNineNine: (row: T) => boolean,
 ): { nineSixFive: T[]; nineNineNine: T[] } {

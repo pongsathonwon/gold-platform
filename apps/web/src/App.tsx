@@ -13,6 +13,9 @@ import { InventoryMovementPage } from "./pages/InventoryMovementPage";
 import { StockGainPage } from "./pages/StockGainPage";
 import { StockLossPage } from "./pages/StockLossPage";
 import { ProductSwitchPage } from "./pages/ProductSwitchPage";
+import { WholesaleBuyListPage } from "./pages/WholesaleBuyListPage";
+import { WholesaleBuyCreatePage } from "./pages/WholesaleBuyCreatePage";
+import { WholesaleBuyDetailPage } from "./pages/WholesaleBuyDetailPage";
 
 const queryClient = new QueryClient();
 
@@ -35,6 +38,9 @@ export function App() {
                   <Route path="loss" element={<StockLossPage />} />
                   <Route path="switch" element={<ProductSwitchPage />} />
                 </Route>
+                <Route path="/wholesale-buy" element={<WholesaleBuyListPage />} />
+                <Route path="/wholesale-buy/new" element={<WholesaleBuyCreatePage />} />
+                <Route path="/wholesale-buy/:id" element={<WholesaleBuyDetailPage />} />
               </Route>
             </Routes>
           </ToastProvider>

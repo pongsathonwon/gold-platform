@@ -81,6 +81,89 @@ Update this file (mark done + notes) before moving to the next task.
 
 ---
 
+# Wholesale Buy Domain (2026-08-03)
+
+Full build of the wholesale-buy (ซื้อส่ง) domain — one item per transaction, supplier + gold type +
+purity + brand, dual purity pricing, and the `CREATED → CONFIRMED → PAID → RECEIVED → CHECKED`
+status machine with its failure branches. Inventory increments on entering `CHECKED`.
+
+**Decisions taken with the operator:**
+- Bad paths: the full set — `CANCELLED`, `REJECTED`, `RETURNED`, `PAYMENT_FAILED`, `DISPUTED`.
+- Quantity mismatch at check: capture the actual weight and increment what really arrived.
+- Confirm: `CONFIRMED` stays a distinct status (legacy status 2) + an edit-window deadline + a cron
+  endpoint. All three, not one or the other.
+- Post-`CHECKED` corrections: existing stock-loss/gain forms, no `REVERSED` status.
+
+- [x] **1. packages/types** — `WHOLE_BUY_STATUSES` (Thai labels, `kind`, `terminal`),
+  `WHOLE_BUY_TRANSITIONS` (shared state machine), `derivePricePerGb999()`, create/update/advance/
+  receive-check schemas. _The transition map is shared so the UI can only offer moves the API accepts._
+- [x] **2. Schema + migration** — new 10-value `whole_buy_status` enum, `price_per_gb_999`,
+  `actual_weight_gb/gm`, `actual_amount`, `confirm_due_at`, `notes`. `drizzle/0006_wholesale_buy_domain.sql`
+  generated then hand-hardened (legacy `DRAFT→CREATED` / `SETTLED→CHECKED` remap, backfilled NOT NULL
+  adds). **Applied to the local Postgres.**
+- [x] **3. infrastructure** — new `settlement.ts` (`resolveSettlementPeriod`, Fri–Thu → ISO week);
+  `quantity.ts` split into `resolveQuantity` (validated) + `resolveMeasuredQuantity` (as-weighed);
+  `resolveWeights` now returns `unitOfMeasure` so callers can price per purity.
+- [x] **4. Port + usecase + routes** — `createTransaction`, `updateTransaction` (edit window),
+  `advanceStatus`, `receiveAndCheck`, `autoConfirmOverdue`, `getTransaction`, `listTransactions`.
+  Routes now behind `authMiddleware`; actor comes from the JWT, `settlementPeriod` from the server.
+- [x] **5. Web** — list / create / detail pages, `useWholesaleBuy*` hooks, `utils/wholeBuyStatus.ts`,
+  routes + navbar link, `useSuppliers()` added to `useMasterData`.
+- [x] **6. Seed** — two suppliers with fixed UUIDs (idempotent); the domain could not record
+  anything without one.
+- [x] **7. Verification** — type-check passes for all three packages; 28 web unit tests pass
+  (10 new). Drove the live API end-to-end: happy path with a short delivery (12 GB ordered →
+  11.95 GB checked → balance 60 → 71.95 GB, cost +576,587.50, exactly one movement row); 99.9%
+  kg path priced off the 999 quote with the `NA` brand forced; auto-confirm job (0 then 1);
+  `DISPUTED → RETURNED` left inventory untouched. Rejections verified: invalid transition, missing
+  note, edit after window, cancel after payment, move from a terminal state, invalid purity/product
+  pairing. Playwright smoke of all three pages: no console errors.
+
+- [x] **8. List split by purity** — `WholesaleBuyListPage` now renders `ทอง 96.5%` (บาท) and
+  `ทอง 99.9%` (กก.) sections with per-section `รวม` footers, matching InventoryPage. A 2 kg order
+  reads `2.000 กก.` instead of its 131.20 gold-baht equivalent, and the list no longer contradicts
+  the detail page. Dropped the now-redundant `% ทอง` column. `splitByPurity()` relaxed to be generic
+  over the row shape so the wholesale-buy list reuses it. New `countsTowardTotal()` keeps
+  cancelled/rejected/returned orders out of the totals (4 new tests, 32 web tests pass).
+
+- [x] **9. Operator revisions (2026-08-03)** — six changes after reviewing the first cut:
+  1. **One price on the create form.** `pricePerGb965` is the only input; `createWholeBuySchema` no
+     longer accepts `pricePerGb999` and the server derives it. Two typed prices could disagree, a
+     derived one cannot. The form previews the derived figure in helper text.
+  2. **99.9% confirmed to land in `foreign`.** Already hardcoded; now asserted end-to-end and
+     documented as a rule (only smelting makes domestic stock).
+  3. **Acceptance is strictly all-or-nothing.** A delivered weight that is not exactly the ordered
+     weight now diverts to `DISPUTED` with **nothing entering inventory**, instead of booking the
+     actual weight at a pro-rated cost. `/status` and `/receive-check` return the status actually
+     reached so the UI can say so. Equality is compared in the pairing's input unit, not GB, so a
+     `conversionFactor` change cannot make identical kg figures compare unequal.
+  4. **Confirmation is a nightly bulk sweep.** `POST /wholesale-buy/confirm-all` confirms *every*
+     `CREATED` transaction (`BOT-CONFIRM`), with `?manual=true` as the operator's mid-day run,
+     wired to a "ยืนยันทั้งหมด (n)" button on the list. The per-order edit window is gone: edits are
+     allowed while `CREATED`, full stop, and `confirmDueAt` is now just when the next sweep lands
+     (`WHOLESALE_BUY_AUTO_CONFIRM_HOUR`, default midnight).
+  5. **Weights render as entered.** New `formatWeight()` — "2" not "2.000" — on both the list and
+     detail pages; money keeps its two decimals.
+  6. **Bug found while verifying:** a shipment disputed at 14 and then accepted at 15 kept showing
+     the stale 14 as delivered. The recorded discrepancy is now cleared on acceptance, so a
+     `CHECKED` transaction always matches its order; the `DISPUTED` log entry keeps the history.
+
+  _Verified live: derived price 48,250 → 49,950; a mismatched receive-check landed on `DISPUTED`
+  with 0 movements, then accepted at the ordered weight and moved the balance 71.95 → 86.95; a
+  99.9% order booked to `foreign`/`NA`; nightly sweep confirmed 3 as `BOT-CONFIRM` and the manual
+  run 1 as `admin`; edit after confirmation rejected. 36 web tests pass, all packages type-check._
+
+## Follow-ups not done
+
+- `GET /wholesale-buy/settlement/:period/summary` — belongs to the Phase 4 position work.
+- The other transaction domains still take `settlementPeriod` from the caller; they should move onto
+  `resolveSettlementPeriod` too.
+- No scheduler is wired to `POST /wholesale-buy/confirm-all` — the endpoint and the manual button
+  exist, the nightly cron does not. It also needs an identity to authenticate as; today any caller
+  without `?manual=true` is logged as `BOT-CONFIRM` regardless of whose token was used.
+
+---
+
 # Movement Cumulative Balance (post-launch)
 
 Tracking checklist for the approved plan (`~/.claude/plans/the-inventory-movements-page-user-clever-phoenix.md`).

@@ -1,53 +1,82 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
+import {
+    advanceWholeBuyStatusSchema, createWholeBuySchema,
+    receiveCheckWholeBuySchema, updateWholeBuySchema, wholeBuyStatusSchema,
+} from "@gold-platform/types";
 import { runEffect } from "../../../infrastructure/runtime.js";
-import { createTransaction, advanceStatus, getTransaction, listTransactions } from "../application/wholesale-buy.usecase.js";
-import { TransactionNotFoundError, InvalidTransitionError } from "../port/wholesale-buy.port.js";
+import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
+import {
+    advanceStatus, confirmAllCreated, createTransaction, getTransaction,
+    listTransactions, receiveAndCheck, updateTransaction,
+} from "../application/wholesale-buy.usecase.js";
+import {
+    InvalidTransitionError, NotEditableError,
+    NoteRequiredError, TransactionNotFoundError,
+} from "../port/wholesale-buy.port.js";
+import { InvalidQuantityError, ProductTypePurityNotFoundError } from "../../../infrastructure/quantity.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
+import { InsufficientStockError } from "../../inventory/port/inventories.port.js";
+import type { WholeBuyStatus } from "../../../infrastructure/db/schema/wholesale-buy.schema.js";
 
 function toHttpError(error: unknown): [string, number] {
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
+    if (error instanceof NoteRequiredError) return [`a note is required when moving to ${error.status}`, 422]
+    if (error instanceof NotEditableError) {
+        return [`transaction ${error.id} is no longer editable — it is already ${error.currentStatus}`, 422]
+    }
+    if (error instanceof ProductTypePurityNotFoundError) {
+        return [`purity ${error.purityId} is not valid for product type ${error.productTypeId}`, 422]
+    }
+    if (error instanceof InvalidQuantityError) {
+        const unit = error.inputUnit === "kg" ? "kg" : "GB"
+        const msg = error.allowedValues
+            ? `weight must be one of ${error.allowedValues.join(", ")} ${unit}`
+            : `weight must be a whole number of at least ${error.minQuantity} ${unit}`
+        return [msg, 422]
+    }
+    if (error instanceof InsufficientStockError) {
+        return [`insufficient stock — requested ${error.requested} GB, available ${error.available} GB`, 422]
+    }
     if (error instanceof PurityNotFoundError) return [`purity ${error.purityId} not found`, 422]
     if (error instanceof NoConversionRateError) return [`no conversion rate available`, 503]
     return [JSON.stringify(error), 500]
 }
 
-const wholeBuyStatusValues = ['CONFIRMED', 'RECEIVED', 'SETTLED', 'CANCELLED'] as const
-
-const createTransactionSchema = z.object({
-    supplierId: z.string().uuid(),
-    purityId: z.string(),
-    brandId: z.string(),
-    productTypeId: z.string(),
-    weight: z.number().positive(),
-    pricePerGb: z.number().positive(),
-    settlementPeriod: z.string().min(1),
-    recordedBy: z.string().min(1),
-})
-
-const advanceStatusSchema = z.object({
-    toStatus: z.enum(wholeBuyStatusValues),
-    note: z.string().optional(),
-    updatedBy: z.string().min(1),
-})
+function currentUsername(c: Context): string {
+    const payload = c.get("jwtPayload") as { username: string }
+    return payload.username
+}
 
 const listQuerySchema = z.object({
-    currentStatus: z.enum(['DRAFT', ...wholeBuyStatusValues]).optional(),
+    currentStatus: wholeBuyStatusSchema.optional(),
     settlementPeriod: z.string().optional(),
+    supplierId: z.string().uuid().optional(),
 })
 
 export const wholesaleBuyRoutes = new Hono()
-    .post("/", zValidator("json", createTransactionSchema), async (c) => {
+    .use(authMiddleware)
+    .post("/", zValidator("json", createWholeBuySchema), async (c) => {
         const req = c.req.valid("json")
-        const result = await runEffect(createTransaction(req))
+        const result = await runEffect(createTransaction({ ...req, recordedBy: currentUsername(c) }))
         if (result.result === "success") return c.json({ data: result.data }, 201)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
     .get("/", zValidator("query", listQuerySchema), async (c) => {
         const req = c.req.valid("query")
-        const result = await runEffect(listTransactions(req))
+        const result = await runEffect(listTransactions({ ...req, currentStatus: req.currentStatus as WholeBuyStatus | undefined }))
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+    })
+    // Bulk confirm — everything still CREATED. Declared before /:id so the path is never read as
+    // a transaction id.
+    //   ?manual=true  operator-triggered mid-day run, logged under their username
+    //   (default)     the nightly scheduled run, logged as BOT-CONFIRM
+    .post("/confirm-all", zValidator("query", z.object({ manual: z.enum(["true", "false"]).optional() })), async (c) => {
+        const manual = c.req.valid("query").manual === "true"
+        const result = await runEffect(confirmAllCreated(manual ? currentUsername(c) : undefined))
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
@@ -56,9 +85,33 @@ export const wholesaleBuyRoutes = new Hono()
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
-    .post("/:id/status", zValidator("json", advanceStatusSchema), async (c) => {
+    .patch("/:id", zValidator("json", updateWholeBuySchema), async (c) => {
         const req = c.req.valid("json")
-        const result = await runEffect(advanceStatus({ transactionId: c.req.param("id"), ...req }))
-        if (result.result === "success") return c.json({}, 200)
+        const result = await runEffect(updateTransaction({
+            transactionId: c.req.param("id"), ...req, updatedBy: currentUsername(c),
+        }))
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+    })
+    .post("/:id/status", zValidator("json", advanceWholeBuyStatusSchema), async (c) => {
+        const req = c.req.valid("json")
+        const result = await runEffect(advanceStatus({
+            transactionId: c.req.param("id"),
+            ...req,
+            toStatus: req.toStatus as WholeBuyStatus,
+            updatedBy: currentUsername(c),
+        }))
+        // returns the status actually reached — a mismatched delivery lands on DISPUTED, not CHECKED
+        if (result.result === "success") return c.json({ data: result.data }, 200)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+    })
+    // receive + check as one operator action; both status entries are still logged
+    .post("/:id/receive-check", zValidator("json", receiveCheckWholeBuySchema), async (c) => {
+        const req = c.req.valid("json")
+        const result = await runEffect(receiveAndCheck({
+            transactionId: c.req.param("id"), ...req, updatedBy: currentUsername(c),
+        }))
+        // returns the status actually reached — a mismatched delivery lands on DISPUTED, not CHECKED
+        if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })

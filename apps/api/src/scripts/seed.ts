@@ -13,7 +13,7 @@ const client = postgres(DATABASE_URL);
 const db = drizzle(client, { casing: "snake_case" });
 
 // lazy imports so schema types resolve after casing is set
-const { brands, purities, productTypes, unitConversions, productTypePurities } = await import(
+const { brands, purities, productTypes, unitConversions, productTypePurities, suppliers } = await import(
     "../infrastructure/db/schema/master.schema.js"
 );
 const { users } = await import("../infrastructure/db/schema/user.schema.js");
@@ -70,6 +70,18 @@ async function seed() {
         ])
         .onConflictDoNothing();
     console.log("  ✓ product type × purity rules");
+
+    // --- Suppliers ---
+    // wholesale-buy cannot record anything without one. IDs are fixed rather than defaultRandom
+    // so re-running the seed updates nothing instead of piling up duplicates.
+    await db
+        .insert(suppliers)
+        .values([
+            { id: "11111111-1111-4111-8111-111111111111", supplierName: "ฮั่วเซ่งเฮง", brandLock: true, active: true },
+            { id: "22222222-2222-4222-8222-222222222222", supplierName: "ออโรร่า", brandLock: false, active: true },
+        ])
+        .onConflictDoNothing();
+    console.log("  ✓ suppliers");
 
     // --- Admin user ---
     const username = process.env.SEED_USERNAME ?? "admin";

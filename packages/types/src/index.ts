@@ -114,3 +114,108 @@ export const productSwitchSchema = z.object({
 })
 
 export type ProductSwitchReq = z.infer<typeof productSwitchSchema>
+
+// --- wholesale-buy ---
+
+// One item per transaction. `kind` splits the happy path from the failure branches:
+// every 'bad' transition requires a note — the status log is the audit trail and "why" is
+// the only thing it cannot reconstruct. 'terminal' says the transaction can never move again.
+export const WHOLE_BUY_STATUSES = [
+  { value: 'CREATED', label: 'สร้างรายการ', kind: 'happy', terminal: false },
+  { value: 'CONFIRMED', label: 'ยืนยันแล้ว', kind: 'happy', terminal: false },
+  { value: 'PAID', label: 'ชำระเงินแล้ว', kind: 'happy', terminal: false },
+  { value: 'RECEIVED', label: 'รับของแล้ว', kind: 'happy', terminal: false },
+  { value: 'CHECKED', label: 'ตรวจรับแล้ว', kind: 'happy', terminal: true },
+  { value: 'PAYMENT_FAILED', label: 'ชำระเงินไม่สำเร็จ', kind: 'bad', terminal: false },
+  { value: 'DISPUTED', label: 'รอตรวจสอบ', kind: 'bad', terminal: false },
+  { value: 'CANCELLED', label: 'ยกเลิก', kind: 'bad', terminal: true },
+  { value: 'REJECTED', label: 'ผู้ขายปฏิเสธ', kind: 'bad', terminal: true },
+  { value: 'RETURNED', label: 'ตีกลับผู้ขาย', kind: 'bad', terminal: true },
+] as const
+
+export const wholeBuyStatusSchema = z.enum(
+  WHOLE_BUY_STATUSES.map((s) => s.value) as [string, ...string[]]
+)
+
+export type WholeBuyStatusValue = (typeof WHOLE_BUY_STATUSES)[number]['value']
+
+export const wholeBuyStatusLabel = (value: string) =>
+  WHOLE_BUY_STATUSES.find((s) => s.value === value)?.label ?? value
+
+// Statuses whose transition must carry a note explaining the failure.
+export const WHOLE_BUY_NOTE_REQUIRED: readonly string[] = WHOLE_BUY_STATUSES
+  .filter((s) => s.kind === 'bad')
+  .map((s) => s.value)
+
+// The state machine, shared so the UI offers exactly the moves the API will accept.
+// The server re-validates every transition — this drives which buttons are shown, nothing more.
+export const WHOLE_BUY_TRANSITIONS: Record<WholeBuyStatusValue, WholeBuyStatusValue[]> = {
+  // before the supplier commits: we can cancel, they can decline
+  CREATED: ['CONFIRMED', 'CANCELLED', 'REJECTED'],
+  CONFIRMED: ['PAID', 'PAYMENT_FAILED', 'REJECTED'],
+  // a bounced transfer is retryable — fix it and pay again, or give up
+  PAYMENT_FAILED: ['PAID', 'CANCELLED', 'REJECTED'],
+  PAID: ['RECEIVED'],
+  // goods in hand: accept, hold pending resolution, or send back
+  RECEIVED: ['CHECKED', 'DISPUTED', 'RETURNED'],
+  DISPUTED: ['CHECKED', 'RETURNED'],
+  // terminal — corrections after CHECKED go through the inventory gain/loss adjustment forms
+  CHECKED: [],
+  CANCELLED: [],
+  REJECTED: [],
+  RETURNED: [],
+}
+
+// The transition that moves gold into inventory: stock enters when it has been verified,
+// not when it arrived.
+export const WHOLE_BUY_INVENTORY_STATUS = 'CHECKED' satisfies WholeBuyStatusValue
+
+// The operator enters exactly one price: the 96.5% quote per gold baht. The 99.9% quote is
+// pure arithmetic off it, so the server derives and stores it rather than accepting it —
+// two independently-entered prices could disagree, a derived one cannot.
+export const PURITY_RATIO_999_TO_965 = 99.9 / 96.5
+
+export const derivePricePerGb999 = (pricePerGb965: number) =>
+  Math.round(pricePerGb965 * PURITY_RATIO_999_TO_965 * 100) / 100
+
+export const createWholeBuySchema = z.object({
+  supplierId: z.string().uuid(),
+  purityId: z.string().min(1),
+  // omitted for 99.9% — those pools are keyed by origin, and the server forces the 'NA' sentinel
+  brandId: z.string().optional(),
+  productTypeId: z.string().min(1),
+  // in the unit product_type_purities defines for this pairing (kg or gold baht)
+  weight: z.number().int().positive(),
+  // the only price the operator enters. The 99.9% quote is derived from it server-side;
+  // both end up stored, and the item's purity decides which one drives the amount.
+  pricePerGb965: z.number().positive(),
+  notes: z.string().optional(),
+})
+
+export type CreateWholeBuyReq = z.infer<typeof createWholeBuySchema>
+
+// Edits are only accepted while the transaction is still CREATED and inside its edit window.
+export const updateWholeBuySchema = createWholeBuySchema.partial()
+
+export type UpdateWholeBuyReq = z.infer<typeof updateWholeBuySchema>
+
+export const advanceWholeBuyStatusSchema = z.object({
+  toStatus: wholeBuyStatusSchema,
+  note: z.string().optional(),
+  // only read on a transition into CHECKED: what physically arrived, in the same unit as the
+  // ordered weight. It must match the order exactly — a mismatch diverts to DISPUTED.
+  actualWeight: z.number().positive().optional(),
+})
+
+export type AdvanceWholeBuyStatusReq = z.infer<typeof advanceWholeBuyStatusSchema>
+
+// Combined receive + check — one operator action today, split into two transitions later
+// without touching the status log, which records both entries either way.
+export const receiveCheckWholeBuySchema = z.object({
+  // what physically arrived, in the same unit as the ordered weight; omit when it matches.
+  // Anything other than the ordered weight sends the transaction to DISPUTED instead of CHECKED.
+  actualWeight: z.number().positive().optional(),
+  note: z.string().optional(),
+})
+
+export type ReceiveCheckWholeBuyReq = z.infer<typeof receiveCheckWholeBuySchema>

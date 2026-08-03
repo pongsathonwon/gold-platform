@@ -10,6 +10,9 @@ export interface ResolvedWeights {
     weightGb: number
     weightGm: number
     conversionFactor: number
+    // the resolved purity's unit — 'g' is 99.9%, 'gb' is 96.5%. Callers that price per purity
+    // (wholesale-buy) key off this instead of re-querying the purity row.
+    unitOfMeasure: 'g' | 'gb'
 }
 
 export const resolveWeights = (purityId: string, weight: number) =>
@@ -34,7 +37,7 @@ export const resolveWeights = (purityId: string, weight: number) =>
         // unitOfMeasure 'g'  → caller sends grams,  gb = gm / factor
         // unitOfMeasure 'gb' → caller sends baht,   gm = gb * factor
         if (purity.unitOfMeasure === 'g') {
-            return { weightGm: weight, weightGb: weight / conversionFactor, conversionFactor } satisfies ResolvedWeights
+            return { weightGm: weight, weightGb: weight / conversionFactor, conversionFactor, unitOfMeasure: 'g' } satisfies ResolvedWeights
         }
-        return { weightGb: weight, weightGm: weight * conversionFactor, conversionFactor } satisfies ResolvedWeights
+        return { weightGb: weight, weightGm: weight * conversionFactor, conversionFactor, unitOfMeasure: 'gb' } satisfies ResolvedWeights
     })
