@@ -1,12 +1,14 @@
 import { Effect } from "effect";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
 import {
     CreateWholeSellStatus, CreateWholeSellTransaction,
-    WholeSellStatus, WholeSellTransactionShape,
-    wholeSellStatuses, wholeSellTransactions,
+    WholeSellStatus, wholeSellStatuses, wholeSellTransactions,
 } from "../../../infrastructure/db/schema/wholesale-sell.schema.js";
-import { ForWholeSellRepository, TransactionNotFoundError } from "../port/wholesale-sell.port.js";
+import {
+    ContestedFields, ForWholeSellRepository, ListFilter,
+    TransactionNotFoundError, UpdateTransactionFields,
+} from "../port/wholesale-sell.port.js";
 
 class WholeSellRepositoryImpl implements ForWholeSellRepository {
     constructor(private readonly db: Database) {}
@@ -31,18 +33,37 @@ class WholeSellRepositoryImpl implements ForWholeSellRepository {
         );
     }
 
-    listTransactions(req: Partial<Pick<WholeSellTransactionShape, 'currentStatus' | 'settlementPeriod'>>) {
+    listTransactions(req: ListFilter) {
         const conditions = [
             req.currentStatus ? eq(wholeSellTransactions.currentStatus, req.currentStatus) : undefined,
             req.settlementPeriod ? eq(wholeSellTransactions.settlementPeriod, req.settlementPeriod) : undefined,
+            req.supplierId ? eq(wholeSellTransactions.supplierId, req.supplierId) : undefined,
         ].filter(Boolean) as ReturnType<typeof eq>[];
 
         return Effect.tryPromise({
             try: () => this.db.select().from(wholeSellTransactions)
                 .where(conditions.length > 0 ? and(...conditions) : undefined)
+                .orderBy(desc(wholeSellTransactions.recordedAt))
                 .execute(),
             catch: () => new RepositoryError({ message: "cannot list wholesale sell transactions" }),
         });
+    }
+
+    updateTransaction(id: string, fields: UpdateTransactionFields) {
+        return Effect.tryPromise({
+            try: () => this.db.update(wholeSellTransactions)
+                .set(fields)
+                .where(eq(wholeSellTransactions.id, id))
+                .returning()
+                .execute(),
+            catch: () => new RepositoryError({ message: `cannot update transaction: ${id}` }),
+        }).pipe(
+            Effect.flatMap((res) =>
+                res.length === 1
+                    ? Effect.succeed(res[0])
+                    : Effect.fail(new TransactionNotFoundError({ id }))
+            )
+        );
     }
 
     updateCurrentStatus(id: string, status: WholeSellStatus) {
@@ -53,6 +74,25 @@ class WholeSellRepositoryImpl implements ForWholeSellRepository {
                 .execute(),
             catch: () => new RepositoryError({ message: `cannot update status for transaction: ${id}` }),
         }).pipe(Effect.map(() => undefined as void));
+    }
+
+    recordContestedWeights(id: string, fields: ContestedFields) {
+        return Effect.tryPromise({
+            try: () => this.db.update(wholeSellTransactions)
+                .set(fields)
+                .where(eq(wholeSellTransactions.id, id))
+                .execute(),
+            catch: () => new RepositoryError({ message: `cannot record contested weight for transaction: ${id}` }),
+        }).pipe(Effect.map(() => undefined as void));
+    }
+
+    listCreated() {
+        return Effect.tryPromise({
+            try: () => this.db.select().from(wholeSellTransactions)
+                .where(eq(wholeSellTransactions.currentStatus, 'CREATED'))
+                .execute(),
+            catch: () => new RepositoryError({ message: "cannot list unconfirmed wholesale sell transactions" }),
+        });
     }
 
     createStatus(req: CreateWholeSellStatus) {
@@ -66,6 +106,7 @@ class WholeSellRepositoryImpl implements ForWholeSellRepository {
         return Effect.tryPromise({
             try: () => this.db.select().from(wholeSellStatuses)
                 .where(eq(wholeSellStatuses.transactionId, transactionId))
+                .orderBy(wholeSellStatuses.createdAt)
                 .execute(),
             catch: () => new RepositoryError({ message: `cannot list statuses for transaction: ${transactionId}` }),
         });

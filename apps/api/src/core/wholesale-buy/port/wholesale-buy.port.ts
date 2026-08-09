@@ -118,7 +118,7 @@ export const allowedTransitions: Record<WholeBuyStatus, WholeBuyStatus[]> = WHOL
 
 // transitions that must carry a note explaining the failure
 export const NOTE_REQUIRED_STATUSES: WholeBuyStatus[] =
-    ['PAYMENT_FAILED', 'DISPUTED', 'CANCELLED', 'REJECTED', 'RETURNED']
+    ['PAYMENT_FAILED', 'DELIVERY_FAILED', 'DISPUTED', 'CANCELLED', 'REJECTED', 'RETURNED', 'WRITTEN_OFF']
 
 // the only transition that moves inventory — gold enters stock when it has been verified,
 // not when it arrives

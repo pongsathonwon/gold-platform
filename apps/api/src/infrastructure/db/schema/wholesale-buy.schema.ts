@@ -6,8 +6,10 @@ import { brands, productTypes, purities, suppliers } from "./master.schema.js";
 //   CANCELLED       we backed out while the order was still CREATED
 //   REJECTED        the supplier declined — counterparty killed it, tracked separately from CANCELLED
 //   PAYMENT_FAILED  transfer bounced or the amount was wrong; retryable back to PAID
+//   DELIVERY_FAILED we paid and the goods never turned up; resolves to RECEIVED or WRITTEN_OFF
 //   DISPUTED        goods arrived but failed verification; resolves to CHECKED or RETURNED
 //   RETURNED        shipment sent back to the supplier — nothing ever enters inventory
+//   WRITTEN_OFF     we paid, nothing ever arrived, and we gave up chasing it
 // Legacy mapping: CREATED = old system status 1, CONFIRMED = old system status 2.
 export const wholeBuyStatusEnum = pgEnum('whole_buy_status', [
     'CREATED',
@@ -16,10 +18,12 @@ export const wholeBuyStatusEnum = pgEnum('whole_buy_status', [
     'RECEIVED',
     'CHECKED',
     'PAYMENT_FAILED',
+    'DELIVERY_FAILED',
     'DISPUTED',
     'CANCELLED',
     'REJECTED',
     'RETURNED',
+    'WRITTEN_OFF',
 ])
 
 // One item per transaction — no line-item table. A multi-item order is multiple transactions.

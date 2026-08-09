@@ -11,10 +11,12 @@ delivery or a single disputed bar never puts a whole order into an ambiguous sta
 ## 1. State Machine
 
 ```
-CREATED ─┬─> CONFIRMED ─┬─> PAID ──> RECEIVED ─┬─> CHECKED        (inventory increments here)
-         │              │                      ├─> DISPUTED ─┬─> CHECKED
-         │              │                      │             └─> RETURNED
-         │              │                      └─> RETURNED
+CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> CHECKED     (inventory increments here)
+         │              │         │             ├─> DISPUTED ─┬─> CHECKED
+         │              │         │             │             └─> RETURNED
+         │              │         │             └─> RETURNED
+         │              │         └─> DELIVERY_FAILED ─┬─> RECEIVED
+         │              │                              └─> WRITTEN_OFF
          │              └─> PAYMENT_FAILED ─┬─> PAID
          │                                  ├─> CANCELLED
          │                                  └─> REJECTED
@@ -30,19 +32,40 @@ CREATED ─┬─> CONFIRMED ─┬─> PAID ──> RECEIVED ─┬─> CHECKED
 | `RECEIVED` | Goods physically arrived. Nothing has entered inventory yet. | no |
 | `CHECKED` | Goods verified. **The only status that moves inventory.** | yes |
 | `PAYMENT_FAILED` | Transfer bounced or the amount was wrong. Retryable back to `PAID`. | no |
+| `DELIVERY_FAILED` | We paid and the goods never turned up. They still might; if not, it is written off. | no |
 | `DISPUTED` | Arrived but failed verification; held pending resolution. | no |
 | `CANCELLED` | We backed out, before the supplier committed. | yes |
 | `REJECTED` | The supplier declined. Tracked separately from `CANCELLED` — the counterparty killed it, which is what supplier-reliability reporting needs. | yes |
 | `RETURNED` | Shipment sent back. Nothing ever enters inventory. | yes |
+| `WRITTEN_OFF` | We paid, nothing ever arrived, and we gave up chasing it. | yes |
 
 Rules the server enforces on every transition:
 
 1. **The move must be in `allowedTransitions`**, else `422 invalid transition`.
-2. **Failure branches require a note** (`PAYMENT_FAILED`, `DISPUTED`, `CANCELLED`, `REJECTED`,
-   `RETURNED`), else `422 a note is required`. The status log is the audit trail and "why" is the
-   only thing it cannot reconstruct.
-3. **Cancellation is impossible once paid.** `PAID`, `RECEIVED` and `DISPUTED` have no route to
-   `CANCELLED` — money has moved, so the exit is `RETURNED`, which is a physical-goods event.
+2. **Failure branches require a note** (`PAYMENT_FAILED`, `DELIVERY_FAILED`, `DISPUTED`,
+   `CANCELLED`, `REJECTED`, `RETURNED`, `WRITTEN_OFF`), else `422 a note is required`. The status
+   log is the audit trail and "why" is the only thing it cannot reconstruct.
+3. **Cancellation is impossible once paid.** `PAID`, `RECEIVED`, `DISPUTED` and `DELIVERY_FAILED`
+   have no route to `CANCELLED` — money has moved, so the exit is `RETURNED` (a physical-goods
+   event) or `WRITTEN_OFF` (nothing to return).
+4. **Cancellation is also impossible once confirmed.** `CONFIRMED` has no route to `CANCELLED`
+   either: once we have committed to the supplier, only they can kill it, via `REJECTED`.
+   `wholesale-sell` was aligned onto this rule.
+
+### `DELIVERY_FAILED` — the mirror of the sell side's `PAYMENT_FAILED`
+
+`PAID → RECEIVED` used to be the only exit from `PAID`, so a supplier who took our money and never
+shipped stranded the order there forever, with no terminal and no way to report the loss.
+
+`DELIVERY_FAILED` closes that. It is the exact counterpart of `wholesale-sell`'s
+`SHIPPED → PAYMENT_FAILED → WRITTEN_OFF`: in both domains it covers *the counterparty took the
+valuable thing and never handed over its other half*. Neither has a route to `CANCELLED`, because
+ours already moved.
+
+It exists — where a wrong packed weight on the sell side does not — because it passes the test a
+failure has to pass to earn a status: it is **durable** (it can drag on for weeks while someone
+chases the supplier) and it **changes what happens next** (chase, then write off). A failure the
+operator corrects on the spot is a `422`, not a state.
 
 The transition map lives in `@gold-platform/types` (`WHOLE_BUY_TRANSITIONS`) so the web app offers
 exactly the moves the API accepts. The port assigns it to a `Record<WholeBuyStatus, …>`, so if the

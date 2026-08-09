@@ -13,10 +13,23 @@ describe("whole buy status machine", () => {
   });
 
   it("treats CHECKED and every failure terminal as a dead end", () => {
-    for (const status of ["CHECKED", "CANCELLED", "REJECTED", "RETURNED"]) {
+    for (const status of ["CHECKED", "CANCELLED", "REJECTED", "RETURNED", "WRITTEN_OFF"]) {
       expect(nextStatuses(status)).toEqual([]);
       expect(isTerminal(status)).toBe(true);
     }
+  });
+
+  it("gives a paid order that never arrives a way out", () => {
+    // the mirror of the sell side's SHIPPED → PAYMENT_FAILED → WRITTEN_OFF: without this,
+    // a supplier who took our money and never shipped stranded the order at PAID forever
+    expect(nextStatuses("PAID")).toContain("DELIVERY_FAILED");
+    // the goods may still turn up, or we give up on them
+    expect(nextStatuses("DELIVERY_FAILED")).toEqual(expect.arrayContaining(["RECEIVED", "WRITTEN_OFF"]));
+    expect(isTerminal("DELIVERY_FAILED")).toBe(false);
+  });
+
+  it("will not cancel a delivery failure — our money already moved", () => {
+    expect(nextStatuses("DELIVERY_FAILED")).not.toContain("CANCELLED");
   });
 
   it("keeps PAYMENT_FAILED and DISPUTED recoverable", () => {
@@ -36,17 +49,24 @@ describe("whole buy status machine", () => {
   });
 
   it("cannot cancel once the goods are paid for", () => {
-    for (const status of ["PAID", "RECEIVED", "DISPUTED"]) {
+    for (const status of ["PAID", "RECEIVED", "DISPUTED", "DELIVERY_FAILED"]) {
       expect(nextStatuses(status)).not.toContain("CANCELLED");
     }
   });
 
+  it("cannot be cancelled once we have committed to the supplier", () => {
+    // the rule wholesale-sell was aligned to: after confirmation only the counterparty kills it
+    expect(nextStatuses("CREATED")).toContain("CANCELLED");
+    expect(nextStatuses("CONFIRMED")).not.toContain("CANCELLED");
+  });
+
   it("flags every failure branch as note-required and no happy-path step", () => {
-    expect(requiresNote("CANCELLED")).toBe(true);
-    expect(requiresNote("REJECTED")).toBe(true);
-    expect(requiresNote("RETURNED")).toBe(true);
-    expect(requiresNote("PAYMENT_FAILED")).toBe(true);
-    expect(requiresNote("DISPUTED")).toBe(true);
+    for (const status of [
+      "CANCELLED", "REJECTED", "RETURNED", "PAYMENT_FAILED",
+      "DELIVERY_FAILED", "DISPUTED", "WRITTEN_OFF",
+    ]) {
+      expect(requiresNote(status)).toBe(true);
+    }
 
     expect(requiresNote("CONFIRMED")).toBe(false);
     expect(requiresNote("PAID")).toBe(false);
@@ -83,6 +103,14 @@ describe("list totals", () => {
   it("counts the recoverable failures — they can still complete", () => {
     expect(countsTowardTotal("PAYMENT_FAILED")).toBe(true);
     expect(countsTowardTotal("DISPUTED")).toBe(true);
+    // a late shipment is late, not dead
+    expect(countsTowardTotal("DELIVERY_FAILED")).toBe(true);
+  });
+
+  it("drops a written-off order — our money went out but no gold ever came in", () => {
+    // these columns are gold-centric, so this reads inverted from the sell side, where
+    // WRITTEN_OFF means the gold left for good and therefore keeps counting
+    expect(countsTowardTotal("WRITTEN_OFF")).toBe(false);
   });
 
   it("excludes an unknown status rather than guessing", () => {

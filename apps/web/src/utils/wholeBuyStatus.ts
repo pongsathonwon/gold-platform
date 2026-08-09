@@ -11,10 +11,12 @@ const STATUS_COLORS: Record<WholeBuyStatusValue, ChipColor> = {
   RECEIVED: "info",
   CHECKED: "success",
   PAYMENT_FAILED: "warning",
+  DELIVERY_FAILED: "warning",
   DISPUTED: "warning",
   CANCELLED: "error",
   REJECTED: "error",
   RETURNED: "error",
+  WRITTEN_OFF: "error",
 };
 
 export const statusColor = (status: string): ChipColor =>
@@ -38,6 +40,14 @@ export const requiresNote = (status: string) => statusMeta(status)?.kind === "ba
  * Whether a transaction belongs in a list total. Cancelled, rejected and returned orders never
  * delivered gold and never settled money — summing them would overstate both columns. Everything
  * still in flight does count: it is gold the company is committed to.
+ *
+ * That includes `DELIVERY_FAILED`, which is not terminal — the shipment is late, not dead, and it
+ * can still arrive. `WRITTEN_OFF` is where that commitment is finally given up on, so it drops out
+ * like the other terminal failures.
+ *
+ * These columns are gold-centric, which is why the rule reads inverted on the sell side: there
+ * `WRITTEN_OFF` means the gold left and the money never came, so it keeps counting. Here it means
+ * our money left and the gold never came, so it stops.
  */
 export const countsTowardTotal = (status: string) => {
   const meta = statusMeta(status);
@@ -45,13 +55,6 @@ export const countsTowardTotal = (status: string) => {
   return !(meta.kind === "bad" && meta.terminal);
 };
 
-/** Money — always two decimals, thousands separated. */
-export const formatNumber = (n: number, digits = 2) =>
-  n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
-
-/**
- * Weights render as entered: 2 kg is "2", not "2.000". The only cleanup is stripping binary
- * floating-point residue (a summed 0.1 + 0.2 would otherwise print 17 digits) — toPrecision(12)
- * is well inside a double's ~15 significant digits, so it never touches a real value.
- */
-export const formatWeight = (n: number) => String(Number(n.toPrecision(12)));
+// Both formatters are domain-agnostic and shared with wholesale-sell; re-exported here so the
+// existing call sites keep importing them from the util they already use.
+export { formatNumber, formatWeight } from "./format";

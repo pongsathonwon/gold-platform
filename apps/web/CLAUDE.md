@@ -123,14 +123,15 @@ Routes are declared in `App.tsx`. React Router v7 with `<Routes>` / `<Route>`.
 /wholesale-buy            — wholesale buy list, filterable by status + supplier (protected)
 /wholesale-buy/new        — create form (protected)
 /wholesale-buy/:id        — detail, status timeline, status actions (protected)
+/wholesale-sell           — wholesale sell list, filterable by status + supplier (protected)
+/wholesale-sell/new       — create form (protected)
+/wholesale-sell/:id       — detail, status timeline, status actions (protected)
 ```
 
 **Deferred to Sprint 2+:**
 
 ```
 /                         — management dashboard (current period net)
-/wholesale-sell
-/wholesale-sell/:id
 /retail-buy
 /retail-buy/:id
 /retail-sell
@@ -185,6 +186,7 @@ Three pages plus one shared helper:
 | `pages/WholesaleBuyCreatePage.tsx` | create form on the shared `useDynamicForm` / `DynamicFormField` pattern. **One price field only** — the 96.5% quote; `derivePricePerGb999()` previews the 99.9% figure in helper text, and the server does the real conversion |
 | `pages/WholesaleBuyDetailPage.tsx` | summary, status timeline, action buttons + confirm dialog |
 | `utils/wholeBuyStatus.ts` | chip colours, Thai labels, `nextStatuses()`, `requiresNote()` |
+| `utils/format.ts` | `formatNumber()` / `formatWeight()` — domain-agnostic, shared with wholesale-sell and re-exported from both status utils |
 
 **Action buttons come from `WHOLE_BUY_TRANSITIONS` in `@gold-platform/types`** — the same map the
 API validates against, so the UI cannot offer a move the server will reject. Never hard-code a
@@ -210,6 +212,39 @@ List totals exclude `CANCELLED` / `REJECTED` / `RETURNED` rows via `countsToward
 orders delivered no gold and settled no money. The footer renders whenever the section has rows,
 even when every one is excluded: an explicit `0` with the exclusion caption is an answer, a missing
 footer looks like a bug.
+
+## 9c. Wholesale Sell UI
+
+Structurally identical to the buy pages — same three-page split, same `useDynamicForm` create form,
+same purity sectioning, same "read the returned status, don't assume 200 means success" rule on the
+handover dialog.
+
+| File | Role |
+| --- | --- |
+| `pages/WholesaleSellListPage.tsx` | purity-split table, status/supplier filters, bulk-confirm button |
+| `pages/WholesaleSellCreatePage.tsx` | create form; one price field (96.5%), 99.9% previewed in helper text |
+| `pages/WholesaleSellDetailPage.tsx` | summary, status timeline, action buttons + dialog |
+| `utils/wholeSellStatus.ts` | chip colours, Thai labels, `nextStatuses()`, `requiresNote()` |
+
+Buttons come from `WHOLE_SELL_TRANSITIONS`; never hard-code a status list. `เบิกทองแพ็คและส่งออก`
+is the combined `pack-ship` action offered on `CONFIRMED`, the mirror of buy's `รับของและตรวจรับ`.
+
+Differences from the buy UI worth knowing:
+
+- **The dialog collects a weight for two different reasons, and they are not the same field.**
+  On `PACKED` / pack-ship it is *what we pulled from the vault*, and it must equal the agreement —
+  the API returns `422` otherwise, so the message lands in the dialog for the operator to fix and
+  retry. On `DISPUTED` it is *what the buyer says they weighed*, free-form and recorded as
+  evidence only. The helper text says which, because the same box means opposite things.
+- **There is no diverted-status toast here.** Buy needs one because a bad weight silently becomes
+  `DISPUTED`; on sell a bad pack is a hard error, so a 200 always means the requested status was
+  reached.
+- **The list's weight column is the agreed weight**, since that is what shipped — the packed weight
+  can never differ. A contested figure renders beside it in warning colour.
+- **`WRITTEN_OFF` counts toward list totals** even though it is a terminal failure: it is the one
+  bad-terminal status with no reversal, so the gold really is gone. `RETURNED` does *not* count —
+  its decrement was reversed, so net stock is unchanged. The rule is simply *did the gold end up
+  gone*, and it reads inverted on the buy side, where `WRITTEN_OFF` means no gold ever arrived.
 
 ## 10. Current State
 

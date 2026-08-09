@@ -127,10 +127,12 @@ export const WHOLE_BUY_STATUSES = [
   { value: 'RECEIVED', label: 'รับของแล้ว', kind: 'happy', terminal: false },
   { value: 'CHECKED', label: 'ตรวจรับแล้ว', kind: 'happy', terminal: true },
   { value: 'PAYMENT_FAILED', label: 'ชำระเงินไม่สำเร็จ', kind: 'bad', terminal: false },
+  { value: 'DELIVERY_FAILED', label: 'ผู้ขายไม่ส่งของ', kind: 'bad', terminal: false },
   { value: 'DISPUTED', label: 'รอตรวจสอบ', kind: 'bad', terminal: false },
   { value: 'CANCELLED', label: 'ยกเลิก', kind: 'bad', terminal: true },
   { value: 'REJECTED', label: 'ผู้ขายปฏิเสธ', kind: 'bad', terminal: true },
   { value: 'RETURNED', label: 'ตีกลับผู้ขาย', kind: 'bad', terminal: true },
+  { value: 'WRITTEN_OFF', label: 'ตัดหนี้สูญ', kind: 'bad', terminal: true },
 ] as const
 
 export const wholeBuyStatusSchema = z.enum(
@@ -155,7 +157,12 @@ export const WHOLE_BUY_TRANSITIONS: Record<WholeBuyStatusValue, WholeBuyStatusVa
   CONFIRMED: ['PAID', 'PAYMENT_FAILED', 'REJECTED'],
   // a bounced transfer is retryable — fix it and pay again, or give up
   PAYMENT_FAILED: ['PAID', 'CANCELLED', 'REJECTED'],
-  PAID: ['RECEIVED'],
+  // our money is gone and the goods have not turned up: they still might, or we give up on them
+  PAID: ['RECEIVED', 'DELIVERY_FAILED'],
+  // the mirror of the sell side's PAYMENT_FAILED — the counterparty took the valuable thing and
+  // has not handed over its other half. Chase it, or write the loss off; there is no CANCELLED
+  // here because our money already moved
+  DELIVERY_FAILED: ['RECEIVED', 'WRITTEN_OFF'],
   // goods in hand: accept, hold pending resolution, or send back
   RECEIVED: ['CHECKED', 'DISPUTED', 'RETURNED'],
   DISPUTED: ['CHECKED', 'RETURNED'],
@@ -164,6 +171,7 @@ export const WHOLE_BUY_TRANSITIONS: Record<WholeBuyStatusValue, WholeBuyStatusVa
   CANCELLED: [],
   REJECTED: [],
   RETURNED: [],
+  WRITTEN_OFF: [],
 }
 
 // The transition that moves gold into inventory: stock enters when it has been verified,
@@ -219,3 +227,124 @@ export const receiveCheckWholeBuySchema = z.object({
 })
 
 export type ReceiveCheckWholeBuyReq = z.infer<typeof receiveCheckWholeBuySchema>
+
+// --- wholesale-sell ---
+
+// The mirror of wholesale-buy: the company sells gold TO a supplier. Same two-table status-log
+// shape, same 'happy' / 'bad' split, same note-on-failure rule, same two-step goods handling
+// collapsed behind one endpoint.
+//
+// Buy pairs RECEIVED (goods here) with CHECKED (verified) and increments on the *second*.
+// Sell pairs PACKED (pulled from the vault) with SHIPPED (gone) and decrements on the *first*.
+// Both count the pessimistic edge of the transit window: gold coming toward us is not ours until
+// verified, gold going out stops being ours the moment it leaves the vault. Neither domain ever
+// reports stock it does not physically hold.
+export const WHOLE_SELL_STATUSES = [
+  { value: 'CREATED', label: 'สร้างรายการ', kind: 'happy', terminal: false },
+  { value: 'CONFIRMED', label: 'ยืนยันแล้ว', kind: 'happy', terminal: false },
+  { value: 'PACKED', label: 'เบิกทองแพ็คแล้ว', kind: 'happy', terminal: false },
+  { value: 'SHIPPED', label: 'ส่งออกแล้ว', kind: 'happy', terminal: false },
+  { value: 'PAID', label: 'รับเงินแล้ว', kind: 'happy', terminal: true },
+  { value: 'DISPUTED', label: 'รอตรวจสอบ', kind: 'bad', terminal: false },
+  { value: 'PAYMENT_FAILED', label: 'รับเงินไม่สำเร็จ', kind: 'bad', terminal: false },
+  { value: 'CANCELLED', label: 'ยกเลิก', kind: 'bad', terminal: true },
+  { value: 'REJECTED', label: 'ผู้ซื้อปฏิเสธ', kind: 'bad', terminal: true },
+  { value: 'RETURNED', label: 'ตีกลับคืนสต๊อก', kind: 'bad', terminal: true },
+  { value: 'WRITTEN_OFF', label: 'ตัดหนี้สูญ', kind: 'bad', terminal: true },
+] as const
+
+export const wholeSellStatusSchema = z.enum(
+  WHOLE_SELL_STATUSES.map((s) => s.value) as [string, ...string[]]
+)
+
+export type WholeSellStatusValue = (typeof WHOLE_SELL_STATUSES)[number]['value']
+
+export const wholeSellStatusLabel = (value: string) =>
+  WHOLE_SELL_STATUSES.find((s) => s.value === value)?.label ?? value
+
+// Statuses whose transition must carry a note explaining the failure.
+export const WHOLE_SELL_NOTE_REQUIRED: readonly string[] = WHOLE_SELL_STATUSES
+  .filter((s) => s.kind === 'bad')
+  .map((s) => s.value)
+
+// The state machine, shared so the UI offers exactly the moves the API will accept.
+// The server re-validates every transition — this drives which buttons are shown, nothing more.
+export const WHOLE_SELL_TRANSITIONS: Record<WholeSellStatusValue, WholeSellStatusValue[]> = {
+  // before the buyer commits: we can cancel, they can decline
+  CREATED: ['CONFIRMED', 'CANCELLED', 'REJECTED'],
+  // no CANCELLED, exactly as on the buy side: once we have committed to the counterparty, only
+  // they can kill it. A packed weight that does not match the deal is a 422 and a re-pack, not
+  // a status — the operator fixes it on the spot and the deal stays here.
+  CONFIRMED: ['PACKED', 'REJECTED'],
+  // the gold is out of the vault and out of the books. If the deal dies now the gold comes back
+  // and the decrement is reversed — that is what RETURNED means on this side.
+  PACKED: ['SHIPPED', 'RETURNED'],
+  // in the buyer's hands: they pay, they contest the weight, their transfer bounces, or the
+  // shipment comes home
+  SHIPPED: ['PAID', 'DISPUTED', 'PAYMENT_FAILED', 'RETURNED'],
+  // contested at the buyer's scale: settle on a price and get paid, or take it back
+  DISPUTED: ['PAID', 'RETURNED'],
+  // the buyer's transfer bounced or came up short: chase it, or write the receivable off.
+  // No RETURNED — by this point they have kept the gold, which is what makes it a bad debt.
+  PAYMENT_FAILED: ['PAID', 'WRITTEN_OFF'],
+  // terminal — corrections after PAID go through the inventory gain/loss adjustment forms
+  PAID: [],
+  CANCELLED: [],
+  REJECTED: [],
+  RETURNED: [],
+  WRITTEN_OFF: [],
+}
+
+// The transition that moves gold out of inventory: stock leaves the books when it leaves the
+// vault to be packed, not when it ships and not when the money lands. Anything that kills the
+// deal after this point has to put the gold back — see WHOLE_SELL_REVERSAL_STATUS.
+export const WHOLE_SELL_INVENTORY_STATUS = 'PACKED' satisfies WholeSellStatusValue
+
+// The transition that puts the gold back. Reachable from PACKED, SHIPPED and DISPUTED — every
+// state after the decrement in which the gold can still physically come home.
+export const WHOLE_SELL_REVERSAL_STATUS = 'RETURNED' satisfies WholeSellStatusValue
+
+// Same one-price rule as wholesale-buy: the operator enters the 96.5% quote per gold baht and
+// the server derives the 99.9% one with `derivePricePerGb999()`.
+export const createWholeSellSchema = z.object({
+  supplierId: z.string().uuid(),
+  purityId: z.string().min(1),
+  // omitted for 99.9% — those pools are keyed by origin, and the server forces the 'NA' sentinel
+  brandId: z.string().optional(),
+  productTypeId: z.string().min(1),
+  // in the unit product_type_purities defines for this pairing (kg or gold baht)
+  weight: z.number().int().positive(),
+  // the only price the operator enters. The 99.9% quote is derived from it server-side;
+  // both end up stored, and the item's purity decides which one drives the amount.
+  pricePerGb965: z.number().positive(),
+  notes: z.string().optional(),
+})
+
+export type CreateWholeSellReq = z.infer<typeof createWholeSellSchema>
+
+// Edits are only accepted while the transaction is still CREATED — confirmation is the lock.
+export const updateWholeSellSchema = createWholeSellSchema.partial()
+
+export type UpdateWholeSellReq = z.infer<typeof updateWholeSellSchema>
+
+export const advanceWholeSellStatusSchema = z.object({
+  toStatus: wholeSellStatusSchema,
+  note: z.string().optional(),
+  // only read on a transition into PACKED: what actually came out of the vault, in the same unit
+  // as the agreed weight. It must equal the agreed weight — anything else is rejected 422 and
+  // nothing is decremented, because the fix is to re-pack, not to record a wrong deal.
+  actualWeight: z.number().positive().optional(),
+})
+
+export type AdvanceWholeSellStatusReq = z.infer<typeof advanceWholeSellStatusSchema>
+
+// Combined pack + ship — one operator action today, the mirror of the buy side's receive-check.
+// Both transitions are still written to the status log, so splitting them later needs no
+// migration and loses no history.
+export const packShipWholeSellSchema = z.object({
+  // what came out of the vault, in the same unit as the agreed weight; omit when it matches.
+  actualWeight: z.number().positive().optional(),
+  note: z.string().optional(),
+})
+
+export type PackShipWholeSellReq = z.infer<typeof packShipWholeSellSchema>

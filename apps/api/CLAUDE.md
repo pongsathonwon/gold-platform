@@ -94,7 +94,7 @@ All domains share the same status-log pattern: two tables (`*_transactions` + `*
 | Domain | Status Flow | Inventory Hook |
 |--------|-------------|----------------|
 | wholesale-buy | `CREATED → CONFIRMED → PAID → RECEIVED → CHECKED`, plus the failure branches below | `increment` on entering `CHECKED` |
-| wholesale-sell | `DRAFT → CONFIRMED → SHIPPED → SETTLED` \| `DRAFT/CONFIRMED → CANCELLED` | `decrement` at `CONFIRMED → SHIPPED` |
+| wholesale-sell | `CREATED → CONFIRMED → PACKED → SHIPPED → PAID`, plus the failure branches below | `decrement` on entering `PACKED`, reversed on `RETURNED` |
 | retail-buy | `DRAFT → CONFIRMED` \| `DRAFT/CONFIRMED → CANCELLED` | none |
 | retail-sell | `DRAFT → CONFIRMED → SHIPPED` \| `DRAFT/CONFIRMED → CANCELLED` | `decrement` at `CONFIRMED → SHIPPED` |
 | receive | `RECEIVED → CONFIRMED` \| `RECEIVED → CANCELLED` (grace period only) | `increment` at `RECEIVED → CONFIRMED` |
@@ -108,10 +108,10 @@ Grace-period domains (receive, smelting, convert-out): cancel only allowed withi
 It is the only domain built out with failure branches. See `core/wholesale-buy/wholesale-buy.md`.
 
 ```
-CREATED ─┬─> CONFIRMED ─┬─> PAID ──> RECEIVED ─┬─> CHECKED   (increment fires here)
-         │              │                      ├─> DISPUTED ─┬─> CHECKED
-         │              │                      │             └─> RETURNED
-         │              │                      └─> RETURNED
+CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> CHECKED   (increment fires here)
+         │              │         │             ├─> DISPUTED ─┬─> CHECKED | RETURNED
+         │              │         │             └─> RETURNED
+         │              │         └─> DELIVERY_FAILED ─┬─> RECEIVED | WRITTEN_OFF
          │              └─> PAYMENT_FAILED ─┬─> PAID | CANCELLED | REJECTED
          ├─> CANCELLED
          └─> REJECTED
@@ -119,6 +119,11 @@ CREATED ─┬─> CONFIRMED ─┬─> PAID ──> RECEIVED ─┬─> CHECKED
 
 - **`CANCELLED` vs `REJECTED`** — we backed out vs the supplier declined. Separate states because
   supplier reliability is reportable; both are terminal.
+- **No cancelling once confirmed.** `CONFIRMED` has no route to `CANCELLED`: after we commit to
+  the supplier only they can kill it. wholesale-sell was aligned onto this rule.
+- **`DELIVERY_FAILED` → `WRITTEN_OFF`** covers "we paid and nothing ever arrived". Added because
+  `PAID → RECEIVED` was previously the only exit from `PAID`, stranding such orders forever; it is
+  the exact mirror of the sell side's `SHIPPED → PAYMENT_FAILED → WRITTEN_OFF`.
 - **Note required** on every failure-branch transition (`NoteRequiredError` → 422). The status log
   is the audit trail and "why" cannot be reconstructed from anywhere else.
 - **No cancelling after payment** — `PAID`/`RECEIVED`/`DISPUTED` exit via `RETURNED`, not `CANCELLED`.
@@ -148,6 +153,54 @@ CREATED ─┬─> CONFIRMED ─┬─> PAID ──> RECEIVED ─┬─> CHECKED
 The transition map is `WHOLE_BUY_TRANSITIONS` in `@gold-platform/types`, shared with the web app so
 the UI offers exactly the moves the API accepts; the port re-types it against the DB enum, so any
 divergence is a compile error.
+
+### wholesale-sell — the same machine, inverted
+
+Built as a deliberate mirror of wholesale-buy. See `core/wholesale-sell/wholesale-sell.md`.
+
+```
+CREATED ─┬─> CONFIRMED ──> PACKED ──> SHIPPED ─┬─> PAID
+         │                  │           │      ├─> DISPUTED ─┬─> PAID | RETURNED
+         │                  │           │      ├─> PAYMENT_FAILED ─┬─> PAID | WRITTEN_OFF
+         │                  │           └──────┴─> RETURNED
+         │                  └─> RETURNED
+         │                (CONFIRMED also ─> REJECTED)
+         ├─> CANCELLED
+         └─> REJECTED
+
+decrement on entering PACKED · reversed on entering RETURNED
+```
+
+Everything structural is shared with buy — two tables, append-only status log, note required on
+every failure branch, bulk `confirm-all` sweep as the edit lock, one entered price with the 99.9%
+quote derived, two goods states behind one endpoint. **The real difference is that a sell's two
+irreversible events happen in the opposite order**: we hand over gold first and get paid after.
+
+- **Inventory decrements on entering `PACKED`** — when gold leaves the vault to be boxed, not when
+  it ships and not when the money lands. This is what keeps the two domains prudent in the *same*
+  direction: buy increments on the **second** goods state (`CHECKED`), sell decrements on the
+  **first** (`PACKED`), so neither ever reports stock it does not physically hold. An earlier
+  draft decremented at delivery and overstated stock for the whole transit window.
+- **`POST /:id/pack-ship`** does `CONFIRMED → PACKED → SHIPPED` in one call — the mirror of buy's
+  `receive-check`, and one floor action for the same reason. Both status rows are still written.
+- **`RETURNED` reverses the decrement** via `reverseDecrement()` (the first domain to wire it),
+  booking opposite movements under `WHOLESALE_SELL_RETURN` rather than editing the original.
+  Reachable from `PACKED`, `SHIPPED` and `DISPUTED` — every post-decrement state the gold can come
+  home from. **Not** from `PAYMENT_FAILED`: there the buyer kept the gold *and* stiffed us.
+- **A wrong packed weight is a `422`, not a status** (`WeightMismatchError`) — the gold is still in
+  our own vault, so it is an operator correction, not a durable state. Same for a short pool
+  (`InsufficientStockError`). Both leave the transaction at `CONFIRMED` with nothing written.
+  The general rule: *a failure earns a status only when it is durable and changes what happens
+  next.* Buy's `DISPUTED` qualifies because the goods are the supplier's work; a re-pack does not.
+- **`DISPUTED` records the buyer's contested weight** on `actualWeight*` and moves no stock. It is
+  the only place a weight other than the agreed one is ever stored on a sell.
+- **No cancelling once confirmed**, matching buy exactly — only the counterparty can kill it.
+- **`WRITTEN_OFF`** is the terminal for a delivery that never gets paid for. It is the only
+  bad-terminal status that still counts toward list weight totals — the gold really did leave, and
+  nothing brought it back.
+
+`WHOLE_SELL_TRANSITIONS` in `@gold-platform/types` is the shared map, re-typed against the DB enum
+in the port exactly as buy does it. `WHOLESALE_SELL_AUTO_CONFIRM_HOUR` is its own env var.
 
 ## Settlement Period
 
@@ -244,7 +297,7 @@ Outbound cost is derived from the current balance at decrement time — **no dai
 | retail-buy | `currentStatus`, `settlementPeriod`, `branchCode` |
 | retail-sell | `currentStatus`, `settlementPeriod`, `branchCode` |
 | wholesale-buy | `currentStatus`, `settlementPeriod`, `supplierId` |
-| wholesale-sell | `currentStatus`, `settlementPeriod` |
+| wholesale-sell | `currentStatus`, `settlementPeriod`, `supplierId` |
 | receive | `currentStatus`, `settlementPeriod`, `branchCode` |
 
 ## Open Items
@@ -275,7 +328,8 @@ DATABASE_URL=postgres://postgres:password@localhost:5432/gold_platform
 PORT=3000
 JWT_SECRET=<32-char random secret>
 
-# optional — the hour (0–23) the nightly wholesale-buy confirm sweep runs. Only used to
-# display when an order stops being editable; set it to match the real cron. Default 0.
+# optional — the hour (0–23) the nightly confirm sweep runs, per domain. Only used to display
+# when a transaction stops being editable; set them to match the real cron. Default 0.
 WHOLESALE_BUY_AUTO_CONFIRM_HOUR=0
+WHOLESALE_SELL_AUTO_CONFIRM_HOUR=0
 ```

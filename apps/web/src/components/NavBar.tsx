@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 const navLinks = [
   { to: "/inventory", label: "Inventory" },
   { to: "/wholesale-buy", label: "ซื้อส่ง" },
+  { to: "/wholesale-sell", label: "ขายส่ง" },
 ];
 
 export function NavBar() {
