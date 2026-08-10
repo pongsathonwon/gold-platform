@@ -311,3 +311,34 @@ transaction is a write-through cache of the latest entry and is recomputable fro
 6. **`DISPUTED` may not survive.** It only has a job if verification can happen *after* the
    courier leaves. If BU confirms the rider always waits, refuse-at-the-door covers every case and
    `RECEIVED → DISPUTED` can go.
+7. **A re-delivery cannot be refused at the door. Enhancement, not a defect — deliberately not
+   built.**
+
+   The door check is asymmetric between a first delivery and a re-delivery:
+
+   ```
+   PAID     ─┬─> RECEIVED    correct at the door
+            └─> RETURNED     wrong — refused, no custody taken
+
+   RETURNED ──> RECEIVED     re-delivery — custody is taken whatever turns up
+   ```
+
+   A second refusal is still *reachable*, via `RETURNED → RECEIVED → DISPUTED → RETURNED`, but
+   only by taking the goods in first — which is what refuse-at-the-door exists to avoid, and it
+   records the attempt as though we had accepted it.
+
+   The fix is one entry in `WHOLE_BUY_TRANSITIONS`: allow `RETURNED → RETURNED`, so a supplier
+   delivery attempt has the same two outcomes from `RETURNED` as it does from `PAID`. Nothing else
+   needs changing — `assertTransitionAllowed` does a plain `includes`, so a self-transition passes
+   without special-casing, and on the buy side `RETURNED` fires no inventory effect (the increment
+   never happened), so repeating it is side-effect-free beyond a new log row and an overwritten
+   `returnReason`. Column holds the latest, log holds every attempt — the same split as
+   `actualWeight` and `settledAmount`.
+
+   **This must never be mirrored on `wholesale-sell`,** where `RETURNED` calls
+   `reverseDecrement()`: a self-loop there would reverse the same decrement twice and invent stock
+   out of nothing. On buy `RETURNED` is bookkeeping; on sell it is a stock movement.
+
+   Why it is worth doing eventually: repeat failures are currently invisible to exactly the
+   reporting `return_reason` was added for. A supplier who shipped wrong once and a supplier who
+   shipped wrong four times against the same order are indistinguishable today.
