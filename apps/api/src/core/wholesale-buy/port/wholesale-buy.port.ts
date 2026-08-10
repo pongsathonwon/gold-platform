@@ -1,10 +1,16 @@
 import { Context, Data, Effect } from "effect";
-import { WHOLE_BUY_INVENTORY_STATUS, WHOLE_BUY_TRANSITIONS } from "@gold-platform/types";
+import {
+    WHOLE_BUY_INVENTORY_STATUS, WHOLE_BUY_RETURN_STATUS, WHOLE_BUY_TRANSITIONS,
+} from "@gold-platform/types";
 import { RepositoryError } from "../../../infrastructure/db/client.js";
 import {
     CreateWholeBuyStatus, CreateWholeBuyTransaction,
     WholeBuyStatus, WholeBuyStatusShape, WholeBuyTransactionShape,
 } from "../../../infrastructure/db/schema/wholesale-buy.schema.js";
+
+// the DB enum is the source of truth for the reason set; the shared Zod enum in
+// @gold-platform/types validates the wire format and the two are checked against each other below
+export type ReturnReason = NonNullable<WholeBuyTransactionShape['returnReason']>
 
 // --- Domain errors ---
 
@@ -28,12 +34,10 @@ export class NotEditableError extends Data.TaggedError("WholeBuyNotEditableError
     currentStatus: WholeBuyStatus
 }> {}
 
-// the delivery must match the order exactly to be accepted into stock
-export class WeightMismatchError extends Data.TaggedError("WholeBuyWeightMismatchError")<{
+// a shipment going back has to say which of the three checks it failed — the note alone cannot
+// be aggregated, and supplier reliability is the whole reason the failure statuses are separate
+export class ReturnReasonRequiredError extends Data.TaggedError("WholeBuyReturnReasonRequiredError")<{
     id: string
-    ordered: number
-    actual: number
-    unit: 'kg' | 'gb'
 }> {}
 
 // --- Repository port (outbound) ---
@@ -46,8 +50,13 @@ export type UpdateTransactionFields = Partial<Pick<WholeBuyTransactionShape,
     | 'weightGb' | 'weightGm' | 'conversionFactor'
     | 'pricePerGb965' | 'pricePerGb999' | 'totalAmount' | 'notes'>>
 
-export type CheckedFields = Pick<WholeBuyTransactionShape,
+// the contested weight, written on a move into DISPUTED and cleared again on acceptance
+export type ContestedFields = Pick<WholeBuyTransactionShape,
     'actualWeightGb' | 'actualWeightGm' | 'actualAmount'>
+
+// the two figures a closing move records: what was actually paid, and why goods went back
+export type SettlementFields = Partial<Pick<WholeBuyTransactionShape,
+    'settledAmount' | 'returnReason'>>
 
 export interface ForWholeBuyRepository {
     createTransaction(req: CreateWholeBuyTransaction): Effect.Effect<WholeBuyTransactionShape, RepositoryError>
@@ -55,8 +64,10 @@ export interface ForWholeBuyRepository {
     listTransactions(req: ListFilter): Effect.Effect<WholeBuyTransactionShape[], RepositoryError>
     updateTransaction(id: string, fields: UpdateTransactionFields): Effect.Effect<WholeBuyTransactionShape, RepositoryError | TransactionNotFoundError>
     updateCurrentStatus(id: string, status: WholeBuyStatus): Effect.Effect<void, RepositoryError>
-    // records what physically arrived; written once, when the shipment is checked
-    recordCheckedWeights(id: string, fields: CheckedFields): Effect.Effect<void, RepositoryError>
+    // records the weight we say the delivery came to; written on a move into DISPUTED
+    recordContestedWeights(id: string, fields: ContestedFields): Effect.Effect<void, RepositoryError>
+    // records the settled amount or the return reason as a closing move supplies them
+    recordSettlement(id: string, fields: SettlementFields): Effect.Effect<void, RepositoryError>
     // everything still awaiting confirmation — the confirm-all job's work list
     listCreated(): Effect.Effect<WholeBuyTransactionShape[], RepositoryError>
     createStatus(req: CreateWholeBuyStatus): Effect.Effect<void, RepositoryError>
@@ -97,15 +108,17 @@ export interface AdvanceStatusReq {
     transactionId: string
     toStatus: WholeBuyStatus
     note?: string
-    // only read on a transition into CHECKED — what physically arrived, in the ordered weight's unit
+    // only read on a move into DISPUTED — what we say the delivery weighed, in the ordered unit
     actualWeight?: number
+    // only read on a move into PAID — what was actually paid, when it differed from totalAmount
+    settledAmount?: number
+    // required on a move into RETURNED
+    returnReason?: ReturnReason
     updatedBy: string
 }
 
-export interface ReceiveAndCheckReq {
+export interface ReceiveAndStockReq {
     transactionId: string
-    // what physically arrived, in the same unit as the ordered weight; omit when it matched
-    actualWeight?: number
     note?: string
     updatedBy: string
 }
@@ -117,15 +130,23 @@ export interface ReceiveAndCheckReq {
 export const allowedTransitions: Record<WholeBuyStatus, WholeBuyStatus[]> = WHOLE_BUY_TRANSITIONS
 
 // transitions that must carry a note explaining the failure
-export const NOTE_REQUIRED_STATUSES: WholeBuyStatus[] =
-    ['PAYMENT_FAILED', 'DELIVERY_FAILED', 'DISPUTED', 'CANCELLED', 'REJECTED', 'RETURNED', 'WRITTEN_OFF']
+export const NOTE_REQUIRED_STATUSES: WholeBuyStatus[] = [
+    'PAYMENT_FAILED', 'DELIVERY_FAILED', 'DISPUTED',
+    'CANCELLED', 'REJECTED', 'RETURNED', 'REFUNDED', 'WRITTEN_OFF',
+]
 
-// the only transition that moves inventory — gold enters stock when it has been verified,
+// the only transition that moves inventory — gold enters stock when it has been accepted,
 // not when it arrives
 export const INVENTORY_STATUS: WholeBuyStatus = WHOLE_BUY_INVENTORY_STATUS
 
-// where a delivery goes when it does not match the order
-export const MISMATCH_STATUS: WholeBuyStatus = 'DISPUTED'
+// the move that sends a shipment back, whether refused at the door or returned after a dispute
+export const RETURN_STATUS: WholeBuyStatus = WHOLE_BUY_RETURN_STATUS
+
+// the move that records what was actually paid
+export const SETTLEMENT_STATUS: WholeBuyStatus = 'PAID'
+
+// the move that records a weight we contest
+export const CONTESTED_STATUS: WholeBuyStatus = 'DISPUTED'
 
 // The hour the nightly confirm job runs. It is not a deadline the API enforces — the job is the
 // cutoff — but knowing when the next run lands is what lets the UI tell an operator how long

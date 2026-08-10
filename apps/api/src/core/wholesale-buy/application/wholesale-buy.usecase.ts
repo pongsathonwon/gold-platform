@@ -2,10 +2,11 @@ import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
 import { derivePricePerGb999 } from "@gold-platform/types";
 import {
-    AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CreateTransactionReq,
-    INVENTORY_STATUS, InvalidTransitionError, ListFilter, MISMATCH_STATUS,
+    AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CONTESTED_STATUS,
+    CreateTransactionReq, INVENTORY_STATUS, InvalidTransitionError, ListFilter,
     nextAutoConfirmAt, NOTE_REQUIRED_STATUSES, NotEditableError, NoteRequiredError,
-    ReceiveAndCheckReq, UpdateTransactionFields, UpdateTransactionReq, WholeBuyRepository,
+    ReceiveAndStockReq, RETURN_STATUS, ReturnReason, ReturnReasonRequiredError,
+    SETTLEMENT_STATUS, UpdateTransactionFields, UpdateTransactionReq, WholeBuyRepository,
 } from "../port/wholesale-buy.port.js";
 import { makeWholeBuyRepository } from "../adapter/wholesale-buy.repository.js";
 import { WholeBuyStatus, WholeBuyTransactionShape } from "../../../infrastructure/db/schema/wholesale-buy.schema.js";
@@ -28,13 +29,6 @@ const applicablePrice = (unitOfMeasure: 'g' | 'gb', pricePerGb965: number, price
 
 const brandFor = (unitOfMeasure: 'g' | 'gb', brandId?: string) =>
     unitOfMeasure === 'g' ? NA_BRAND : (brandId ?? NA_BRAND)
-
-// The stored weight expressed in the unit the operator types for this pairing. Comparing in the
-// input unit rather than in GB is what makes the equality check stable: GB for a 99.9% order is a
-// derived figure, and `conversionFactor` is snapshotted per transaction, so a master-rate change
-// between order and delivery would make two identical kg figures compare unequal.
-const orderedWeightIn = (inputUnit: 'kg' | 'gb', transaction: WholeBuyTransactionShape) =>
-    inputUnit === 'kg' ? transaction.weightGm / 1000 : transaction.weightGb
 
 // --- Commands ---
 
@@ -67,6 +61,8 @@ export const createTransaction = (req: CreateTransactionReq) =>
             actualWeightGb: null,
             actualWeightGm: null,
             actualAmount: null,
+            settledAmount: null,
+            returnReason: null,
             // callers never supply the period — it is derived from the recording time and frozen
             settlementPeriod: resolveSettlementPeriod(now),
             currentStatus: 'CREATED',
@@ -145,53 +141,27 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
     }).pipe(Effect.provide(wholeBuyLive))
 
 /**
- * Verifies a delivery against its order. Acceptance is **strictly all-or-nothing**: the delivered
- * weight must equal the ordered weight exactly. Anything else is a discrepancy for a human to
- * settle with the supplier, not something to book at a pro-rated cost.
+ * Accepts a delivery into stock.
  *
- * Returns the status the transaction actually reaches:
- *  - equal (or no weight supplied) → `CHECKED`, and the ordered weight enters inventory
- *  - anything else                 → `DISPUTED`, nothing enters inventory; the measured weight is
- *                                    still recorded so the discrepancy is on the record
+ * **Acceptance takes no weight.** It means "what arrived matches the document", so the ordered
+ * weight is what enters inventory — and the only value a supplied figure could legally have held
+ * was the number already on the order. A field that permits exactly one value carries no
+ * information, and mistyping it used to divert a perfectly good delivery into `DISPUTED`.
+ *
+ * The check that matters happens earlier and physically: at the door, against the document,
+ * before custody transfers. A delivery whose weight, brand or purity disagrees is refused
+ * outright (`PAID → RETURNED`) and never reaches this path.
  */
-const checkDelivery = (
-    transaction: WholeBuyTransactionShape,
-    actualWeight: number | undefined,
-    actor: string,
-) =>
+const acceptIntoStock = (transaction: WholeBuyTransactionShape, actor: string) =>
     Effect.gen(function* () {
         const repo = yield* WholeBuyRepository;
 
-        if (actualWeight !== undefined) {
-            const rule = yield* findQuantityRule(transaction.productTypeId, transaction.purityId);
-            const ordered = orderedWeightIn(rule.inputUnit, transaction);
-
-            if (actualWeight !== ordered) {
-                // a measured weight, not an ordered one — the orderable-quantity rule must not
-                // apply to it; a supplier can deliver 11.95 GB against a 12 GB order
-                const measured = yield* resolveMeasuredQuantity(
-                    transaction.productTypeId, transaction.purityId, actualWeight,
-                );
-                const price = applicablePrice(
-                    measured.unitOfMeasure, transaction.pricePerGb965, transaction.pricePerGb999,
-                );
-
-                yield* repo.recordCheckedWeights(transaction.id, {
-                    actualWeightGb: measured.weightGb,
-                    actualWeightGm: measured.weightGm,
-                    actualAmount: measured.weightGb * price,
-                });
-
-                return { status: MISMATCH_STATUS, ordered, actual: actualWeight, unit: rule.inputUnit };
-            }
-        }
-
-        // Accepted: by definition the delivery equals the order, so there is no discrepancy to
-        // carry. Clearing matters on a re-check — a shipment that was DISPUTED at 14 and then
-        // accepted at 15 would otherwise keep showing the stale 14 as what arrived. The DISPUTED
-        // entry in the status log is where that history belongs, and it stays there.
+        // Clearing matters when resolving a dispute: a shipment contested at 14 and later accepted
+        // must not keep showing the stale 14 as what arrived. Acceptance means it matched, so a
+        // STOCKED transaction never carries a second weight. The DISPUTED entry in the status log
+        // is where that history belongs, and it stays there.
         if (transaction.actualWeightGb !== null) {
-            yield* repo.recordCheckedWeights(transaction.id, {
+            yield* repo.recordContestedWeights(transaction.id, {
                 actualWeightGb: null, actualWeightGm: null, actualAmount: null,
             });
         }
@@ -210,20 +180,40 @@ const checkDelivery = (
             referenceId: transaction.id,
             createdBy: actor,
         });
-
-        return { status: INVENTORY_STATUS, ordered: 0, actual: 0, unit: 'gb' as const };
     })
 
-// the note written when a delivery is diverted to DISPUTED — the operator's own note still wins
-// if they gave one, with the measured discrepancy appended so the log carries the numbers
-const mismatchNote = (
-    result: { ordered: number; actual: number; unit: 'kg' | 'gb' },
-    note: string | undefined,
-) => {
-    const unit = result.unit === 'kg' ? 'kg' : 'บาท'
-    const detail = `รับจริง ${result.actual} ${unit} ไม่ตรงกับที่สั่ง ${result.ordered} ${unit}`
-    return note?.trim() ? `${note.trim()} — ${detail}` : detail
-}
+/**
+ * Records the weight we say a delivery came to, on a move into DISPUTED.
+ *
+ * This is the one place on a buy where a weight other than the ordered one is stored, and the
+ * only path on which a figure is worth typing at all — a dispute is meaningless without the
+ * number being disputed.
+ *
+ * It resolves through `resolveMeasuredQuantity()`, not `resolveQuantity()`: a shipment coming to
+ * 11.95 GB against a 12 GB order is a real short delivery, so the orderable-quantity rules must
+ * not reject it as invalid input.
+ */
+const recordContestedWeight = (
+    transaction: WholeBuyTransactionShape,
+    contestedWeight: number | undefined,
+) =>
+    Effect.gen(function* () {
+        if (contestedWeight === undefined) return;
+        const repo = yield* WholeBuyRepository;
+
+        const measured = yield* resolveMeasuredQuantity(
+            transaction.productTypeId, transaction.purityId, contestedWeight,
+        );
+        const price = applicablePrice(
+            measured.unitOfMeasure, transaction.pricePerGb965, transaction.pricePerGb999,
+        );
+
+        yield* repo.recordContestedWeights(transaction.id, {
+            actualWeightGb: measured.weightGb,
+            actualWeightGm: measured.weightGm,
+            actualAmount: measured.weightGb * price,
+        });
+    })
 
 // writes the append-only log entry and refreshes the write-through currentStatus cache
 const applyStatus = (transactionId: string, status: WholeBuyStatus, note: string | undefined, actor: string) =>
@@ -240,14 +230,63 @@ const applyStatus = (transactionId: string, status: WholeBuyStatus, note: string
         });
     })
 
-const assertTransitionAllowed = (from: WholeBuyStatus, to: WholeBuyStatus, note: string | undefined) =>
+const assertTransitionAllowed = (
+    transaction: WholeBuyTransactionShape,
+    to: WholeBuyStatus,
+    note: string | undefined,
+    returnReason: ReturnReason | undefined,
+) =>
     Effect.gen(function* () {
+        const from = transaction.currentStatus;
         if (!allowedTransitions[from].includes(to)) {
             return yield* Effect.fail(new InvalidTransitionError({ from, to }));
         }
         // failure branches must record why — that reason is unrecoverable from anywhere else
         if (NOTE_REQUIRED_STATUSES.includes(to) && !note?.trim()) {
             return yield* Effect.fail(new NoteRequiredError({ status: to }));
+        }
+        // the note says what happened in prose; the reason is what makes it countable
+        if (to === RETURN_STATUS && returnReason === undefined) {
+            return yield* Effect.fail(new ReturnReasonRequiredError({ id: transaction.id }));
+        }
+    })
+
+/**
+ * Runs whatever a transition owns beyond the log entry. Four moves carry something:
+ *
+ *  - `STOCKED`   accepts the delivery and increments inventory — the only stock movement here
+ *  - `DISPUTED`  records the weight we contest, moving no stock
+ *  - `PAID`      records what was actually paid, if it differed from the order
+ *  - `RETURNED`  records why the shipment went back
+ *
+ * All of them run before the status row is written, so a failure leaves the transaction where it
+ * was rather than logging a move that did not fully happen.
+ */
+const applyTransitionEffect = (
+    transaction: WholeBuyTransactionShape,
+    req: Pick<AdvanceStatusReq, 'actualWeight' | 'settledAmount' | 'returnReason'>,
+    toStatus: WholeBuyStatus,
+    actor: string,
+) =>
+    Effect.gen(function* () {
+        const repo = yield* WholeBuyRepository;
+
+        if (toStatus === INVENTORY_STATUS) {
+            yield* acceptIntoStock(transaction, actor);
+            return;
+        }
+        if (toStatus === CONTESTED_STATUS) {
+            yield* recordContestedWeight(transaction, req.actualWeight);
+            return;
+        }
+        // null out an amount only when one is supplied — a retry after PAYMENT_FAILED that
+        // settles exactly should clear a variance recorded by the failed attempt
+        if (toStatus === SETTLEMENT_STATUS) {
+            yield* repo.recordSettlement(transaction.id, { settledAmount: req.settledAmount ?? null });
+            return;
+        }
+        if (toStatus === RETURN_STATUS) {
+            yield* repo.recordSettlement(transaction.id, { returnReason: req.returnReason });
         }
     })
 
@@ -256,50 +295,37 @@ export const advanceStatus = (req: AdvanceStatusReq) =>
         const repo = yield* WholeBuyRepository;
         const transaction = yield* repo.findTransactionById(req.transactionId);
 
-        yield* assertTransitionAllowed(transaction.currentStatus, req.toStatus, req.note);
+        yield* assertTransitionAllowed(transaction, req.toStatus, req.note, req.returnReason);
+        yield* applyTransitionEffect(transaction, req, req.toStatus, req.updatedBy);
+        yield* applyStatus(transaction.id, req.toStatus, req.note, req.updatedBy);
 
-        if (req.toStatus !== INVENTORY_STATUS) {
-            yield* applyStatus(transaction.id, req.toStatus, req.note, req.updatedBy);
-            return { status: req.toStatus };
-        }
-
-        // a check that does not match the order lands on DISPUTED instead — the caller asked for
-        // CHECKED, the goods decided otherwise
-        const result = yield* checkDelivery(transaction, req.actualWeight, req.updatedBy);
-        const diverted = result.status !== INVENTORY_STATUS;
-        yield* applyStatus(
-            transaction.id, result.status,
-            diverted ? mismatchNote(result, req.note) : req.note,
-            req.updatedBy,
-        );
-        return { status: result.status };
+        return { status: req.toStatus };
     }).pipe(Effect.provide(wholeBuyLive))
 
 /**
- * Receive and check in one operator action — how the floor actually works today with a handful
- * of staff. Both status entries are still written, so splitting this into two endpoints later
- * changes nothing about the history that has already been recorded.
+ * Receive and stock in one operator action — how the floor actually works, and how BU wants it to
+ * stay: the person who accepts a delivery is the person who puts it away, and they would staff
+ * that role rather than split it. Both status entries are still written, so separating the steps
+ * later changes nothing about the history already recorded.
+ *
+ * No weight is taken. Reaching this call already means the delivery was checked against its
+ * document at the door and accepted; one that failed that check never got this far.
  */
-export const receiveAndCheck = (req: ReceiveAndCheckReq) =>
+export const receiveAndStock = (req: ReceiveAndStockReq) =>
     Effect.gen(function* () {
         const repo = yield* WholeBuyRepository;
         const transaction = yield* repo.findTransactionById(req.transactionId);
 
-        yield* assertTransitionAllowed(transaction.currentStatus, 'RECEIVED', req.note);
-        yield* assertTransitionAllowed('RECEIVED', 'CHECKED', req.note);
+        yield* assertTransitionAllowed(transaction, 'RECEIVED', req.note, undefined);
+        if (!allowedTransitions.RECEIVED.includes(INVENTORY_STATUS)) {
+            return yield* Effect.fail(new InvalidTransitionError({ from: 'RECEIVED', to: INVENTORY_STATUS }));
+        }
 
         yield* applyStatus(transaction.id, 'RECEIVED', req.note, req.updatedBy);
+        yield* acceptIntoStock(transaction, req.updatedBy);
+        yield* applyStatus(transaction.id, INVENTORY_STATUS, req.note, req.updatedBy);
 
-        // same all-or-nothing rule as a standalone check: a short or long delivery ends on
-        // DISPUTED with nothing in inventory, not on CHECKED with a pro-rated cost
-        const result = yield* checkDelivery(transaction, req.actualWeight, req.updatedBy);
-        const diverted = result.status !== INVENTORY_STATUS;
-        yield* applyStatus(
-            transaction.id, result.status,
-            diverted ? mismatchNote(result, req.note) : req.note,
-            req.updatedBy,
-        );
-        return { status: result.status };
+        return { status: INVENTORY_STATUS };
     }).pipe(Effect.provide(wholeBuyLive))
 
 /**

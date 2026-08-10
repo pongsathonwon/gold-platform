@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
-  AdvanceWholeSellStatusReq, CreateWholeSellReq, PackShipWholeSellReq, UpdateWholeSellReq,
+  AdvanceWholeSellStatusReq, CreateWholeSellReq, UpdateWholeSellReq,
 } from "@gold-platform/types";
 import { client } from "../api/client";
 
@@ -51,22 +51,6 @@ export function useAdvanceWholesaleSellStatus(id: string) {
   return useMutation({
     mutationFn: async (req: AdvanceWholeSellStatusReq) => {
       const res = await client["wholesale-sell"][":id"].status.$post({ param: { id }, json: req });
-      if (!res.ok) throw new Error(await parseErrorMessage(res));
-      return res.json();
-    },
-    onSuccess: invalidate,
-  });
-}
-
-// pack + ship in one action — the two status entries are still recorded server-side, and the
-// decrement runs once on the way through PACKED
-export function usePackShipWholesaleSell(id: string) {
-  const invalidate = useInvalidateWholesaleSell();
-  return useMutation({
-    mutationFn: async (req: PackShipWholeSellReq) => {
-      const res = await client["wholesale-sell"][":id"]["pack-ship"].$post({
-        param: { id }, json: req,
-      });
       if (!res.ok) throw new Error(await parseErrorMessage(res));
       return res.json();
     },

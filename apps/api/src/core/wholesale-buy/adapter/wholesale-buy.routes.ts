@@ -3,17 +3,17 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import {
     advanceWholeBuyStatusSchema, createWholeBuySchema,
-    receiveCheckWholeBuySchema, updateWholeBuySchema, wholeBuyStatusSchema,
+    receiveStockWholeBuySchema, updateWholeBuySchema, wholeBuyStatusSchema,
 } from "@gold-platform/types";
 import { runEffect } from "../../../infrastructure/runtime.js";
 import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
 import {
     advanceStatus, confirmAllCreated, createTransaction, getTransaction,
-    listTransactions, receiveAndCheck, updateTransaction,
+    listTransactions, receiveAndStock, updateTransaction,
 } from "../application/wholesale-buy.usecase.js";
 import {
-    InvalidTransitionError, NotEditableError,
-    NoteRequiredError, TransactionNotFoundError,
+    InvalidTransitionError, NotEditableError, NoteRequiredError,
+    ReturnReasonRequiredError, type ReturnReason, TransactionNotFoundError,
 } from "../port/wholesale-buy.port.js";
 import { InvalidQuantityError, ProductTypePurityNotFoundError } from "../../../infrastructure/quantity.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
@@ -24,6 +24,7 @@ function toHttpError(error: unknown): [string, number] {
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
     if (error instanceof NoteRequiredError) return [`a note is required when moving to ${error.status}`, 422]
+    if (error instanceof ReturnReasonRequiredError) return [`a return reason is required when sending a shipment back`, 422]
     if (error instanceof NotEditableError) {
         return [`transaction ${error.id} is no longer editable — it is already ${error.currentStatus}`, 422]
     }
@@ -99,19 +100,19 @@ export const wholesaleBuyRoutes = new Hono()
             transactionId: c.req.param("id"),
             ...req,
             toStatus: req.toStatus as WholeBuyStatus,
+            returnReason: req.returnReason as ReturnReason | undefined,
             updatedBy: currentUsername(c),
         }))
-        // returns the status actually reached — a mismatched delivery lands on DISPUTED, not CHECKED
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
-    // receive + check as one operator action; both status entries are still logged
-    .post("/:id/receive-check", zValidator("json", receiveCheckWholeBuySchema), async (c) => {
+    // receive + stock as one operator action; both status entries are still logged. No weight —
+    // a delivery that did not match its document was refused at the door and never gets here.
+    .post("/:id/receive-stock", zValidator("json", receiveStockWholeBuySchema), async (c) => {
         const req = c.req.valid("json")
-        const result = await runEffect(receiveAndCheck({
+        const result = await runEffect(receiveAndStock({
             transactionId: c.req.param("id"), ...req, updatedBy: currentUsername(c),
         }))
-        // returns the status actually reached — a mismatched delivery lands on DISPUTED, not CHECKED
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })

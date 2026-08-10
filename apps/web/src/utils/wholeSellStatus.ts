@@ -1,4 +1,7 @@
-import { WHOLE_SELL_STATUSES, WHOLE_SELL_TRANSITIONS, type WholeSellStatusValue } from "@gold-platform/types";
+import {
+  WHOLE_SELL_EXCLUDED_FROM_TOTALS, WHOLE_SELL_STATUSES,
+  WHOLE_SELL_TRANSITIONS, type WholeSellStatusValue,
+} from "@gold-platform/types";
 
 type ChipColor = "default" | "info" | "success" | "warning" | "error";
 
@@ -48,10 +51,8 @@ export const requiresNote = (status: string) => statusMeta(status)?.kind === "ba
  * arriving is what the status itself records.
  */
 export const countsTowardTotal = (status: string) => {
-  const meta = statusMeta(status);
-  if (!meta) return false;
-  if (status === "WRITTEN_OFF") return true;
-  return !(meta.kind === "bad" && meta.terminal);
+  if (!statusMeta(status)) return false;
+  return !WHOLE_SELL_EXCLUDED_FROM_TOTALS.includes(status as WholeSellStatusValue);
 };
 
 export { formatNumber, formatWeight } from "./format";

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  WHOLE_SELL_INVENTORY_STATUS, WHOLE_SELL_REVERSAL_STATUS,
+  WHOLE_SELL_EXCLUDED_FROM_TOTALS, WHOLE_SELL_INVENTORY_STATUS, WHOLE_SELL_REVERSAL_STATUS,
   WHOLE_SELL_STATUSES, WHOLE_SELL_TRANSITIONS,
 } from "@gold-platform/types";
 import {
-  countsTowardTotal, isTerminal, nextStatuses, requiresNote, statusLabel,
+  countsTowardTotal, isTerminal, nextStatuses, requiresNote, statusLabel, statusMeta,
 } from "./wholeSellStatus";
 
 describe("whole sell status machine", () => {
@@ -55,10 +55,14 @@ describe("whole sell status machine", () => {
     }
   });
 
-  it("cannot be cancelled once we have committed to the buyer", () => {
-    // matches wholesale-buy: after confirmation only the counterparty can kill it
-    expect(nextStatuses("CREATED")).toContain("CANCELLED");
-    for (const status of ["CONFIRMED", "PACKED", "SHIPPED", "DISPUTED", "PAYMENT_FAILED"]) {
+  it("can be cancelled up to the point gold leaves the vault, and not after", () => {
+    // matches wholesale-buy: nothing has moved while CREATED or CONFIRMED, so our own mistakes
+    // exit as CANCELLED rather than being misreported as the buyer walking away. Once PACKED has
+    // decremented, the exit is RETURNED — a physical event — not a cancellation.
+    for (const status of ["CREATED", "CONFIRMED"]) {
+      expect(nextStatuses(status)).toContain("CANCELLED");
+    }
+    for (const status of ["PACKED", "SHIPPED", "DISPUTED", "PAYMENT_FAILED"]) {
       expect(nextStatuses(status)).not.toContain("CANCELLED");
     }
   });
@@ -94,6 +98,24 @@ describe("whole sell status machine", () => {
   it("falls back to the raw value for an unknown status", () => {
     expect(statusLabel("NOT_A_STATUS")).toBe("NOT_A_STATUS");
     expect(nextStatuses("NOT_A_STATUS")).toEqual([]);
+  });
+
+  // the same cross-check the buy side carries: `terminal` and the transition map are two
+  // separately-maintained facts, so changing a status's terminality is a two-place edit and a
+  // half-done one has to fail here rather than downstream in a totals helper
+  it.each(WHOLE_SELL_STATUSES)(
+    "$value: the terminal flag agrees with the transition map",
+    ({ value, terminal }) => {
+      expect(WHOLE_SELL_TRANSITIONS[value].length === 0).toBe(terminal);
+    },
+  );
+
+  // The rule here is *did the gold end up gone*, which is why WRITTEN_OFF counts on a sell and
+  // not on a buy. It must never be re-derived from `terminal`.
+  it.each(WHOLE_SELL_EXCLUDED_FROM_TOTALS)("%s is a real status excluded from totals", (value) => {
+    expect(WHOLE_SELL_STATUSES.map((s) => s.value)).toContain(value);
+    expect(countsTowardTotal(value)).toBe(false);
+    expect(statusMeta(value)?.kind).toBe("bad");
   });
 });
 

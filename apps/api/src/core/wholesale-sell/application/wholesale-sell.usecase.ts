@@ -2,11 +2,12 @@ import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
 import { derivePricePerGb999 } from "@gold-platform/types";
 import {
-    AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CreateTransactionReq,
-    INVENTORY_STATUS, InvalidTransitionError, ListFilter, nextAutoConfirmAt,
-    NOTE_REQUIRED_STATUSES, NotEditableError, NoteRequiredError, PackAndShipReq,
-    REVERSAL_STATUS, REVERSE_REFERENCE_TYPE, UpdateTransactionFields, UpdateTransactionReq,
-    WeightMismatchError, WholeSellRepository,
+    AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CONTESTED_STATUS,
+    CreateTransactionReq, INVENTORY_STATUS, InvalidTransitionError, ListFilter,
+    nextAutoConfirmAt, NOTE_REQUIRED_STATUSES, NotEditableError, NoteRequiredError,
+    RETURN_STATUS, ReturnReason, ReturnReasonRequiredError, REVERSAL_STATUS,
+    REVERSE_REFERENCE_TYPE, SETTLEMENT_STATUS, UpdateTransactionFields, UpdateTransactionReq,
+    WholeSellRepository,
 } from "../port/wholesale-sell.port.js";
 import { makeWholeSellRepository } from "../adapter/wholesale-sell.repository.js";
 import { WholeSellStatus, WholeSellTransactionShape } from "../../../infrastructure/db/schema/wholesale-sell.schema.js";
@@ -30,13 +31,6 @@ const applicablePrice = (unitOfMeasure: 'g' | 'gb', pricePerGb965: number, price
 
 const brandFor = (unitOfMeasure: 'g' | 'gb', brandId?: string) =>
     unitOfMeasure === 'g' ? NA_BRAND : (brandId ?? NA_BRAND)
-
-// The stored weight expressed in the unit the operator types for this pairing. Comparing in the
-// input unit rather than in GB is what makes the equality check stable: GB for a 99.9% deal is a
-// derived figure, and `conversionFactor` is snapshotted per transaction, so a master-rate change
-// between agreement and handover would make two identical kg figures compare unequal.
-const agreedWeightIn = (inputUnit: 'kg' | 'gb', transaction: WholeSellTransactionShape) =>
-    inputUnit === 'kg' ? transaction.weightGm / 1000 : transaction.weightGb
 
 // --- Commands ---
 
@@ -69,6 +63,8 @@ export const createTransaction = (req: CreateTransactionReq) =>
             actualWeightGb: null,
             actualWeightGm: null,
             actualAmount: null,
+            settledAmount: null,
+            returnReason: null,
             // callers never supply the period — it is derived from the recording time and frozen
             settlementPeriod: resolveSettlementPeriod(now),
             currentStatus: 'CREATED',
@@ -149,31 +145,16 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
 /**
  * Pulls the gold out of the vault and out of the books.
  *
- * The packed weight must equal the agreed weight. Unlike the buy side, a mismatch is **not** a
- * status: the gold is still ours and we control what goes in the box, so a wrong weight is an
- * operator correction — re-pack and call again — not a durable state for someone to work. It
- * fails `WeightMismatchError` with nothing written and nothing decremented, and the transaction
- * stays CONFIRMED.
+ * **Packing takes no weight.** We boxed our own gold from our own vault, so there is no second,
+ * independent measurement to capture — the only figure a caller could supply is the agreed weight
+ * they already have, and the old equality check could therefore only ever reject a typo. The
+ * agreed weight is what leaves.
  *
- * A pool short of stock fails `InsufficientStockError` the same way, for the same reason.
+ * A pool short of stock still fails `InsufficientStockError` with nothing written and nothing
+ * decremented, leaving the transaction at CONFIRMED.
  */
-const packGoods = (
-    transaction: WholeSellTransactionShape,
-    actualWeight: number | undefined,
-    actor: string,
-) =>
+const packGoods = (transaction: WholeSellTransactionShape, actor: string) =>
     Effect.gen(function* () {
-        if (actualWeight !== undefined) {
-            const rule = yield* findQuantityRule(transaction.productTypeId, transaction.purityId);
-            const agreed = agreedWeightIn(rule.inputUnit, transaction);
-
-            if (actualWeight !== agreed) {
-                return yield* Effect.fail(new WeightMismatchError({
-                    id: transaction.id, agreed, packed: actualWeight, unit: rule.inputUnit,
-                }));
-            }
-        }
-
         // cost comes off the pool's live WAC inside the locked transaction — totalAmount is the
         // sale price, which is revenue, not the cost basis being removed
         yield* decrement({
@@ -255,8 +236,14 @@ const applyStatus = (transactionId: string, status: WholeSellStatus, note: strin
         });
     })
 
-const assertTransitionAllowed = (from: WholeSellStatus, to: WholeSellStatus, note: string | undefined) =>
+const assertTransitionAllowed = (
+    transaction: WholeSellTransactionShape,
+    to: WholeSellStatus,
+    note: string | undefined,
+    returnReason: ReturnReason | undefined,
+) =>
     Effect.gen(function* () {
+        const from = transaction.currentStatus;
         if (!allowedTransitions[from].includes(to)) {
             return yield* Effect.fail(new InvalidTransitionError({ from, to }));
         }
@@ -264,23 +251,30 @@ const assertTransitionAllowed = (from: WholeSellStatus, to: WholeSellStatus, not
         if (NOTE_REQUIRED_STATUSES.includes(to) && !note?.trim()) {
             return yield* Effect.fail(new NoteRequiredError({ status: to }));
         }
+        if (to === RETURN_STATUS && returnReason === undefined) {
+            return yield* Effect.fail(new ReturnReasonRequiredError({ id: transaction.id }));
+        }
     })
 
 /**
- * Runs the inventory side-effect a transition owns, if any. Exactly two transitions move stock:
- * PACKED takes it out, RETURNED puts it back. Both run before the status row is written, so a
- * failed movement leaves the transaction where it was rather than recording a move that never
- * physically happened.
+ * Runs whatever a transition owns beyond the log entry.
+ *
+ * Exactly two moves touch stock — `PACKED` takes it out, `RETURNED` puts it back — and two more
+ * record a figure without moving anything: `DISPUTED` the buyer's weight, `PAID` what they
+ * actually settled. All of them run before the status row is written, so a failure leaves the
+ * transaction where it was rather than logging a move that never physically happened.
  */
-const applyInventoryEffect = (
+const applyTransitionEffect = (
     transaction: WholeSellTransactionShape,
+    req: Pick<AdvanceStatusReq, 'actualWeight' | 'settledAmount' | 'returnReason'>,
     toStatus: WholeSellStatus,
-    actualWeight: number | undefined,
     actor: string,
 ) =>
     Effect.gen(function* () {
+        const repo = yield* WholeSellRepository;
+
         if (toStatus === INVENTORY_STATUS) {
-            yield* packGoods(transaction, actualWeight, actor);
+            yield* packGoods(transaction, actor);
             return;
         }
         // only a shipment that actually left needs putting back — a deal that dies before PACKED
@@ -288,11 +282,17 @@ const applyInventoryEffect = (
         // guard is what keeps that true if the transition map is ever widened.
         if (toStatus === REVERSAL_STATUS) {
             yield* returnGoods(transaction, actor);
+            yield* repo.recordSettlement(transaction.id, { returnReason: req.returnReason });
             return;
         }
         // no stock moves, but the buyer's figure goes on the record
-        if (toStatus === 'DISPUTED') {
-            yield* recordContestedWeight(transaction, actualWeight);
+        if (toStatus === CONTESTED_STATUS) {
+            yield* recordContestedWeight(transaction, req.actualWeight);
+            return;
+        }
+        // clear a variance from a previous failed attempt when the retry settles exactly
+        if (toStatus === SETTLEMENT_STATUS) {
+            yield* repo.recordSettlement(transaction.id, { settledAmount: req.settledAmount ?? null });
         }
     })
 
@@ -301,35 +301,11 @@ export const advanceStatus = (req: AdvanceStatusReq) =>
         const repo = yield* WholeSellRepository;
         const transaction = yield* repo.findTransactionById(req.transactionId);
 
-        yield* assertTransitionAllowed(transaction.currentStatus, req.toStatus, req.note);
-        yield* applyInventoryEffect(transaction, req.toStatus, req.actualWeight, req.updatedBy);
+        yield* assertTransitionAllowed(transaction, req.toStatus, req.note, req.returnReason);
+        yield* applyTransitionEffect(transaction, req, req.toStatus, req.updatedBy);
         yield* applyStatus(transaction.id, req.toStatus, req.note, req.updatedBy);
 
         return { status: req.toStatus };
-    }).pipe(Effect.provide(wholeSellLive))
-
-/**
- * Pack and ship in one operator action — the mirror of the buy side's receive-check, and one
- * action on the floor today for the same reason: the people who pull the gold are the people who
- * hand it to the courier. Both status entries are still written, so splitting this into two
- * endpoints later changes nothing about the history already recorded.
- */
-export const packAndShip = (req: PackAndShipReq) =>
-    Effect.gen(function* () {
-        const repo = yield* WholeSellRepository;
-        const transaction = yield* repo.findTransactionById(req.transactionId);
-
-        yield* assertTransitionAllowed(transaction.currentStatus, 'PACKED', req.note);
-        yield* assertTransitionAllowed('PACKED', 'SHIPPED', req.note);
-
-        // the decrement runs once, on the way through PACKED — a mismatch or a short pool fails
-        // here with neither status row written
-        yield* packGoods(transaction, req.actualWeight, req.updatedBy);
-
-        yield* applyStatus(transaction.id, 'PACKED', req.note, req.updatedBy);
-        yield* applyStatus(transaction.id, 'SHIPPED', req.note, req.updatedBy);
-
-        return { status: 'SHIPPED' as const };
     }).pipe(Effect.provide(wholeSellLive))
 
 /**

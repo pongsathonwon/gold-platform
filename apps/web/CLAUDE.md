@@ -193,11 +193,20 @@ API validates against, so the UI cannot offer a move the server will reject. Nev
 status list in a component.
 
 The dialog collects a **note** (mandatory for failure-branch moves, which the API rejects without
-one) and, on any move into `CHECKED`, an optional **delivered weight**. Leaving it blank books the
-ordered weight. Entering anything that is not the ordered weight sends the transaction to
-`DISPUTED` instead — acceptance is all-or-nothing — so the mutation's `onSuccess` reads the
-returned status and toasts an **error** when the move was diverted. Never assume a 200 means the
-requested status was reached.
+one) plus one extra field per move, and **never more than one at a time**:
+
+| Move | Extra field |
+| --- | --- |
+| `DISPUTED` | the weight we contest — the only weight a buy ever records |
+| `PAID` | `settledAmount`, only when the payment differed from the order |
+| `RETURNED` | `returnReason` (required) — a select, not free text |
+| `RECEIVE_STOCK` / `STOCKED` | none. Acceptance means it matched the document |
+
+**Nothing diverts any more.** The old dialog collected a delivered weight on the way into
+`CHECKED` and the server silently rerouted a mismatch to `DISPUTED`, so `onSuccess` had to read
+the returned status and toast an error. That is gone: a delivery which fails its check at the door
+is refused with `ตีกลับผู้ขาย` (`PAID → RETURNED`) before custody transfers, so the caller now
+always reaches the status it asked for. Both detail pages are plain "ask and receive".
 
 **Weights render as-is** via `formatWeight()` — a 2 kg order shows "2", not "2.000". Only money
 goes through `formatNumber()`'s fixed two decimals. `formatWeight` strips binary floating-point
@@ -208,16 +217,18 @@ as its 131.20 GB equivalent is a number nobody typed. Sectioning by purity is wh
 state one unit in its header. `splitByPurity()` in `utils/inventoryVolume.ts` is generic over the
 row shape and is the shared helper for this.
 
-List totals exclude `CANCELLED` / `REJECTED` / `RETURNED` rows via `countsTowardTotal()` — those
-orders delivered no gold and settled no money. The footer renders whenever the section has rows,
+List totals exclude `CANCELLED` / `REJECTED` / `RETURNED` / `REFUNDED` / `WRITTEN_OFF` rows via
+`countsTowardTotal()`, which reads the explicit `WHOLE_BUY_EXCLUDED_FROM_TOTALS` set. It is a list
+rather than a `bad && terminal` test on purpose: `RETURNED` gained onward moves, and inferring
+"counts toward stock" from "can still move" would start summing gold that went back to the
+supplier. The footer renders whenever the section has rows,
 even when every one is excluded: an explicit `0` with the exclusion caption is an answer, a missing
 footer looks like a bug.
 
 ## 9c. Wholesale Sell UI
 
 Structurally identical to the buy pages — same three-page split, same `useDynamicForm` create form,
-same purity sectioning, same "read the returned status, don't assume 200 means success" rule on the
-handover dialog.
+same purity sectioning, same one-extra-field-per-move dialog.
 
 | File | Role |
 | --- | --- |
@@ -226,25 +237,23 @@ handover dialog.
 | `pages/WholesaleSellDetailPage.tsx` | summary, status timeline, action buttons + dialog |
 | `utils/wholeSellStatus.ts` | chip colours, Thai labels, `nextStatuses()`, `requiresNote()` |
 
-Buttons come from `WHOLE_SELL_TRANSITIONS`; never hard-code a status list. `เบิกทองแพ็คและส่งออก`
-is the combined `pack-ship` action offered on `CONFIRMED`, the mirror of buy's `รับของและตรวจรับ`.
+Buttons come from `WHOLE_SELL_TRANSITIONS`; never hard-code a status list. **There is no combined
+pack-ship button** — packing and shipping are two ordinary transitions, so `PACKED` is a state a
+deal rests in and `PACKED` rows are the "ready to ship" worklist. Buy keeps its combined
+`รับของและเข้าสต๊อก` because receiving and stocking really are one moment on the floor.
 
 Differences from the buy UI worth knowing:
 
-- **The dialog collects a weight for two different reasons, and they are not the same field.**
-  On `PACKED` / pack-ship it is *what we pulled from the vault*, and it must equal the agreement —
-  the API returns `422` otherwise, so the message lands in the dialog for the operator to fix and
-  retry. On `DISPUTED` it is *what the buyer says they weighed*, free-form and recorded as
-  evidence only. The helper text says which, because the same box means opposite things.
-- **There is no diverted-status toast here.** Buy needs one because a bad weight silently becomes
-  `DISPUTED`; on sell a bad pack is a hard error, so a 200 always means the requested status was
-  reached.
+- **The dialog's weight field is the buyer's number, and only theirs.** It appears on `DISPUTED`
+  alone; packing collects nothing, because we boxed our own gold and the agreed weight is what
+  left. `settledAmount` on `PAID` and `returnReason` on `RETURNED` work exactly as on buy.
 - **The list's weight column is the agreed weight**, since that is what shipped — the packed weight
   can never differ. A contested figure renders beside it in warning colour.
 - **`WRITTEN_OFF` counts toward list totals** even though it is a terminal failure: it is the one
   bad-terminal status with no reversal, so the gold really is gone. `RETURNED` does *not* count —
   its decrement was reversed, so net stock is unchanged. The rule is simply *did the gold end up
   gone*, and it reads inverted on the buy side, where `WRITTEN_OFF` means no gold ever arrived.
+  The set lives in `WHOLE_SELL_EXCLUDED_FROM_TOTALS`.
 
 ## 10. Current State
 

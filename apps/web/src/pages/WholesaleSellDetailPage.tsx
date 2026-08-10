@@ -3,18 +3,22 @@ import { useParams, Link as RouterLink } from "react-router-dom";
 import {
   Container, Typography, Card, CardContent, Box, Chip, Button, Alert, CircularProgress,
   Table, TableBody, TableCell, TableRow, TableHead, Dialog, DialogTitle, DialogContent,
-  DialogActions, TextField, Divider, Stack,
+  DialogActions, TextField, Divider, Stack, MenuItem,
 } from "@mui/material";
-import type { WholeSellStatusValue } from "@gold-platform/types";
+import {
+  RETURN_REASONS, returnReasonLabel, type ReturnReasonValue, type WholeSellStatusValue,
+} from "@gold-platform/types";
 import { useWholesaleSellDetail } from "../hooks/useWholesaleSell";
-import { useAdvanceWholesaleSellStatus, usePackShipWholesaleSell } from "../hooks/useWholesaleSellMutations";
+import { useAdvanceWholesaleSellStatus } from "../hooks/useWholesaleSellMutations";
 import { useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
 import { formatNumber, formatWeight, nextStatuses, requiresNote, statusColor, statusLabel } from "../utils/wholeSellStatus";
 
-// the combined pack+ship action, offered alongside the plain transitions
-const PACK_SHIP = "PACK_SHIP" as const;
-type PendingAction = WholeSellStatusValue | typeof PACK_SHIP;
+// Packing and shipping are two separate operator actions. They used to be fused behind one
+// button, copied from the buy side by symmetry rather than from how the floor works: receiving
+// and stocking really are one moment, but a packed box waits for a courier. Leaving PACKED as a
+// state to rest in is what makes "ready to ship" a list somebody can work.
+type PendingAction = WholeSellStatusValue;
 
 export function WholesaleSellDetailPage() {
   const { id = "" } = useParams();
@@ -24,11 +28,12 @@ export function WholesaleSellDetailPage() {
   const { data: productTypesRes } = useProductTypes();
 
   const advance = useAdvanceWholesaleSellStatus(id);
-  const packShip = usePackShipWholesaleSell(id);
 
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [note, setNote] = useState("");
   const [actualWeight, setActualWeight] = useState("");
+  const [settledAmount, setSettledAmount] = useState("");
+  const [returnReason, setReturnReason] = useState<ReturnReasonValue | "">("");
   const [actionError, setActionError] = useState<string | null>(null);
 
   if (isPending) return <Container sx={{ py: 4 }}><CircularProgress /></Container>;
@@ -47,16 +52,13 @@ export function WholesaleSellDetailPage() {
   const productTypeName = productTypesRes?.data.find((p) => p.id === t.productTypeId)?.productType ?? t.productTypeId;
 
   const moves = nextStatuses(t.currentStatus);
-  // Two moves carry a weight, and they mean opposite things.
-  //   PACKED / PACK_SHIP — what we pulled from the vault. It must equal the agreement; the API
-  //                        rejects anything else so the operator re-packs rather than recording
-  //                        a deal we did not fulfil.
-  //   DISPUTED           — what the *buyer* says they weighed. Free-form: it is their number,
-  //                        and the whole point is that it disagrees with ours.
-  const packsWeight = pending === "PACKED" || pending === PACK_SHIP;
+  // DISPUTED is the only move that carries a weight, and it is the *buyer's* number — the whole
+  // point is that it disagrees with ours. Packing records nothing: we boxed our own gold from our
+  // own vault, so the agreed weight is what left and there is no second measurement to capture.
   const contestsWeight = pending === "DISPUTED";
-  const collectsWeight = packsWeight || contestsWeight;
-  const noteRequired = pending !== null && pending !== PACK_SHIP && requiresNote(pending);
+  const collectsSettledAmount = pending === "PAID";
+  const collectsReturnReason = pending === "RETURNED";
+  const noteRequired = pending !== null && requiresNote(pending);
   const agreedInInputUnit = is999 ? t.weightGm / 1000 : t.weightGb;
   const inputUnitLabel = is999 ? "kg" : "บาท";
 
@@ -64,6 +66,8 @@ export function WholesaleSellDetailPage() {
     setPending(null);
     setNote("");
     setActualWeight("");
+    setSettledAmount("");
+    setReturnReason("");
     setActionError(null);
   }
 
@@ -76,31 +80,28 @@ export function WholesaleSellDetailPage() {
       setActionError("กรุณาระบุเหตุผล");
       return;
     }
+    if (collectsReturnReason && !returnReason) {
+      setActionError("กรุณาเลือกสาเหตุที่ตีกลับ");
+      return;
+    }
 
     const weight = actualWeight ? Number(actualWeight) : undefined;
+    const settled = settledAmount ? Number(settledAmount) : undefined;
 
     const onSuccess = () => {
       showToast("อัปเดตสถานะแล้ว");
       closeDialog();
     };
-    // a packed weight that does not match comes back 422 rather than as a diverted status, so
-    // the message belongs in the dialog where the operator can fix the number and retry
     const onError = (err: unknown) =>
       setActionError(err instanceof Error ? err.message : "อัปเดตสถานะไม่สำเร็จ");
-
-    if (pending === PACK_SHIP) {
-      packShip.mutate(
-        { ...(weight !== undefined ? { actualWeight: weight } : {}), ...(trimmedNote ? { note: trimmedNote } : {}) },
-        { onSuccess, onError },
-      );
-      return;
-    }
 
     advance.mutate(
       {
         toStatus: pending,
         ...(trimmedNote ? { note: trimmedNote } : {}),
-        ...(collectsWeight && weight !== undefined ? { actualWeight: weight } : {}),
+        ...(contestsWeight && weight !== undefined ? { actualWeight: weight } : {}),
+        ...(collectsSettledAmount && settled !== undefined ? { settledAmount: settled } : {}),
+        ...(collectsReturnReason && returnReason ? { returnReason } : {}),
       },
       { onSuccess, onError },
     );
@@ -125,8 +126,25 @@ export function WholesaleSellDetailPage() {
     rows.push(["ยืนยันอัตโนมัติ", new Date(t.confirmDueAt).toLocaleString("th-TH")]);
   }
 
-  // only ever populated by a DISPUTED move — the packed weight always equals the agreement,
-  // because the API refuses to pack anything else
+  if (t.settledAmount !== null) {
+    const variance = t.settledAmount - t.totalAmount;
+    rows.push([
+      "ยอดที่รับจริง",
+      <Box component="span">
+        {formatNumber(t.settledAmount)}
+        <Typography component="span" variant="caption" color={variance < 0 ? "error.main" : "success.main"} sx={{ ml: 1 }}>
+          ({variance > 0 ? "+" : ""}{formatNumber(variance)} เทียบกับที่ตกลง)
+        </Typography>
+      </Box>,
+    ]);
+  }
+
+  if (t.returnReason !== null) {
+    rows.push(["สาเหตุที่ตีกลับ", returnReasonLabel(t.returnReason)]);
+  }
+
+  // only ever populated by a DISPUTED move — packing records no weight of its own, since we boxed
+  // our own gold and the agreed figure is what left
   if (t.actualWeightGb !== null) {
     const variance = t.actualWeightGb - t.weightGb;
     rows.push([
@@ -183,11 +201,6 @@ export function WholesaleSellDetailPage() {
               ดำเนินการต่อ
             </Typography>
             <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
-              {/* one operator action today: the people who pull the gold are the people who hand
-                  it to the courier. Both status entries are still written server-side. */}
-              {t.currentStatus === "CONFIRMED" && (
-                <Button onClick={() => setPending(PACK_SHIP)}>เบิกทองแพ็คและส่งออก</Button>
-              )}
               {moves.map((s) => (
                 <Button
                   key={s}
@@ -234,28 +247,47 @@ export function WholesaleSellDetailPage() {
       </Card>
 
       <Dialog open={pending !== null} onClose={closeDialog} fullWidth maxWidth="xs">
-        <DialogTitle>
-          {pending === PACK_SHIP ? "เบิกทองแพ็คและส่งออก" : `เปลี่ยนสถานะเป็น ${pending ? statusLabel(pending) : ""}`}
-        </DialogTitle>
+        <DialogTitle>เปลี่ยนสถานะเป็น {pending ? statusLabel(pending) : ""}</DialogTitle>
         <DialogContent>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
-            {collectsWeight && (
+            {contestsWeight && (
               <>
                 <TextField
-                  label={
-                    packsWeight
-                      ? `น้ำหนักที่เบิกแพ็ค (${inputUnitLabel})`
-                      : `น้ำหนักที่ผู้ซื้อชั่งได้ (${inputUnitLabel})`
-                  }
+                  label={`น้ำหนักที่ผู้ซื้อชั่งได้ (${inputUnitLabel})`}
                   type="number"
                   value={actualWeight}
                   onChange={(e) => setActualWeight(e.target.value)}
-                  helperText={
-                    packsWeight
-                      ? `ต้องเท่ากับที่ตกลง (${formatWeight(agreedInInputUnit)} ${inputUnitLabel}) — ถ้าไม่เท่า ระบบจะไม่ตัดสต๊อกและให้แพ็คใหม่ เว้นว่างไว้ได้หากตรงกันอยู่แล้ว`
-                      : `น้ำหนักตามที่ผู้ซื้อแจ้ง เทียบกับที่ตกลง ${formatWeight(agreedInInputUnit)} ${inputUnitLabel} — บันทึกไว้เป็นหลักฐาน ไม่กระทบสต๊อก`
-                  }
+                  helperText={`น้ำหนักตามที่ผู้ซื้อแจ้ง เทียบกับที่ตกลง ${formatWeight(agreedInInputUnit)} ${inputUnitLabel} — บันทึกไว้เป็นหลักฐาน ไม่กระทบสต๊อก`}
                 />
+                <Divider />
+              </>
+            )}
+            {collectsSettledAmount && (
+              <>
+                <TextField
+                  label="ยอดที่รับจริง"
+                  type="number"
+                  value={settledAmount}
+                  onChange={(e) => setSettledAmount(e.target.value)}
+                  helperText={`เว้นว่างไว้หากตรงกับยอดที่ตกลง (${formatNumber(t.totalAmount)}) — กรอกเฉพาะเมื่อรับเงินไม่เท่ากับที่ตกลงและปิดรายการเลย`}
+                />
+                <Divider />
+              </>
+            )}
+            {collectsReturnReason && (
+              <>
+                <TextField
+                  select
+                  label="สาเหตุที่ตีกลับ (จำเป็น)"
+                  value={returnReason}
+                  onChange={(e) => setReturnReason(e.target.value as ReturnReasonValue)}
+                  required
+                  helperText="บันทึกเป็นข้อมูลสรุปได้ ต่างจากหมายเหตุที่เป็นข้อความอิสระ"
+                >
+                  {RETURN_REASONS.map((r) => (
+                    <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>
+                  ))}
+                </TextField>
                 <Divider />
               </>
             )}
@@ -274,7 +306,7 @@ export function WholesaleSellDetailPage() {
           <Button variant="text" onClick={closeDialog}>
             ยกเลิก
           </Button>
-          <Button onClick={submitAction} disabled={advance.isPending || packShip.isPending}>
+          <Button onClick={submitAction} disabled={advance.isPending}>
             ยืนยัน
           </Button>
         </DialogActions>

@@ -6,7 +6,7 @@ import {
     WholeBuyStatus, wholeBuyStatuses, wholeBuyTransactions,
 } from "../../../infrastructure/db/schema/wholesale-buy.schema.js";
 import {
-    CheckedFields, ForWholeBuyRepository, ListFilter,
+    ContestedFields, ForWholeBuyRepository, ListFilter, SettlementFields,
     TransactionNotFoundError, UpdateTransactionFields,
 } from "../port/wholesale-buy.port.js";
 
@@ -76,13 +76,25 @@ class WholeBuyRepositoryImpl implements ForWholeBuyRepository {
         }).pipe(Effect.map(() => undefined as void));
     }
 
-    recordCheckedWeights(id: string, fields: CheckedFields) {
+    recordContestedWeights(id: string, fields: ContestedFields) {
         return Effect.tryPromise({
             try: () => this.db.update(wholeBuyTransactions)
                 .set(fields)
                 .where(eq(wholeBuyTransactions.id, id))
                 .execute(),
-            catch: () => new RepositoryError({ message: `cannot record checked weights for transaction: ${id}` }),
+            catch: () => new RepositoryError({ message: `cannot record contested weights for transaction: ${id}` }),
+        }).pipe(Effect.map(() => undefined as void));
+    }
+
+    recordSettlement(id: string, fields: SettlementFields) {
+        // an empty patch would be an UPDATE with no SET clause, which Drizzle rejects at runtime
+        if (Object.keys(fields).length === 0) return Effect.succeed(undefined as void);
+        return Effect.tryPromise({
+            try: () => this.db.update(wholeBuyTransactions)
+                .set(fields)
+                .where(eq(wholeBuyTransactions.id, id))
+                .execute(),
+            catch: () => new RepositoryError({ message: `cannot record settlement for transaction: ${id}` }),
         }).pipe(Effect.map(() => undefined as void));
     }
 

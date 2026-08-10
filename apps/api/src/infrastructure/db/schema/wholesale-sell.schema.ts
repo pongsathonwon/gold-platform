@@ -5,13 +5,13 @@ import { brands, productTypes, purities, suppliers } from "./master.schema.js";
 // Inventory decrements on entering PACKED — gold stops being ours when it leaves the vault,
 // not when it ships and not when the money lands.
 // Failure branches:
-//   CANCELLED       we backed out before committing to the buyer
+//   CANCELLED       we backed out — reachable while CREATED or CONFIRMED, before any gold moves
 //   REJECTED        the buyer declined — counterparty killed it, tracked separately from CANCELLED
 //   DISPUTED        the buyer contests the weight after it shipped; resolves to PAID or RETURNED
 //   RETURNED        the gold came home — the decrement is REVERSED, putting the stock back
 //   PAYMENT_FAILED  the buyer's transfer bounced or came up short; retryable back to PAID
 //   WRITTEN_OFF     the receivable was given up on. The gold is gone and no money came for it.
-// Mirrors whole_buy_status: PACKED/SHIPPED pair off against RECEIVED/CHECKED, and the payment
+// Mirrors whole_buy_status: PACKED/SHIPPED pair off against RECEIVED/STOCKED, and the payment
 // failure branch sits after the goods move rather than before it.
 export const wholeSellStatusEnum = pgEnum('whole_sell_status', [
     'CREATED',
@@ -25,6 +25,16 @@ export const wholeSellStatusEnum = pgEnum('whole_sell_status', [
     'REJECTED',
     'RETURNED',
     'WRITTEN_OFF',
+])
+
+// Why a shipment came back. Its own type rather than one shared with wholesale-buy, for the same
+// reason the two status enums are separate: each domain owns its schema outright.
+export const wholeSellReturnReasonEnum = pgEnum('whole_sell_return_reason', [
+    'WEIGHT',
+    'BRAND',
+    'PURITY',
+    'DAMAGED',
+    'OTHER',
 ])
 
 // One item per transaction — no line-item table. A multi-item deal is multiple transactions.
@@ -49,13 +59,21 @@ export const wholeSellTransactions = pgTable('whole_sell_transactions', {
     pricePerGb999: decimal('price_per_gb_999', { mode: 'number' }).notNull(),
     totalAmount: decimal({ mode: 'number' }).notNull(), // agreedWeightGb * the purity-matched price
 
-    // The weight the buyer contests, recorded when a shipped deal is moved to DISPUTED. The
-    // packed weight itself always equals the agreement — the API refuses to pack anything else —
-    // so null here means "no outstanding discrepancy", which is what every state up to SHIPPED
-    // shows. Only the buyer's own re-weigh can populate it.
+    // The weight the buyer contests, recorded when a shipped deal is moved to DISPUTED. Packing
+    // records nothing here — we boxed our own gold from our own vault, so there is no second,
+    // independent measurement to capture. Null therefore means "nobody is arguing", and the only
+    // thing that can ever populate it is the buyer's own re-weigh.
     actualWeightGb: decimal({ mode: 'number' }),
     actualWeightGm: decimal({ mode: 'number' }),
     actualAmount: decimal({ mode: 'number' }), // actualWeightGb * the purity-matched price
+
+    // What the buyer actually settled, when it differed from totalAmount. Null means it matched.
+    // BU's rare "we took less and closed the file" case: a recorded variance, not a status, since
+    // an accepted shortfall ends the deal exactly like an exact payment does.
+    settledAmount: decimal({ mode: 'number' }),
+
+    // Why the shipment came home; set on the move into RETURNED, alongside the mandatory note.
+    returnReason: wholeSellReturnReasonEnum(),
 
     settlementPeriod: varchar().notNull(), // Fri–Thu week index e.g. "2026-W24", derived from recordedAt
 

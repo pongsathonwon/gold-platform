@@ -93,7 +93,7 @@ All domains share the same status-log pattern: two tables (`*_transactions` + `*
 
 | Domain | Status Flow | Inventory Hook |
 |--------|-------------|----------------|
-| wholesale-buy | `CREATED → CONFIRMED → PAID → RECEIVED → CHECKED`, plus the failure branches below | `increment` on entering `CHECKED` |
+| wholesale-buy | `CREATED → CONFIRMED → PAID → RECEIVED → STOCKED`, plus the failure branches below | `increment` on entering `STOCKED` |
 | wholesale-sell | `CREATED → CONFIRMED → PACKED → SHIPPED → PAID`, plus the failure branches below | `decrement` on entering `PACKED`, reversed on `RETURNED` |
 | retail-buy | `DRAFT → CONFIRMED` \| `DRAFT/CONFIRMED → CANCELLED` | none |
 | retail-sell | `DRAFT → CONFIRMED → SHIPPED` \| `DRAFT/CONFIRMED → CANCELLED` | `decrement` at `CONFIRMED → SHIPPED` |
@@ -108,33 +108,49 @@ Grace-period domains (receive, smelting, convert-out): cancel only allowed withi
 It is the only domain built out with failure branches. See `core/wholesale-buy/wholesale-buy.md`.
 
 ```
-CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> CHECKED   (increment fires here)
-         │              │         │             ├─> DISPUTED ─┬─> CHECKED | RETURNED
-         │              │         │             └─> RETURNED
+CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> STOCKED   (increment fires here)
+         │              │         │             └─> DISPUTED ─┬─> STOCKED | RETURNED
+         │              │         ├─> RETURNED ─┬─> REFUNDED | RECEIVED | WRITTEN_OFF
          │              │         └─> DELIVERY_FAILED ─┬─> RECEIVED | WRITTEN_OFF
-         │              └─> PAYMENT_FAILED ─┬─> PAID | CANCELLED | REJECTED
+         │              ├─> PAYMENT_FAILED ─┬─> PAID | CANCELLED | REJECTED
+         │              ├─> CANCELLED
+         │              └─> REJECTED
          ├─> CANCELLED
          └─> REJECTED
 ```
 
 - **`CANCELLED` vs `REJECTED`** — we backed out vs the supplier declined. Separate states because
   supplier reliability is reportable; both are terminal.
-- **No cancelling once confirmed.** `CONFIRMED` has no route to `CANCELLED`: after we commit to
-  the supplier only they can kill it. wholesale-sell was aligned onto this rule.
-- **`DELIVERY_FAILED` → `WRITTEN_OFF`** covers "we paid and nothing ever arrived". Added because
-  `PAID → RECEIVED` was previously the only exit from `PAID`, stranding such orders forever; it is
-  the exact mirror of the sell side's `SHIPPED → PAYMENT_FAILED → WRITTEN_OFF`.
+- **Cancelling *is* allowed while `CONFIRMED`** (this reverses an earlier rule). BU needs an exit
+  from a confirmed order for a human error, and routing that through `REJECTED` poisons the one
+  metric `REJECTED` exists to feed. Nothing has moved yet, so nothing unwinds. wholesale-sell
+  matches.
+- **`DELIVERY_FAILED` → `WRITTEN_OFF`** covers "we paid and nothing ever arrived"; the exact
+  mirror of the sell side's `SHIPPED → PAYMENT_FAILED → WRITTEN_OFF`.
 - **Note required** on every failure-branch transition (`NoteRequiredError` → 422). The status log
   is the audit trail and "why" cannot be reconstructed from anywhere else.
-- **No cancelling after payment** — `PAID`/`RECEIVED`/`DISPUTED` exit via `RETURNED`, not `CANCELLED`.
-- **Inventory moves once, on entering `CHECKED`** — verified, not merely arrived, and always
+- **`RETURNED` also requires a `returnReason`** (`WEIGHT | BRAND | PURITY | DAMAGED | OTHER`,
+  `ReturnReasonRequiredError` → 422). Prose in a note cannot be aggregated, and supplier
+  reliability has to be countable.
+- **No cancelling after payment** — `PAID`/`RECEIVED`/`DISPUTED`/`RETURNED` exit via `REFUNDED` or
+  `WRITTEN_OFF`, not `CANCELLED`.
+- **Inventory moves once, on entering `STOCKED`** — put away, not merely arrived, and always
   `origin: 'foreign'` at **every** purity (only smelting makes domestic stock).
-- **Acceptance is all-or-nothing.** `actualWeight` at check time must equal the ordered weight;
-  anything else diverts the transaction to `DISPUTED` with nothing entering inventory, and the
-  discrepancy appended to the status note. A short delivery is for a human to settle with the
-  supplier, not something to book at a pro-rated cost. Accepting later clears the recorded
-  discrepancy — a `CHECKED` transaction always matches its order.
-- **Post-`CHECKED` corrections** go through `POST /inventory/loss|gain` with
+- **Accept as documented.** Acceptance takes *no* weight: it means the delivery matched its
+  document, so the ordered weight is what enters stock. The check is physical and happens at the
+  door, before custody transfers — a delivery whose weight, brand or purity disagrees is refused
+  via `PAID → RETURNED` and never signed for. Brand and purity are not discrepancies to negotiate
+  but the wrong product, and there is no amend path: refuse, terminate, create a new transaction.
+- **`RETURNED` is not terminal.** Our money left at `PAID`, so a shipment going back leaves the
+  supplier holding it. It resolves to `REFUNDED` (money back), `RECEIVED` (they re-delivered the
+  correct item) or `WRITTEN_OFF` (they never made us whole).
+- **`RECEIVED` has no direct route to `RETURNED`.** Once custody transfers, sending gold back goes
+  through `DISPUTED`, which is where the reason and the contested weight are recorded — and the
+  only move on a buy that stores a weight at all.
+- **`settledAmount`** is captured on the move into `PAID` when the payment differed from
+  `totalAmount`. A field, not a status: an accepted variance closes the deal exactly like an exact
+  payment, so it does not earn a state. Mirrored on wholesale-sell.
+- **Post-`STOCKED` corrections** go through `POST /inventory/loss|gain` with
   `referenceType: WHOLESALE_BUY`. Terminal transactions are never reopened.
 - **Confirmation is a bulk sweep, not a per-order deadline.** `POST /wholesale-buy/confirm-all`
   moves *every* `CREATED` transaction to `CONFIRMED`; the nightly cron calls it (logged as
@@ -142,9 +158,10 @@ CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> CHEC
   `PATCH /wholesale-buy/:id` is accepted while `CREATED` and refused after — confirmation is the
   lock. `confirmDueAt` (`WHOLESALE_BUY_AUTO_CONFIRM_HOUR`, default midnight) records when the next
   sweep lands and is **informational only**; nothing tests against it.
-- **`POST /wholesale-buy/:id/receive-check`** does `PAID → RECEIVED → CHECKED` in one call because
-  that is one operator action today. Both status rows are still written, so splitting the steps
-  later needs no migration. Like `/status`, it returns the status actually reached.
+- **`POST /wholesale-buy/:id/receive-stock`** does `PAID → RECEIVED → STOCKED` in one call because
+  that is one operator action and BU wants it to stay one. It takes no weight. Both status rows are
+  still written, so splitting the steps later needs no migration. This is deliberately *not*
+  mirrored on the sell side — see below.
 - **One price in, two stored.** The operator enters `pricePerGb965` only; the server derives
   `pricePerGb999 = 965 × 99.9/96.5` via the shared `derivePricePerGb999()`. The create schema does
   not accept the 99.9% quote — two typed prices could disagree, a derived one cannot. The item's
@@ -164,7 +181,7 @@ CREATED ─┬─> CONFIRMED ──> PACKED ──> SHIPPED ─┬─> PAID
          │                  │           │      ├─> PAYMENT_FAILED ─┬─> PAID | WRITTEN_OFF
          │                  │           └──────┴─> RETURNED
          │                  └─> RETURNED
-         │                (CONFIRMED also ─> REJECTED)
+         │           (CONFIRMED also ─> CANCELLED | REJECTED)
          ├─> CANCELLED
          └─> REJECTED
 
@@ -178,23 +195,35 @@ irreversible events happen in the opposite order**: we hand over gold first and 
 
 - **Inventory decrements on entering `PACKED`** — when gold leaves the vault to be boxed, not when
   it ships and not when the money lands. This is what keeps the two domains prudent in the *same*
-  direction: buy increments on the **second** goods state (`CHECKED`), sell decrements on the
+  direction: buy increments on the **second** goods state (`STOCKED`), sell decrements on the
   **first** (`PACKED`), so neither ever reports stock it does not physically hold. An earlier
   draft decremented at delivery and overstated stock for the whole transit window.
-- **`POST /:id/pack-ship`** does `CONFIRMED → PACKED → SHIPPED` in one call — the mirror of buy's
-  `receive-check`, and one floor action for the same reason. Both status rows are still written.
+- **Packing and shipping are two separate actions**, both plain `/status` moves. They used to be
+  fused behind `/pack-ship`, copied from buy's `receive-stock` by symmetry rather than from
+  anything BU said. Receiving and stocking really are one moment; a packed box waits for a courier.
+  Splitting them makes `PACKED` an observable resting state — so `CONFIRMED` is the "waiting to be
+  packed" worklist and `PACKED` the "waiting to ship" one — distinguishes on-premises from
+  off-premises custody, and makes `PACKED → RETURNED` a path something can actually take. The
+  decrement did not move; it still fires on entering `PACKED`. **The buy/sell symmetry governs
+  which edge of the transit window moves stock, not how many endpoints each domain exposes.**
+- **A `PACKING` state was considered and rejected**: one exit and no decision at it is a progress
+  indicator, not a state, and it would force the decrement either before the box is verified or
+  after the gold left the vault.
 - **`RETURNED` reverses the decrement** via `reverseDecrement()` (the first domain to wire it),
   booking opposite movements under `WHOLESALE_SELL_RETURN` rather than editing the original.
   Reachable from `PACKED`, `SHIPPED` and `DISPUTED` — every post-decrement state the gold can come
   home from. **Not** from `PAYMENT_FAILED`: there the buyer kept the gold *and* stiffed us.
-- **A wrong packed weight is a `422`, not a status** (`WeightMismatchError`) — the gold is still in
-  our own vault, so it is an operator correction, not a durable state. Same for a short pool
-  (`InsufficientStockError`). Both leave the transaction at `CONFIRMED` with nothing written.
-  The general rule: *a failure earns a status only when it is durable and changes what happens
-  next.* Buy's `DISPUTED` qualifies because the goods are the supplier's work; a re-pack does not.
-- **`DISPUTED` records the buyer's contested weight** on `actualWeight*` and moves no stock. It is
-  the only place a weight other than the agreed one is ever stored on a sell.
-- **No cancelling once confirmed**, matching buy exactly — only the counterparty can kill it.
+- **Packing records no weight.** We boxed our own gold from our own vault, so there is no second
+  independent measurement to capture; the agreed weight is what leaves. This replaced a
+  `WeightMismatchError` equality check that could only ever reject a typo. A short pool is still a
+  hard error (`InsufficientStockError` → 422, transaction stays `CONFIRMED`, nothing decremented).
+- **`DISPUTED` records the buyer's contested weight** on `actualWeight*` and moves no stock. Across
+  both domains the rule is now one line: *the only weight ever recorded besides the agreed one is a
+  contested one.*
+- **Cancelling is allowed until gold leaves the vault**, matching buy: `CREATED` and `CONFIRMED`
+  both route to `CANCELLED`; from `PACKED` on, the exit is `RETURNED`.
+- **`RETURNED` requires a `returnReason`** and **`PAID` accepts a `settledAmount`**, both exactly
+  as on the buy side.
 - **`WRITTEN_OFF`** is the terminal for a delivery that never gets paid for. It is the only
   bad-terminal status that still counts toward list weight totals — the gold really did leave, and
   nothing brought it back.
@@ -312,14 +341,43 @@ Outbound cost is derived from the current balance at decrement time — **no dai
 8. **`reverseDecrement()`** — not yet wired to any domain transition. Works without lot lookup — movements now carry pool keys directly, so reversal finds and restores the correct balance row.
 9. ~~**Daily snapshot as hard gate**~~ — resolved: outbound cost now uses live WAC from the balance at decrement time (`decrementBalance`). The daily-snapshot table and endpoints were removed entirely; no day-open compute is required before outbound transactions.
 
+## Tests
+
+`npm run test` (vitest). **No database, no server** — usecase-level only.
+
+Every dependency a usecase reaches for is a `Context.Tag` or a single factory module, so three
+`vi.mock` seams swap the edges and the domain logic runs unchanged: the repository adapter becomes
+an in-memory fake from `src/test/fakes.ts`, `inventory.usecase` becomes spies, and
+`infrastructure/quantity` returns fixed weights. `advanceStatus` itself executes exactly as it does
+in production.
+
+What that covers: transition rejection, note enforcement, `returnReason` enforcement, which effect
+each move owns, that accepting and packing take no weight, that acceptance clears a contested one,
+that `receive-stock` writes **both** status rows, and that the inventory hook runs **before** the
+status row so a failed movement never leaves a log entry claiming it happened.
+
+What it does not: any SQL, the live-WAC decrement under row lock, the HTTP layer (Zod, JWT,
+`toHttpError`), and inventory's own internals. **`src/test/README.md` is the full list** — read it
+before treating a green run as end-to-end safety.
+
+The one trap: the repository holder must be `vi.hoisted` *and* read via `Effect.sync`, not
+`Effect.succeed`. The domain's `Layer.effect(...)` is built once at module load, so an eager
+factory captures `undefined` for the whole file and every test dies rather than failing cleanly.
+
+Test files live beside the code they cover (`*.usecase.test.ts`) and are excluded from
+`tsconfig.build.json`, so they type-check under `npm run type-check` but never reach `dist/`.
+
 ## Dev Commands
 
 ```bash
 npm run dev          # tsx watch --env-file=.env src/index.ts
 npm run build        # tsc -p tsconfig.build.json
+npm run test         # vitest run — usecase tests, no DB
 npm run db:generate  # drizzle-kit generate
 npm run db:migrate   # drizzle-kit migrate
 ```
+
+From the repo root, `pnpm test` runs both workspaces through turbo.
 
 ## Environment Variables
 

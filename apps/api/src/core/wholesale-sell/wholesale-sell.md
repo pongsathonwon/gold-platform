@@ -7,6 +7,11 @@ lock, same one-entered-price rule, same "goods handling is two states behind one
 What differs is the **order of the two irreversible events** — on a buy we pay first and receive
 after; on a sell we hand over gold first and get paid after.
 
+The mirroring governs *which edge of the transit window moves stock*, and nothing more. It is not
+a reason for the two domains to expose the same endpoints: buy fuses `RECEIVED`/`STOCKED` behind
+one call because they are one moment on the floor, while `PACKED` and `SHIPPED` stay separate here
+because a packed box waits for a courier.
+
 **One item per transaction.** There is no line-item table — a multi-item deal is recorded as
 multiple transactions, so a partial handover or a single disputed bar never puts a whole deal into
 an ambiguous state.
@@ -23,10 +28,10 @@ CREATED ─┬─> CONFIRMED ──> PACKED ──> SHIPPED ─┬─> PAID
          │                  │           │      │                   └─> WRITTEN_OFF
          │                  │           └──────┴─> RETURNED
          │                  └─> RETURNED
+         │
+         │                (CONFIRMED also ─> CANCELLED | REJECTED)
          ├─> CANCELLED
          └─> REJECTED
-
-         (CONFIRMED also ─> REJECTED)
 
 decrement fires on entering PACKED · reversed on entering RETURNED
 ```
@@ -40,7 +45,7 @@ decrement fires on entering PACKED · reversed on entering RETURNED
 | `PAID` | The buyer's money arrived. | yes |
 | `DISPUTED` | The buyer contests the weight after delivery. Stock already left; their figure is recorded. | no |
 | `PAYMENT_FAILED` | The buyer's transfer bounced or came up short. Retryable back to `PAID`. | no |
-| `CANCELLED` | We backed out, before committing to the buyer. | yes |
+| `CANCELLED` | We backed out, before any gold left the vault. | yes |
 | `REJECTED` | The buyer declined. Tracked separately from `CANCELLED` — the counterparty killed it. | yes |
 | `RETURNED` | The gold came home. **The decrement is reversed** and the stock goes back. | yes |
 | `WRITTEN_OFF` | The receivable was given up on. The gold is gone and no money came for it. | yes |
@@ -50,10 +55,14 @@ Rules the server enforces on every transition:
 1. **The move must be in `allowedTransitions`**, else `422 invalid transition`.
 2. **Failure branches require a note** (`DISPUTED`, `PAYMENT_FAILED`, `CANCELLED`, `REJECTED`,
    `RETURNED`, `WRITTEN_OFF`), else `422 a note is required`.
-3. **No cancelling once we have committed to the buyer.** `CONFIRMED` onward has no route to
-   `CANCELLED` — only the counterparty can kill it, via `REJECTED`. This matches wholesale-buy
-   exactly; the two domains had diverged here and were aligned onto buy's stricter rule.
-4. **Nothing that has not decremented can reach `RETURNED`.** Reversing a decrement that never
+3. **`RETURNED` also requires a `returnReason`** — `WEIGHT | BRAND | PURITY | DAMAGED | OTHER` —
+   else `422`. Same rule and same reason set as the buy side.
+4. **Cancelling is possible until gold leaves the vault, and not after.** `CREATED` and
+   `CONFIRMED` both route to `CANCELLED`; from `PACKED` onward the exit is `RETURNED`, a physical
+   event that reverses the decrement. This matches wholesale-buy, which relaxed the same rule for
+   the same reason: forcing our own mistakes through `REJECTED` misreports them as the buyer
+   walking away, and `REJECTED` is what counterparty-reliability reporting counts.
+5. **Nothing that has not decremented can reach `RETURNED`.** Reversing a decrement that never
    happened would invent stock out of nothing.
 
 ---
@@ -68,7 +77,7 @@ pairing:
 
 | | first goods state | second goods state | stock moves on |
 |---|---|---|---|
-| buy | `RECEIVED` — it is here | `CHECKED` — it is verified | the **second** |
+| buy | `RECEIVED` — it is here | `STOCKED` — it is put away | the **second** |
 | sell | `PACKED` — it left the vault | `SHIPPED` — it left the building | the **first** |
 
 Both count the pessimistic edge of the transit window. Gold coming toward us is not ours until
@@ -77,10 +86,30 @@ reports stock it does not physically hold.** An earlier draft decremented at del
 overstated stock for the whole time a shipment was in transit — the exact error the buy side had
 already been designed to avoid.
 
-`POST /wholesale-sell/:id/pack-ship` performs both transitions in one call — the mirror of buy's
-`receive-check`, and one action on the floor for the same reason: the people who pull the gold are
-the people who hand it to the courier. Both status rows are still written, so splitting the steps
-later needs no migration.
+### Packing and shipping are two actions, not one
+
+They used to run through a single `/pack-ship` call, mirroring buy's `receive-check`. That merge
+was copied by symmetry rather than taken from anything BU said, and the two cases are not alike:
+
+- **Receiving and stocking are one moment.** The person who accepts a delivery is the person who
+  puts it away, with no interval between.
+- **Packing and shipping are not.** The box is pulled and sealed, then waits — for a courier, a
+  rider, or the buyer's own pickup. That wait is real, sometimes hours.
+
+Splitting them buys three things. `PACKED` becomes an observable resting state, so **"what is
+boxed and waiting to go out?" is answerable** — with the merge, no transaction was ever seen in
+`PACKED`. Custody is distinguished: `PACKED` is out of the vault but on the premises, `SHIPPED` is
+off the premises and at the counterparty's risk, and a vault count and a premises count disagree
+about exactly that gold. And `PACKED → RETURNED` stops being dead — "boxed it, the deal fell
+through, put it back" becomes a path something can actually take.
+
+Both moves now go through `/status` as ordinary transitions. The decrement did not move; it still
+fires on entering `PACKED`.
+
+A `PACKING` state was considered and rejected. Its only exit would be `PACKED` — one exit and no
+decision at it is a progress indicator, not a state — and it would force the decrement either
+before the box is verified or after the gold has already left the vault, breaking the property
+this whole section rests on.
 
 ### The reversal
 
@@ -98,27 +127,24 @@ stiffed us, which is what makes it a bad debt rather than a return.
 
 ---
 
-## 3. A Wrong Packed Weight is an Error, Not a Status
+## 3. Packing Records No Weight
 
-At `PACKED` the operator may supply `actualWeight` — what came out of the vault. **It must equal
-the agreed weight**, and anything else fails `WeightMismatchError` → `422` with nothing written and
-nothing decremented. The transaction stays `CONFIRMED`.
+`PACKED` takes no `actualWeight` at all. We boxed our own gold from our own vault, so there is no
+second, independent measurement to capture — the only figure a caller could supply is the agreed
+weight they already have. The agreed weight is what leaves.
 
-This is the deliberate asymmetry with buy's `DISPUTED`, and it follows from custody: on a buy the
-goods are the supplier's work and a wrong weight is a fact to record and argue about. On a sell the
-gold is still in **our own vault** and we control what goes in the box, so a wrong weight is an
-operator correction — re-pack and call again — not a durable state for anyone to work.
+This replaces an equality check that failed `WeightMismatchError` on anything else. The check could
+only ever reject a typo, and it made the same box in the dialog mean two opposite things depending
+on which move was in flight. Insufficient stock is still a hard error
+(`InsufficientStockError` → 422, transaction stays `CONFIRMED`, nothing decremented).
 
-The general rule this comes from: *a failure earns its own status only when it is durable and
-changes what happens next.* A wrong pack is neither. Insufficient stock is treated identically
-(`InsufficientStockError` → 422, transaction stays `CONFIRMED`).
-
-The equality test compares in the pairing's **input unit** (kg or gold baht), not in GB, because
-GB for a 99.9% deal is derived through a per-transaction `conversionFactor` snapshot.
+Buy dropped its own accept-time weight for the same reason, and the two domains now obey one rule:
+**the only weight ever recorded besides the agreed one is a contested one.**
 
 ### The one weight that is recorded
 
 `DISPUTED` is where a second weight legitimately exists: what the **buyer** says their scale read.
+It is the only genuinely independent measurement anywhere on a sell.
 It is stored on `actualWeightGb/Gm/Amount` and moves no stock — the gold left at `PACKED` and is
 sitting with them. It resolves through `resolveMeasuredQuantity()`, not `resolveQuantity()`: their
 scale is reporting what it read, so orderable-quantity rules must not reject it as invalid input.
@@ -202,8 +228,7 @@ All require a JWT. `recordedBy` / `updatedBy` come from the token, never the bod
 | `GET` | `/wholesale-sell` | filters: `currentStatus`, `settlementPeriod`, `supplierId`. Newest first |
 | `GET` | `/wholesale-sell/:id` | `{ transaction, statuses }`, status log oldest→newest |
 | `PATCH` | `/wholesale-sell/:id` | edit; `CREATED` only |
-| `POST` | `/wholesale-sell/:id/status` | `{ toStatus, note?, actualWeight? }` |
-| `POST` | `/wholesale-sell/:id/pack-ship` | `{ actualWeight?, note? }` — `CONFIRMED → PACKED → SHIPPED` in one call |
+| `POST` | `/wholesale-sell/:id/status` | `{ toStatus, note?, actualWeight?, settledAmount?, returnReason? }` |
 | `POST` | `/wholesale-sell/confirm-all` | bulk confirm. `?manual=true` attributes it to the operator |
 
 ---
@@ -220,6 +245,10 @@ Derived server-side from `recordedAt` by `resolveSettlementPeriod()` using the F
 `whole_sell_transactions` — one row per item. `price_per_gb` is the 96.5% quote,
 `price_per_gb_999` the derived one. `actual_weight_gb` / `actual_weight_gm` / `actual_amount` hold
 **the buyer's contested weight** only, set on a `DISPUTED` move. Null means nobody is arguing.
+
+`settled_amount` — what the buyer actually paid, when it differed from `total_amount`. Null means
+it matched. `return_reason` — `WEIGHT | BRAND | PURITY | DAMAGED | OTHER`, set on a move into
+`RETURNED`.
 
 `whole_sell_statuses` — append-only log, never updated or deleted. `current_status` is a
 write-through cache of the latest entry and is recomputable from this table.
@@ -239,7 +268,7 @@ meaning, since the old model decremented on entering it and the new one has alre
 | `InvalidTransitionError` | 422 | `toStatus` is not a legal next state |
 | `NoteRequiredError` | 422 | failure-branch transition with no note |
 | `NotEditableError` | 422 | edit attempted on a transaction that is no longer `CREATED` |
-| `WeightMismatchError` | 422 | packed weight ≠ agreed weight; nothing decremented, re-pack and retry |
+| `ReturnReasonRequiredError` | 422 | move into `RETURNED` with no `returnReason` |
 | `ProductTypePurityNotFoundError` | 422 | purity is not configured for that product type |
 | `InvalidQuantityError` | 422 | agreed weight breaks the pairing's quantity rule |
 | `InsufficientStockError` | 422 | the pool cannot cover the pack; nothing is written |
@@ -252,8 +281,9 @@ meaning, since the old model decremented on entering it and the new one has alre
    identity decision shared with every other domain.
 2. **No settlement summary endpoint yet** — Phase 4 position work.
 3. **No partial handover.** One transaction is one shipment.
-4. **`WRITTEN_OFF` has no accounting hook.** It records the fact for reporting; whether a bad-debt
-   entry should also post somewhere is a Phase 4 question.
+4. **`WRITTEN_OFF` and `settled_amount` have no accounting hook.** Both record a fact for
+   reporting; whether a bad-debt entry or a settlement variance should also post somewhere is a
+   Phase 4 question, shared with `wholesale-buy`.
 5. **`RETURNED` restores stock at the original cost**, because `reverseDecrement()` replays the
    recorded movement. If the pool's WAC moved while the gold was out, the restored cost is the old
    one — correct for the gold that came back, but it does shift the pool average.

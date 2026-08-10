@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
   AdvanceWholeBuyStatusReq, CreateWholeBuyReq,
-  ReceiveCheckWholeBuyReq, UpdateWholeBuyReq,
+  ReceiveStockWholeBuyReq, UpdateWholeBuyReq,
 } from "@gold-platform/types";
 import { client } from "../api/client";
 
@@ -76,12 +76,14 @@ export function useConfirmAllWholesaleBuy() {
   });
 }
 
-// receive + check in one action — the two status entries are still recorded server-side
-export function useReceiveCheckWholesaleBuy(id: string) {
+// Receive + stock in one action — the two status entries are still recorded server-side.
+// It carries no weight: accepting means the delivery matched its document, and one that did not
+// was refused at the door before custody transferred.
+export function useReceiveStockWholesaleBuy(id: string) {
   const invalidate = useInvalidateWholesaleBuy();
   return useMutation({
-    mutationFn: async (req: ReceiveCheckWholeBuyReq) => {
-      const res = await client["wholesale-buy"][":id"]["receive-check"].$post({
+    mutationFn: async (req: ReceiveStockWholeBuyReq) => {
+      const res = await client["wholesale-buy"][":id"]["receive-stock"].$post({
         param: { id }, json: req,
       });
       if (!res.ok) throw new Error(await parseErrorMessage(res));

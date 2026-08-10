@@ -11,15 +11,19 @@ delivery or a single disputed bar never puts a whole order into an ambiguous sta
 ## 1. State Machine
 
 ```
-CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> CHECKED     (inventory increments here)
-         │              │         │             ├─> DISPUTED ─┬─> CHECKED
-         │              │         │             │             └─> RETURNED
-         │              │         │             └─> RETURNED
+CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> STOCKED     (inventory increments here)
+         │              │         │             └─> DISPUTED ─┬─> STOCKED
+         │              │         │                           └─> RETURNED
+         │              │         ├─> RETURNED ─┬─> REFUNDED
+         │              │         │             ├─> RECEIVED      (re-delivery)
+         │              │         │             └─> WRITTEN_OFF
          │              │         └─> DELIVERY_FAILED ─┬─> RECEIVED
          │              │                              └─> WRITTEN_OFF
-         │              └─> PAYMENT_FAILED ─┬─> PAID
-         │                                  ├─> CANCELLED
-         │                                  └─> REJECTED
+         │              ├─> PAYMENT_FAILED ─┬─> PAID
+         │              │                   ├─> CANCELLED
+         │              │                   └─> REJECTED
+         │              ├─> CANCELLED
+         │              └─> REJECTED
          ├─> CANCELLED
          └─> REJECTED
 ```
@@ -29,28 +33,47 @@ CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> CHEC
 | `CREATED` | Order recorded. Legacy system status **1**. Editable for as long as it stays here. | no |
 | `CONFIRMED` | Committed to the supplier. Legacy system status **2**. | no |
 | `PAID` | Payment sent and accepted. | no |
-| `RECEIVED` | Goods physically arrived. Nothing has entered inventory yet. | no |
-| `CHECKED` | Goods verified. **The only status that moves inventory.** | yes |
+| `RECEIVED` | Goods arrived, matched their document, and were taken in. | no |
+| `STOCKED` | Put away. **The only status that moves inventory.** | yes |
 | `PAYMENT_FAILED` | Transfer bounced or the amount was wrong. Retryable back to `PAID`. | no |
 | `DELIVERY_FAILED` | We paid and the goods never turned up. They still might; if not, it is written off. | no |
-| `DISPUTED` | Arrived but failed verification; held pending resolution. | no |
-| `CANCELLED` | We backed out, before the supplier committed. | yes |
+| `DISPUTED` | Taken in, then contested; held pending resolution. | no |
+| `CANCELLED` | We backed out, before anything moved. | yes |
 | `REJECTED` | The supplier declined. Tracked separately from `CANCELLED` — the counterparty killed it, which is what supplier-reliability reporting needs. | yes |
-| `RETURNED` | Shipment sent back. Nothing ever enters inventory. | yes |
-| `WRITTEN_OFF` | We paid, nothing ever arrived, and we gave up chasing it. | yes |
+| `RETURNED` | Shipment went back — refused at the door, or sent back after a dispute. **Our money is still with the supplier**, so it is not terminal. | no |
+| `REFUNDED` | The supplier gave the money back. The clean close of a return. | yes |
+| `WRITTEN_OFF` | Our money left, nothing came back, and we gave up chasing it. | yes |
 
 Rules the server enforces on every transition:
 
 1. **The move must be in `allowedTransitions`**, else `422 invalid transition`.
 2. **Failure branches require a note** (`PAYMENT_FAILED`, `DELIVERY_FAILED`, `DISPUTED`,
-   `CANCELLED`, `REJECTED`, `RETURNED`, `WRITTEN_OFF`), else `422 a note is required`. The status
-   log is the audit trail and "why" is the only thing it cannot reconstruct.
-3. **Cancellation is impossible once paid.** `PAID`, `RECEIVED`, `DISPUTED` and `DELIVERY_FAILED`
-   have no route to `CANCELLED` — money has moved, so the exit is `RETURNED` (a physical-goods
-   event) or `WRITTEN_OFF` (nothing to return).
-4. **Cancellation is also impossible once confirmed.** `CONFIRMED` has no route to `CANCELLED`
-   either: once we have committed to the supplier, only they can kill it, via `REJECTED`.
-   `wholesale-sell` was aligned onto this rule.
+   `CANCELLED`, `REJECTED`, `RETURNED`, `REFUNDED`, `WRITTEN_OFF`), else `422 a note is required`.
+   The status log is the audit trail and "why" is the only thing it cannot reconstruct.
+3. **`RETURNED` also requires a `returnReason`** — `WEIGHT | BRAND | PURITY | DAMAGED | OTHER` —
+   else `422`. The note says what happened in prose; the reason is what makes it countable.
+   Supplier reliability is the whole justification for keeping `REJECTED` separate from
+   `CANCELLED`, and "HUA sent the wrong purity four times this quarter" is only answerable if the
+   cause is a column.
+4. **Cancellation is impossible once paid.** `PAID`, `RECEIVED`, `DISPUTED`, `RETURNED` and
+   `DELIVERY_FAILED` have no route to `CANCELLED` — money has moved, so the exit is `REFUNDED`
+   (we got it back) or `WRITTEN_OFF` (we did not).
+5. **Cancellation *is* possible while `CONFIRMED`.** This reverses an earlier rule that forced
+   every exit from `CONFIRMED` through `REJECTED`. BU needs a way out of a confirmed order for a
+   human error, and routing that through `REJECTED` poisons the one metric it exists to feed —
+   `REJECTED` means the supplier killed the order. Nothing has moved at `CONFIRMED`, so there is
+   nothing to unwind. `wholesale-sell` was aligned onto this.
+
+### `RETURNED` is not a dead end
+
+`RETURNED` used to be terminal, which was survivable only while it was an edge case. It is now
+the main failure path — a delivery that does not match its document is refused at the door
+(`PAID → RETURNED`) rather than taken in — and a terminal `RETURNED` after `PAID` closes the
+transaction with the supplier holding our cash and nothing in the record saying so.
+
+Its three exits are the three ways that can end: `REFUNDED` (money back), `RECEIVED` (they
+re-delivered the correct item, and the order resumes normally), `WRITTEN_OFF` (they never made us
+whole). Only `REFUNDED` and `WRITTEN_OFF` are terminal.
 
 ### `DELIVERY_FAILED` — the mirror of the sell side's `PAYMENT_FAILED`
 
@@ -123,32 +146,60 @@ single implementation, used by the server to store it and by the web form to pre
 
 ---
 
-## 4. Acceptance is All-or-Nothing
+## 4. Accept As Documented — the Check Happens at the Door
 
-At `CHECKED` the operator may supply `actualWeight` — what physically arrived, in the same unit as
-the ordered weight. **It must equal the ordered weight exactly.**
+**Acceptance takes no weight.** Moving to `STOCKED`, whether through `/status` or `/receive-stock`,
+carries no figure at all: acceptance *means* the delivery matched its document, so the ordered
+weight is what enters inventory.
 
-| `actualWeight` | Result |
-|---|---|
-| omitted, or equal to the order | → `CHECKED`. The **ordered** weight enters inventory. |
-| anything else | → `DISPUTED`. **Nothing enters inventory.** The measured weight is recorded on the transaction and the discrepancy is appended to the status note. |
+This replaces an all-or-nothing equality test, and the reason is that the test could not do any
+work. The only value `actualWeight` could legally hold on the accept path was the number already
+on the order — a field that permits exactly one value carries no information, and mistyping it
+diverted a perfectly good delivery into `DISPUTED`.
 
-A short or long delivery is a discrepancy for a human to settle with the supplier, not something to
-book at a pro-rated cost. The caller asks for `CHECKED`; the goods decide otherwise, and the
-response body returns the status actually reached.
+The check that matters is physical and happens **before custody transfers**: the receiver compares
+weight, brand and purity against the document with the courier still there. Three outcomes:
 
-Resolving a dispute means re-checking with the correct weight. On acceptance the recorded
-discrepancy is **cleared back to null** — acceptance implies the delivery matched, so a `CHECKED`
-transaction must never display a delivered weight different from its order. The `DISPUTED` entry in
+| At the door | Move | Effect |
+|---|---|---|
+| everything matches | `PAID → RECEIVED → STOCKED` | ordered weight enters inventory |
+| anything disagrees | `PAID → RETURNED` + `returnReason` | nothing enters inventory, nothing is signed for |
+| found wrong later, after signing | `RECEIVED → DISPUTED` + `actualWeight` | nothing enters inventory; the contested figure is recorded |
+
+**Brand and purity are not discrepancies — they are the wrong product.** Purity drives
+`unitOfMeasure`, the derived price and the target inventory pool, and the transaction locked at
+`CONFIRMED` with its price already derived from the purity ordered. There is no amend path: refuse,
+terminate, and create a new transaction.
+
+`RECEIVED` has **no direct route to `RETURNED`**. Once custody has transferred, sending gold back
+goes through `DISPUTED`, because that is where the reason and the contested weight get recorded.
+
+### The one weight that is recorded
+
+`DISPUTED` is the only move that stores a second weight, and the only path where typing one is
+worth anything — a dispute is meaningless without the number being disputed. On acceptance the
+recorded figure is **cleared back to null**: acceptance implies the delivery matched, so a
+`STOCKED` transaction must never display a weight different from its order. The `DISPUTED` entry in
 the status log is where that history lives.
 
-The equality test compares in the pairing's **input unit** (kg or gold baht), not in GB. GB for a
-99.9% order is derived through a per-transaction `conversionFactor` snapshot, so a master-rate
-change between order and delivery would otherwise make two identical kg figures compare unequal.
-
-`actualWeight` resolves through `resolveMeasuredQuantity()`, not `resolveQuantity()` — a delivery
-arriving 11.95 GB against a 12 GB order is a real short delivery, not invalid input, so the
+It resolves through `resolveMeasuredQuantity()`, not `resolveQuantity()` — a shipment coming to
+11.95 GB against a 12 GB order is a real short delivery, not invalid input, so the
 orderable-quantity rules (`minQuantity`, `allowedValues`) must not apply to it.
+
+> **Open for accounting:** if audit requires a weight recorded at every receipt, this is the wrong
+> design — you would need the weight always captured, always stored, with a tolerance band, and
+> within-tolerance deliveries accepted at the *measured* figure. That contradicts BU's
+> all-or-nothing rule and needs a tolerance policy nobody has set.
+
+## 4b. Settled Amount
+
+On a move into `PAID`, the caller may supply `settledAmount` — what was actually paid, when it
+differs from `totalAmount`. Null always means the payment matched.
+
+It is a **field, not a status**, and nothing branches on it: an accepted variance closes the deal
+exactly like an exact payment does, so by the rule below it does not earn a state. It exists
+because accounting needs the number and today it is unrecoverable from anywhere. Supplying it
+again on a retry after `PAYMENT_FAILED` overwrites it; omitting it clears it.
 
 ---
 
@@ -156,7 +207,7 @@ orderable-quantity rules (`minQuantity`, `allowedValues`) must not apply to it.
 
 | When | Effect |
 |---|---|
-| Entering `CHECKED` (from `RECEIVED` or `DISPUTED`) | `increment()` of the **ordered** weight — one balance upsert + one movement row, `referenceType: 'WHOLESALE_BUY'`, `referenceId` = transaction id |
+| Entering `STOCKED` (from `RECEIVED` or `DISPUTED`) | `increment()` of the **ordered** weight — one balance upsert + one movement row, `referenceType: 'WHOLESALE_BUY'`, `referenceId` = transaction id |
 | Every other status, including `DISPUTED` | nothing |
 
 **Always `origin: 'foreign'`, at every purity.** Only smelting produces domestic stock, and only
@@ -167,7 +218,7 @@ not caller-supplied.
 For 99.9% the server also forces `brandId = 'NA'` (those pools are keyed by origin, not brand), so
 the caller omits the brand entirely.
 
-**Corrections after `CHECKED`** do not reopen the transaction. It is terminal by design. Post a
+**Corrections after `STOCKED`** do not reopen the transaction. It is terminal by design. Post a
 manual adjustment through `POST /inventory/loss` (or `/gain`) with `referenceType: WHOLESALE_BUY`
 and a note pointing at the transaction — the correction then shows up in the movement ledger
 alongside the original, which a silent edit never would.
@@ -184,15 +235,24 @@ All require a JWT. `recordedBy` / `updatedBy` come from the token, never the bod
 | `GET` | `/wholesale-buy` | filters: `currentStatus`, `settlementPeriod`, `supplierId`. Newest first |
 | `GET` | `/wholesale-buy/:id` | `{ transaction, statuses }`, status log oldest→newest |
 | `PATCH` | `/wholesale-buy/:id` | edit; `CREATED` only |
-| `POST` | `/wholesale-buy/:id/status` | `{ toStatus, note?, actualWeight? }` → `{ status }`, the status actually reached |
-| `POST` | `/wholesale-buy/:id/receive-check` | `{ actualWeight?, note? }` — `PAID → RECEIVED → CHECKED` in one call, same return |
+| `POST` | `/wholesale-buy/:id/status` | `{ toStatus, note?, actualWeight?, settledAmount?, returnReason? }` → `{ status }` |
+| `POST` | `/wholesale-buy/:id/receive-stock` | `{ note? }` — `PAID → RECEIVED → STOCKED` in one call |
 | `POST` | `/wholesale-buy/confirm-all` | bulk confirm. `?manual=true` attributes it to the operator; without it, `BOT-CONFIRM` |
 
-### Why `receive-check` exists
+Each optional field on `/status` is read on exactly one move: `actualWeight` on `DISPUTED`,
+`settledAmount` on `PAID`, `returnReason` on `RETURNED`. Nothing diverts any more — the caller asks
+for a status and gets it, or gets a `422`.
 
-Receiving and checking are one operator action today — a handful of people work the floor and
-splitting it would create conflict, not control. The endpoint still writes **both** status entries,
-so when the two steps do get separated later, nothing already recorded needs migrating.
+### Why `receive-stock` exists
+
+Receiving and stocking are one operator action, and BU wants them to stay one: the person who
+accepts a delivery is the person who puts it away, and they would staff that role rather than split
+it. The endpoint still writes **both** status entries, so when the two steps do get separated
+later, nothing already recorded needs migrating.
+
+This is deliberately *not* mirrored on the sell side. The symmetry between the domains governs
+which edge of the transit window moves stock, not how many endpoints each exposes — and a packed
+box waits for a courier where an accepted delivery does not wait to be put away.
 
 ---
 
@@ -209,8 +269,12 @@ reassigned.
 `whole_buy_transactions` — one row per item. `price_per_gb` is the 96.5% quote (the column keeps
 its original name; the `pricePerGb965` field name just makes the meaning explicit),
 `price_per_gb_999` the derived 99.9% one. `actual_weight_gb` / `actual_weight_gm` / `actual_amount`
-hold an **outstanding discrepancy** only: set when a check is diverted to `DISPUTED`, cleared again
-if the shipment is later accepted. Null therefore always means "matches the order".
+hold an **outstanding discrepancy** only: written on a move into `DISPUTED`, cleared again if the
+shipment is later accepted. Null therefore always means "nobody is arguing".
+
+`settled_amount` — what was actually paid, when it differed from `total_amount`. Null means it
+matched. `return_reason` — `WEIGHT | BRAND | PURITY | DAMAGED | OTHER`, set on a move into
+`RETURNED`.
 
 `whole_buy_statuses` — append-only log, never updated or deleted. `current_status` on the
 transaction is a write-through cache of the latest entry and is recomputable from this table.
@@ -224,6 +288,7 @@ transaction is a write-through cache of the latest entry and is recomputable fro
 | `TransactionNotFoundError` | 404 | id does not exist |
 | `InvalidTransitionError` | 422 | `toStatus` is not a legal next state |
 | `NoteRequiredError` | 422 | failure-branch transition with no note |
+| `ReturnReasonRequiredError` | 422 | move into `RETURNED` with no `returnReason` |
 | `NotEditableError` | 422 | edit attempted on a transaction that is no longer `CREATED` |
 | `ProductTypePurityNotFoundError` | 422 | purity is not configured for that product type |
 | `InvalidQuantityError` | 422 | ordered weight breaks the pairing's quantity rule |
@@ -238,3 +303,11 @@ transaction is a write-through cache of the latest entry and is recomputable fro
    part of the Phase 4 position work, not built here.
 3. **No partial receiving.** One transaction is one receipt. A split delivery is recorded as
    separate transactions, not as multiple receipts against one.
+4. **`settled_amount` has no accounting hook.** It records the variance for reporting; whether an
+   accepted under- or over-payment should also post somewhere is a Phase 4 question, shared with
+   `wholesale-sell`.
+5. **Does audit require a weight at receipt?** See §4. If yes, accept-as-documented has to be
+   replaced by an always-captured weight with a tolerance band. Blocked on the accounting team.
+6. **`DISPUTED` may not survive.** It only has a job if verification can happen *after* the
+   courier leaves. If BU confirms the rider always waits, refuse-at-the-door covers every case and
+   `RECEIVED → DISPUTED` can go.

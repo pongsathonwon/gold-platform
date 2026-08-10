@@ -1,12 +1,15 @@
 import { Context, Data, Effect } from "effect";
 import {
-    WHOLE_SELL_INVENTORY_STATUS, WHOLE_SELL_REVERSAL_STATUS, WHOLE_SELL_TRANSITIONS,
+    WHOLE_SELL_INVENTORY_STATUS, WHOLE_SELL_RETURN_STATUS,
+    WHOLE_SELL_REVERSAL_STATUS, WHOLE_SELL_TRANSITIONS,
 } from "@gold-platform/types";
 import { RepositoryError } from "../../../infrastructure/db/client.js";
 import {
     CreateWholeSellStatus, CreateWholeSellTransaction,
     WholeSellStatus, WholeSellStatusShape, WholeSellTransactionShape,
 } from "../../../infrastructure/db/schema/wholesale-sell.schema.js";
+
+export type ReturnReason = NonNullable<WholeSellTransactionShape['returnReason']>
 
 // --- Domain errors ---
 
@@ -30,19 +33,10 @@ export class NotEditableError extends Data.TaggedError("WholeSellNotEditableErro
     currentStatus: WholeSellStatus
 }> {}
 
-/**
- * The packed weight did not equal the agreed weight.
- *
- * This is an error rather than a status, unlike the buy side's DISPUTED. The gold is still in
- * our own vault at this point and we control what goes in the box, so a wrong weight is an
- * operator correction — re-pack and call again — not a durable business state anyone has to
- * work. The transaction stays CONFIRMED and nothing is decremented.
- */
-export class WeightMismatchError extends Data.TaggedError("WholeSellWeightMismatchError")<{
+// a shipment coming home has to say which check it failed, exactly as on the buy side — prose in
+// a note cannot be counted, and "how often does this buyer send gold back" has to be answerable
+export class ReturnReasonRequiredError extends Data.TaggedError("WholeSellReturnReasonRequiredError")<{
     id: string
-    agreed: number
-    packed: number
-    unit: 'kg' | 'gb'
 }> {}
 
 // --- Repository port (outbound) ---
@@ -60,6 +54,10 @@ export type UpdateTransactionFields = Partial<Pick<WholeSellTransactionShape,
 export type ContestedFields = Pick<WholeSellTransactionShape,
     'actualWeightGb' | 'actualWeightGm' | 'actualAmount'>
 
+// the two figures a closing move records: what the buyer actually settled, and why gold came back
+export type SettlementFields = Partial<Pick<WholeSellTransactionShape,
+    'settledAmount' | 'returnReason'>>
+
 export interface ForWholeSellRepository {
     createTransaction(req: CreateWholeSellTransaction): Effect.Effect<WholeSellTransactionShape, RepositoryError>
     findTransactionById(id: string): Effect.Effect<WholeSellTransactionShape, RepositoryError | TransactionNotFoundError>
@@ -68,6 +66,8 @@ export interface ForWholeSellRepository {
     updateCurrentStatus(id: string, status: WholeSellStatus): Effect.Effect<void, RepositoryError>
     // records the weight the buyer contests; written on a move into DISPUTED
     recordContestedWeights(id: string, fields: ContestedFields): Effect.Effect<void, RepositoryError>
+    // records the settled amount or the return reason as a closing move supplies them
+    recordSettlement(id: string, fields: SettlementFields): Effect.Effect<void, RepositoryError>
     // everything still awaiting confirmation — the confirm-all job's work list
     listCreated(): Effect.Effect<WholeSellTransactionShape[], RepositoryError>
     createStatus(req: CreateWholeSellStatus): Effect.Effect<void, RepositoryError>
@@ -108,16 +108,12 @@ export interface AdvanceStatusReq {
     transactionId: string
     toStatus: WholeSellStatus
     note?: string
-    // only read on a transition into PACKED — what came out of the vault, in the agreed unit
+    // only read on a move into DISPUTED — the weight the buyer says their scale read
     actualWeight?: number
-    updatedBy: string
-}
-
-export interface PackAndShipReq {
-    transactionId: string
-    // what came out of the vault, in the same unit as the agreed weight; omit when it matches
-    actualWeight?: number
-    note?: string
+    // only read on a move into PAID — what was actually settled, when it differed from totalAmount
+    settledAmount?: number
+    // required on a move into RETURNED
+    returnReason?: ReturnReason
     updatedBy: string
 }
 
@@ -130,6 +126,15 @@ export const allowedTransitions: Record<WholeSellStatus, WholeSellStatus[]> = WH
 // transitions that must carry a note explaining the failure
 export const NOTE_REQUIRED_STATUSES: WholeSellStatus[] =
     ['DISPUTED', 'PAYMENT_FAILED', 'CANCELLED', 'REJECTED', 'RETURNED', 'WRITTEN_OFF']
+
+// the move that sends gold back to us; it must say why
+export const RETURN_STATUS: WholeSellStatus = WHOLE_SELL_RETURN_STATUS
+
+// the move that records what the buyer actually settled
+export const SETTLEMENT_STATUS: WholeSellStatus = 'PAID'
+
+// the move that records the buyer's contested weight
+export const CONTESTED_STATUS: WholeSellStatus = 'DISPUTED'
 
 // the transition that takes gold out of stock — it stops being ours when it leaves the vault to
 // be packed, not when it ships and not when the money lands

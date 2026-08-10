@@ -6,7 +6,7 @@ import {
     WholeSellStatus, wholeSellStatuses, wholeSellTransactions,
 } from "../../../infrastructure/db/schema/wholesale-sell.schema.js";
 import {
-    ContestedFields, ForWholeSellRepository, ListFilter,
+    ContestedFields, ForWholeSellRepository, ListFilter, SettlementFields,
     TransactionNotFoundError, UpdateTransactionFields,
 } from "../port/wholesale-sell.port.js";
 
@@ -83,6 +83,18 @@ class WholeSellRepositoryImpl implements ForWholeSellRepository {
                 .where(eq(wholeSellTransactions.id, id))
                 .execute(),
             catch: () => new RepositoryError({ message: `cannot record contested weight for transaction: ${id}` }),
+        }).pipe(Effect.map(() => undefined as void));
+    }
+
+    recordSettlement(id: string, fields: SettlementFields) {
+        // an empty patch would be an UPDATE with no SET clause, which Drizzle rejects at runtime
+        if (Object.keys(fields).length === 0) return Effect.succeed(undefined as void);
+        return Effect.tryPromise({
+            try: () => this.db.update(wholeSellTransactions)
+                .set(fields)
+                .where(eq(wholeSellTransactions.id, id))
+                .execute(),
+            catch: () => new RepositoryError({ message: `cannot record settlement for transaction: ${id}` }),
         }).pipe(Effect.map(() => undefined as void));
     }
 

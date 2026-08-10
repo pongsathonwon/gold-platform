@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import type { ReturnReasonValue } from "@gold-platform/types";
 import { client } from "../api/client";
 
 export interface WholeBuyTransaction {
@@ -13,9 +14,14 @@ export interface WholeBuyTransaction {
   pricePerGb965: number;
   pricePerGb999: number;
   totalAmount: number;
+  // the weight we contest, written only on a DISPUTED move and cleared again on acceptance
   actualWeightGb: number | null;
   actualWeightGm: number | null;
   actualAmount: number | null;
+  // what was actually paid, when it differed from totalAmount; null means it matched
+  settledAmount: number | null;
+  // why the shipment went back; set on the move into RETURNED
+  returnReason: ReturnReasonValue | null;
   settlementPeriod: string;
   currentStatus: string;
   confirmDueAt: string;

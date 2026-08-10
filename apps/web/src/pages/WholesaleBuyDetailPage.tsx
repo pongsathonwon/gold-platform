@@ -3,18 +3,20 @@ import { useParams, Link as RouterLink } from "react-router-dom";
 import {
   Container, Typography, Card, CardContent, Box, Chip, Button, Alert, CircularProgress,
   Table, TableBody, TableCell, TableRow, TableHead, Dialog, DialogTitle, DialogContent,
-  DialogActions, TextField, Divider, Stack,
+  DialogActions, TextField, Divider, Stack, MenuItem,
 } from "@mui/material";
-import type { WholeBuyStatusValue } from "@gold-platform/types";
+import {
+  RETURN_REASONS, returnReasonLabel, type ReturnReasonValue, type WholeBuyStatusValue,
+} from "@gold-platform/types";
 import { useWholesaleBuyDetail } from "../hooks/useWholesaleBuy";
-import { useAdvanceWholesaleBuyStatus, useReceiveCheckWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
+import { useAdvanceWholesaleBuyStatus, useReceiveStockWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
 import { useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
 import { formatNumber, formatWeight, nextStatuses, requiresNote, statusColor, statusLabel } from "../utils/wholeBuyStatus";
 
-// the combined receive+check action, offered alongside the plain transitions
-const RECEIVE_CHECK = "RECEIVE_CHECK" as const;
-type PendingAction = WholeBuyStatusValue | typeof RECEIVE_CHECK;
+// the combined receive+stock action, offered alongside the plain transitions
+const RECEIVE_STOCK = "RECEIVE_STOCK" as const;
+type PendingAction = WholeBuyStatusValue | typeof RECEIVE_STOCK;
 
 export function WholesaleBuyDetailPage() {
   const { id = "" } = useParams();
@@ -24,11 +26,13 @@ export function WholesaleBuyDetailPage() {
   const { data: productTypesRes } = useProductTypes();
 
   const advance = useAdvanceWholesaleBuyStatus(id);
-  const receiveCheck = useReceiveCheckWholesaleBuy(id);
+  const receiveStock = useReceiveStockWholesaleBuy(id);
 
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [note, setNote] = useState("");
   const [actualWeight, setActualWeight] = useState("");
+  const [settledAmount, setSettledAmount] = useState("");
+  const [returnReason, setReturnReason] = useState<ReturnReasonValue | "">("");
   const [actionError, setActionError] = useState<string | null>(null);
 
   if (isPending) return <Container sx={{ py: 4 }}><CircularProgress /></Container>;
@@ -47,14 +51,20 @@ export function WholesaleBuyDetailPage() {
   const productTypeName = productTypesRes?.data.find((p) => p.id === t.productTypeId)?.productType ?? t.productTypeId;
 
   const moves = nextStatuses(t.currentStatus);
-  // both actions in the dialog can carry a delivered weight, since both end at CHECKED
-  const collectsWeight = pending === "CHECKED" || pending === RECEIVE_CHECK;
-  const noteRequired = pending !== null && pending !== RECEIVE_CHECK && requiresNote(pending);
+  // Accepting takes no weight — it means the delivery matched its document, so the only figure it
+  // could hold is the one already on the order. DISPUTED is the one move where a weight is worth
+  // typing, because a dispute is meaningless without the number being disputed.
+  const contestsWeight = pending === "DISPUTED";
+  const collectsSettledAmount = pending === "PAID";
+  const collectsReturnReason = pending === "RETURNED";
+  const noteRequired = pending !== null && pending !== RECEIVE_STOCK && requiresNote(pending);
 
   function closeDialog() {
     setPending(null);
     setNote("");
     setActualWeight("");
+    setSettledAmount("");
+    setReturnReason("");
     setActionError(null);
   }
 
@@ -67,26 +77,27 @@ export function WholesaleBuyDetailPage() {
       setActionError("กรุณาระบุเหตุผล");
       return;
     }
+    if (collectsReturnReason && !returnReason) {
+      setActionError("กรุณาเลือกสาเหตุที่ตีกลับ");
+      return;
+    }
 
-    // the server returns the status actually reached — a mismatched delivery lands on รอตรวจสอบ
-    // rather than ตรวจรับแล้ว, and the operator has to be told that, not just "saved"
-    const onSuccess = (res: unknown) => {
-      const reached = (res as { data?: { status?: string } })?.data?.status;
-      const diverted = collectsWeight && reached && reached !== "CHECKED";
-      showToast(
-        diverted ? `น้ำหนักไม่ตรงกับที่สั่ง — เปลี่ยนเป็น "${statusLabel(reached)}"` : "อัปเดตสถานะแล้ว",
-        diverted ? "error" : "success",
-      );
+    // Nothing diverts any more: the caller asks for a status and gets it. A delivery that failed
+    // its check at the door is refused via ตีกลับผู้ขาย before custody transfers, rather than
+    // being taken in and silently rerouted to รอตรวจสอบ.
+    const onSuccess = () => {
+      showToast("อัปเดตสถานะแล้ว");
       closeDialog();
     };
     const onError = (err: unknown) =>
       setActionError(err instanceof Error ? err.message : "อัปเดตสถานะไม่สำเร็จ");
 
     const weight = actualWeight ? Number(actualWeight) : undefined;
+    const settled = settledAmount ? Number(settledAmount) : undefined;
 
-    if (pending === RECEIVE_CHECK) {
-      receiveCheck.mutate(
-        { ...(weight !== undefined ? { actualWeight: weight } : {}), ...(trimmedNote ? { note: trimmedNote } : {}) },
+    if (pending === RECEIVE_STOCK) {
+      receiveStock.mutate(
+        { ...(trimmedNote ? { note: trimmedNote } : {}) },
         { onSuccess, onError },
       );
       return;
@@ -96,7 +107,9 @@ export function WholesaleBuyDetailPage() {
       {
         toStatus: pending,
         ...(trimmedNote ? { note: trimmedNote } : {}),
-        ...(collectsWeight && weight !== undefined ? { actualWeight: weight } : {}),
+        ...(contestsWeight && weight !== undefined ? { actualWeight: weight } : {}),
+        ...(collectsSettledAmount && settled !== undefined ? { settledAmount: settled } : {}),
+        ...(collectsReturnReason && returnReason ? { returnReason } : {}),
       },
       { onSuccess, onError },
     );
@@ -121,11 +134,30 @@ export function WholesaleBuyDetailPage() {
     rows.push(["ยืนยันอัตโนมัติ", new Date(t.confirmDueAt).toLocaleString("th-TH")]);
   }
 
+  if (t.settledAmount !== null) {
+    const variance = t.settledAmount - t.totalAmount;
+    rows.push([
+      "ยอดที่จ่ายจริง",
+      <Box component="span">
+        {formatNumber(t.settledAmount)}
+        <Typography component="span" variant="caption" color={variance > 0 ? "error.main" : "success.main"} sx={{ ml: 1 }}>
+          ({variance > 0 ? "+" : ""}{formatNumber(variance)} เทียบกับที่สั่ง)
+        </Typography>
+      </Box>,
+    ]);
+  }
+
+  if (t.returnReason !== null) {
+    rows.push(["สาเหตุที่ตีกลับ", returnReasonLabel(t.returnReason)]);
+  }
+
+  // only ever populated by a DISPUTED move — accepting means the delivery matched its document,
+  // and acceptance clears any figure a previous dispute recorded
   if (t.actualWeightGb !== null) {
     const orderedGb = t.weightGb;
     const variance = t.actualWeightGb - orderedGb;
     rows.push([
-      "น้ำหนักที่รับจริง",
+      "น้ำหนักที่ชั่งได้",
       <Box component="span">
         {formatWeight(is999 ? (t.actualWeightGm ?? 0) : t.actualWeightGb)} {weightUnit}
         {variance !== 0 && (
@@ -178,10 +210,11 @@ export function WholesaleBuyDetailPage() {
               ดำเนินการต่อ
             </Typography>
             <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
-              {/* one operator action today: receive and check together. Both status entries are
-                  still written server-side, so splitting it later loses no history. */}
+              {/* one operator action: the person who accepts a delivery is the person who puts it
+                  away. Both status entries are still written server-side, so splitting it later
+                  loses no history. */}
               {t.currentStatus === "PAID" && (
-                <Button onClick={() => setPending(RECEIVE_CHECK)}>รับของและตรวจรับ</Button>
+                <Button onClick={() => setPending(RECEIVE_STOCK)}>รับของและเข้าสต๊อก</Button>
               )}
               {moves.map((s) => (
                 <Button
@@ -230,19 +263,54 @@ export function WholesaleBuyDetailPage() {
 
       <Dialog open={pending !== null} onClose={closeDialog} fullWidth maxWidth="xs">
         <DialogTitle>
-          {pending === RECEIVE_CHECK ? "รับของและตรวจรับ" : `เปลี่ยนสถานะเป็น ${pending ? statusLabel(pending) : ""}`}
+          {pending === RECEIVE_STOCK ? "รับของและเข้าสต๊อก" : `เปลี่ยนสถานะเป็น ${pending ? statusLabel(pending) : ""}`}
         </DialogTitle>
         <DialogContent>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
-            {collectsWeight && (
+            {pending === RECEIVE_STOCK && (
+              <Alert severity="info">
+                เข้าสต๊อกตามน้ำหนักที่สั่ง {formatWeight(is999 ? t.weightGm / 1000 : t.weightGb)}{" "}
+                {is999 ? "kg" : "บาท"} — หากของไม่ตรงกับเอกสาร ให้ปฏิเสธด้วย "ตีกลับผู้ขาย" แทน
+              </Alert>
+            )}
+            {contestsWeight && (
               <>
                 <TextField
-                  label={`น้ำหนักที่รับจริง (${is999 ? "kg" : "บาท"})`}
+                  label={`น้ำหนักที่ชั่งได้ (${is999 ? "kg" : "บาท"})`}
                   type="number"
                   value={actualWeight}
                   onChange={(e) => setActualWeight(e.target.value)}
-                  helperText={`เว้นว่างไว้หากตรงกับที่สั่ง (${formatWeight(is999 ? t.weightGm / 1000 : t.weightGb)} ${is999 ? "kg" : "บาท"}) — ถ้าไม่ตรง รายการจะถูกส่งไป "รอตรวจสอบ" และไม่เข้าสต๊อก`}
+                  helperText={`เทียบกับที่สั่ง ${formatWeight(is999 ? t.weightGm / 1000 : t.weightGb)} ${is999 ? "kg" : "บาท"} — บันทึกไว้เป็นหลักฐาน ไม่เข้าสต๊อก`}
                 />
+                <Divider />
+              </>
+            )}
+            {collectsSettledAmount && (
+              <>
+                <TextField
+                  label="ยอดที่จ่ายจริง"
+                  type="number"
+                  value={settledAmount}
+                  onChange={(e) => setSettledAmount(e.target.value)}
+                  helperText={`เว้นว่างไว้หากตรงกับยอดที่สั่ง (${formatNumber(t.totalAmount)}) — กรอกเฉพาะเมื่อจ่ายไม่เท่ากับที่สั่งและปิดรายการเลย`}
+                />
+                <Divider />
+              </>
+            )}
+            {collectsReturnReason && (
+              <>
+                <TextField
+                  select
+                  label="สาเหตุที่ตีกลับ (จำเป็น)"
+                  value={returnReason}
+                  onChange={(e) => setReturnReason(e.target.value as ReturnReasonValue)}
+                  required
+                  helperText="บันทึกเป็นข้อมูลสรุปได้ ต่างจากหมายเหตุที่เป็นข้อความอิสระ"
+                >
+                  {RETURN_REASONS.map((r) => (
+                    <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>
+                  ))}
+                </TextField>
                 <Divider />
               </>
             )}
@@ -261,7 +329,7 @@ export function WholesaleBuyDetailPage() {
           <Button variant="text" onClick={closeDialog}>
             ยกเลิก
           </Button>
-          <Button onClick={submitAction} disabled={advance.isPending || receiveCheck.isPending}>
+          <Button onClick={submitAction} disabled={advance.isPending || receiveStock.isPending}>
             ยืนยัน
           </Button>
         </DialogActions>

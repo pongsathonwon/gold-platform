@@ -2,18 +2,18 @@ import { Hono, type Context } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import {
-    advanceWholeSellStatusSchema, createWholeSellSchema, packShipWholeSellSchema,
+    advanceWholeSellStatusSchema, createWholeSellSchema,
     updateWholeSellSchema, wholeSellStatusSchema,
 } from "@gold-platform/types";
 import { runEffect } from "../../../infrastructure/runtime.js";
 import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
 import {
     advanceStatus, confirmAllCreated, createTransaction, getTransaction,
-    listTransactions, packAndShip, updateTransaction,
+    listTransactions, updateTransaction,
 } from "../application/wholesale-sell.usecase.js";
 import {
     InvalidTransitionError, NotEditableError, NoteRequiredError,
-    TransactionNotFoundError, WeightMismatchError,
+    ReturnReasonRequiredError, type ReturnReason, TransactionNotFoundError,
 } from "../port/wholesale-sell.port.js";
 import { InvalidQuantityError, ProductTypePurityNotFoundError } from "../../../infrastructure/quantity.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
@@ -27,11 +27,7 @@ function toHttpError(error: unknown): [string, number] {
     if (error instanceof NotEditableError) {
         return [`transaction ${error.id} is no longer editable — it is already ${error.currentStatus}`, 422]
     }
-    // an operator correction, not a business state: re-pack to the agreed weight and call again
-    if (error instanceof WeightMismatchError) {
-        const unit = error.unit === "kg" ? "kg" : "GB"
-        return [`packed weight ${error.packed} ${unit} must equal the agreed ${error.agreed} ${unit}`, 422]
-    }
+    if (error instanceof ReturnReasonRequiredError) return [`a return reason is required when gold comes back`, 422]
     if (error instanceof ProductTypePurityNotFoundError) {
         return [`purity ${error.purityId} is not valid for product type ${error.productTypeId}`, 422]
     }
@@ -99,23 +95,18 @@ export const wholesaleSellRoutes = new Hono()
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
+    // Packing and shipping both run through here as ordinary transitions. They used to be fused
+    // behind /pack-ship, copied from the buy side's receive-stock by symmetry rather than from
+    // anything BU said: receiving and stocking really are one moment, but a packed box waits for
+    // a courier, so PACKED is a state worth resting in — it is the "ready to ship" worklist.
     .post("/:id/status", zValidator("json", advanceWholeSellStatusSchema), async (c) => {
         const req = c.req.valid("json")
         const result = await runEffect(advanceStatus({
             transactionId: c.req.param("id"),
             ...req,
             toStatus: req.toStatus as WholeSellStatus,
+            returnReason: req.returnReason as ReturnReason | undefined,
             updatedBy: currentUsername(c),
-        }))
-        if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
-    })
-    // pack + ship as one operator action; both status entries are still logged, and the
-    // decrement runs once on the way through PACKED
-    .post("/:id/pack-ship", zValidator("json", packShipWholeSellSchema), async (c) => {
-        const req = c.req.valid("json")
-        const result = await runEffect(packAndShip({
-            transactionId: c.req.param("id"), ...req, updatedBy: currentUsername(c),
         }))
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)

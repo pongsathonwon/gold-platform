@@ -64,6 +64,13 @@
       "when": 1785900100000,
       "tag": "0008_whole_buy_delivery_failed",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785900200000,
+      "tag": "0009_wholesale_return_close_out",
+      "breakpoints": true
     }
   ]
 }
