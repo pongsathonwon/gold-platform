@@ -1,0 +1,16 @@
+-- No-op. This migration exists only to repair drizzle-kit's snapshot chain.
+--
+-- Migrations 0007, 0008 and 0009 were hand-written: each added its SQL file and a _journal.json
+-- entry, but none wrote a drizzle/meta/NNNN_snapshot.json. drizzle-kit does not read the database
+-- when generating — it diffs the TypeScript schema against the *last snapshot*, which therefore
+-- stayed frozen at 0006. `db:generate` consequently re-emitted every change since then as if it
+-- were new: CREATE TYPE for types that exist, ADD COLUMN for columns that exist, and a
+-- drop-and-recreate of both status enums. Running that output would have failed on the first
+-- duplicate column, after having already cast two live enum columns to text.
+--
+-- The accompanying meta/0010_snapshot.json is the fix: it is a true snapshot of the schema as it
+-- now stands, so future `db:generate` runs diff against reality. The database already has
+-- everything in it, which is why there is nothing to execute here.
+--
+-- If you hand-write a migration again, write the snapshot too, or the next person gets this.
+SELECT 1;

@@ -71,6 +71,13 @@
       "when": 1785900200000,
       "tag": "0009_wholesale_return_close_out",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786336078440,
+      "tag": "0010_realign_drizzle_snapshot",
+      "breakpoints": true
     }
   ]
 }
