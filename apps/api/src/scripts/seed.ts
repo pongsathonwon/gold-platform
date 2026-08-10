@@ -35,8 +35,8 @@ async function seed() {
     await db
         .insert(productTypes)
         .values([
-            { id: "BAR", productType: "Goldbar", supplierTradeable: true, active: true },
-            { id: "PLATE", productType: "Gold Plate", supplierTradeable: true, active: true },
+            { id: "BAR", productType: "ทองแท่ง", supplierTradeable: true, active: true },
+            { id: "PLATE", productType: "ทองแผ่น", supplierTradeable: true, active: true },
         ])
         .onConflictDoNothing();
     console.log("  ✓ product types");
@@ -46,7 +46,7 @@ async function seed() {
     await db
         .insert(brands)
         .values([
-            { id: "NA", brand: "N/A", nonFungible: false, active: false },
+            { id: "NA", brand: "อื่นๆ", nonFungible: false, active: true },
             { id: "HUA_GOLD", brand: "ฮั่วเซ่งเฮง", nonFungible: true, active: true },
         ])
         .onConflictDoNothing();
