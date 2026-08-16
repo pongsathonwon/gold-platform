@@ -1,4 +1,4 @@
-import { decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { date, decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { productTypes, purities, suppliers } from "./master.schema.js";
 
 // Happy path:  CREATED → CONFIRMED → PACKED → SHIPPED → PAID
@@ -79,7 +79,13 @@ export const wholeSellTransactions = pgTable('whole_sell_transactions', {
     // Why the shipment came home; set on the move into RETURNED, alongside the mandatory note.
     returnReason: wholeSellReturnReasonEnum(),
 
-    settlementPeriod: varchar().notNull(), // Fri–Thu week index e.g. "2026-W24", derived from recordedAt
+    // The day the deal was struck, as the operator states it — see the buy schema for the full
+    // reasoning. `recordedAt` below is when the row was written; these agree under a proper
+    // workflow and differ whenever an entry is written up after the fact.
+    transactionDate: date({ mode: 'string' }).notNull(),
+
+    // Fri–Thu week index e.g. "2026-W24", derived from transactionDate
+    settlementPeriod: varchar().notNull(),
 
     // write-through cache of the latest status row — recomputable from whole_sell_statuses
     currentStatus: wholeSellStatusEnum().notNull().default('CREATED'),

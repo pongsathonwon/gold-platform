@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { randomUUID } from "crypto";
 import { and, asc, eq, gte, lt, lte, sql } from "drizzle-orm";
+import { todayBusinessDate } from "@gold-platform/types";
 import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
 import {
     inventoryBalance, inventoryMovements,
@@ -175,6 +176,10 @@ class InventoryRepository implements ForInventoriesRepository {
                         weightGmDelta: entry.weightGm,
                         costDelta: entry.totalCost,
                         notes: null,
+                        // A transition-driven movement happens the day the metal moves. The
+                        // transaction's own transactionDate may be older — it dates the order,
+                        // not the delivery — so the ledger takes today either way.
+                        movementDate: todayBusinessDate(),
                         movedAt: new Date(),
                         movedBy: entry.movedBy,
                     }).execute();
@@ -232,6 +237,8 @@ class InventoryRepository implements ForInventoriesRepository {
                         weightGmDelta: -entry.weightGm,
                         costDelta: -costDelta,
                         notes: null,
+                        // as on the way in: the day the gold left, not the day the order is dated
+                        movementDate: todayBusinessDate(),
                         movedAt: new Date(),
                         movedBy: entry.movedBy,
                     }).execute();
@@ -278,18 +285,30 @@ class InventoryRepository implements ForInventoriesRepository {
         });
     }
 
+    /**
+     * The window is over `movementDate`, the movement's business day — so an adjustment written
+     * up late reads on the day it happened, and a from–to range means the days the operator
+     * named. Both ends are inclusive, which a `date` column gives for free: the old comparison
+     * against the `movedAt` timestamp silently dropped everything after midnight on the `to` day
+     * unless the caller remembered to send an end-of-day time.
+     */
     listMovements(filter: MovementFilter) {
         const conditions = [
             ...nonDateConditions(filter),
-            filter.from ? gte(inventoryMovements.movedAt, new Date(filter.from)) : undefined,
-            filter.to ? lte(inventoryMovements.movedAt, new Date(filter.to)) : undefined,
+            filter.from ? gte(inventoryMovements.movementDate, filter.from) : undefined,
+            filter.to ? lte(inventoryMovements.movementDate, filter.to) : undefined,
         ].filter(Boolean) as ReturnType<typeof eq>[];
 
-        // ascending by (movedAt, id) so the caller can run a deterministic forward cumulative
+        // ascending by (movementDate, movedAt, id) so the caller can run a deterministic forward
+        // cumulative — insert order breaks ties inside a day
         return Effect.tryPromise({
             try: () => this.db.select().from(inventoryMovements)
                 .where(conditions.length > 0 ? and(...conditions) : undefined)
-                .orderBy(asc(inventoryMovements.movedAt), asc(inventoryMovements.id))
+                .orderBy(
+                    asc(inventoryMovements.movementDate),
+                    asc(inventoryMovements.movedAt),
+                    asc(inventoryMovements.id),
+                )
                 .execute(),
             catch: () => new RepositoryError({ message: "cannot list movements" }),
         });
@@ -300,7 +319,8 @@ class InventoryRepository implements ForInventoriesRepository {
 
         const conditions = [
             ...nonDateConditions(filter),
-            lt(inventoryMovements.movedAt, new Date(filter.from)),
+            // strictly before the window's first day, on the same clock the window uses
+            lt(inventoryMovements.movementDate, filter.from),
         ] as ReturnType<typeof eq>[];
 
         return Effect.tryPromise({

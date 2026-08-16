@@ -10,7 +10,7 @@ import { useConfirmAllWholesaleSell } from "../hooks/useWholesaleSellMutations";
 import { useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
 import { splitByPurity } from "../utils/inventoryVolume";
-import { countsTowardTotal, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeSellStatus";
+import { countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeSellStatus";
 
 // 96.5% is dealt in gold baht, 99.9% in kilograms — the same split the inventory pages use.
 // Sectioning by purity is what lets each table state one unit in its header instead of showing
@@ -111,7 +111,8 @@ export function WholesaleSellListPage() {
 
                 return (
                   <TableRow key={t.id} hover>
-                    <TableCell>{new Date(t.recordedAt).toLocaleDateString("th-TH")}</TableCell>
+                    {/* the day the deal was struck, which is also what the list sorts on */}
+                    <TableCell>{formatBusinessDate(t.transactionDate)}</TableCell>
                     <TableCell>{supplierName(t.supplierId)}</TableCell>
                     <TableCell>{productTypeName(t.productTypeId)}</TableCell>
                     {/* the shipped weight is the agreed one; the buyer's contested figure shows

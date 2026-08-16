@@ -9,7 +9,7 @@ import {
   Box,
   Alert,
 } from "@mui/material";
-import { stockLossSchema, LOSS_TRANSACTION_TYPES } from "@gold-platform/types";
+import { stockLossSchema, todayBusinessDate, LOSS_TRANSACTION_TYPES } from "@gold-platform/types";
 import { useBrands, useProductTypePurities, useProductTypes } from "../hooks/useMasterData";
 import { useStockLoss } from "../hooks/useInventoryMutations";
 import { useToast } from "../components/ToastContext";
@@ -18,6 +18,7 @@ import { DynamicFormField } from "../forms/DynamicFormField";
 import { getVisibleFields, type FieldConfig } from "../forms/types";
 
 interface LossValues extends Record<string, string> {
+  transactionDate: string;
   productTypeId: string;
   purityId: string;
   brandId: string;
@@ -27,7 +28,10 @@ interface LossValues extends Record<string, string> {
   notes: string;
 }
 
+// as on the gain form: today by default, backdatable to the day the loss belongs to, and the
+// balance moves now regardless of which day that is
 const initialValues: LossValues = {
+  transactionDate: todayBusinessDate(),
   productTypeId: "",
   purityId: "",
   brandId: "",
@@ -66,6 +70,16 @@ export function StockLossPage() {
   }
 
   const fields: FieldConfig<LossValues>[] = [
+    {
+      name: "transactionDate",
+      label: "วันที่ทำรายการ",
+      kind: "date",
+      required: true,
+      helperText: (v) =>
+        v.transactionDate && v.transactionDate !== todayBusinessDate()
+          ? "บันทึกย้อนหลัง — สต๊อกจะลดทันที แต่รายการจะแสดงตามวันที่เลือก"
+          : undefined,
+    },
     {
       name: "productTypeId",
       label: "ประเภททองคำ",
@@ -137,6 +151,7 @@ export function StockLossPage() {
       productTypeId: values.productTypeId,
       weight: Number(values.weight),
       referenceType: values.referenceType,
+      transactionDate: values.transactionDate,
       notes: values.notes || undefined,
     };
 

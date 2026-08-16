@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { todayBusinessDate } from "@gold-platform/types";
 import {
     expectFailure, expectSuccess, loggedStatuses, makeFakeSellRepo, sellTransaction,
 } from "../../../test/fakes.js";
@@ -56,7 +57,7 @@ vi.mock("../../../infrastructure/quantity.js", async () => {
 let repoState: ReturnType<typeof makeFakeSellRepo>["state"];
 
 const { decrementSplit, reverseDecrement } = await import("../../inventory/application/inventory.usecase.js");
-const { advanceStatus } = await import("./wholesale-sell.usecase.js");
+const { advanceStatus, createTransaction, updateTransaction } = await import("./wholesale-sell.usecase.js");
 
 function given(overrides: Partial<WholeSellTransactionShape> = {}) {
     const transaction = sellTransaction(overrides);
@@ -228,5 +229,47 @@ describe("the buyer's own figures", () => {
         const t = given({ currentStatus: "PAYMENT_FAILED", settledAmount: 100000 });
         await expectSuccess(move(t.id, { toStatus: "PAID" }));
         expect(repoState.transaction.settledAmount).toBeNull();
+    });
+});
+
+// The mirror of the buy suite's date coverage: what a sell records is a different event, but the
+// rule is the same one — the period follows the day the deal happened, not the day it was typed.
+describe("the picked business date and the insert timestamp", () => {
+    const createReq = {
+        supplierId: "11111111-1111-1111-1111-111111111111",
+        purityId: "965",
+        productTypeId: "BAR",
+        weight: 12,
+        pricePerGb965: 48250,
+        recordedBy: "tester",
+    };
+
+    it("files a backdated sale in the period its own date falls in", async () => {
+        given();
+        const created = await expectSuccess(
+            createTransaction({ ...createReq, transactionDate: "2026-06-11" }),
+        );
+
+        expect(created.transactionDate).toBe("2026-06-11");
+        expect(created.settlementPeriod).toBe("2026-W23");
+        // the insert timestamp stays the server's own, whatever date was picked
+        expect(created.recordedAt.getTime()).toBeLessThanOrEqual(Date.now());
+    });
+
+    it("defaults to today when the operator picks nothing", async () => {
+        given();
+        const created = await expectSuccess(createTransaction(createReq));
+        expect(created.transactionDate).toBe(todayBusinessDate());
+    });
+
+    it("re-derives the period when the date is corrected while still CREATED", async () => {
+        const t = given({ currentStatus: "CREATED", transactionDate: "2026-06-12", settlementPeriod: "2026-W24" });
+
+        const updated = await expectSuccess(updateTransaction({
+            transactionId: t.id, transactionDate: "2026-06-11", updatedBy: "tester",
+        }));
+
+        expect(updated.transactionDate).toBe("2026-06-11");
+        expect(updated.settlementPeriod).toBe("2026-W23");
     });
 });

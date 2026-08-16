@@ -44,10 +44,13 @@ export class ReturnReasonRequiredError extends Data.TaggedError("WholeSellReturn
 export type ListFilter = Partial<Pick<WholeSellTransactionShape,
     'currentStatus' | 'settlementPeriod' | 'supplierId'>>
 
+// transactionDate and settlementPeriod move together — the period is derived from the date, so
+// neither is ever patched without the other
 export type UpdateTransactionFields = Partial<Pick<WholeSellTransactionShape,
     | 'supplierId' | 'purityId' | 'productTypeId'
     | 'weightGb' | 'weightGm' | 'conversionFactor'
-    | 'pricePerGb965' | 'pricePerGb999' | 'totalAmount' | 'notes'>>
+    | 'pricePerGb965' | 'pricePerGb999' | 'totalAmount' | 'notes'
+    | 'transactionDate' | 'settlementPeriod'>>
 
 // the buyer's own figure, written only when a shipped deal is disputed — never the packed weight,
 // which always equals the agreement
@@ -78,7 +81,7 @@ export class WholeSellRepository extends Context.Tag('wholesale-sell/repository'
 
 // --- Command shapes ---
 
-// settlementPeriod is never caller-supplied — it is derived from recordedAt server-side.
+// settlementPeriod is never caller-supplied — it is derived server-side from transactionDate.
 // Brand is not supplied either: which stamps leave the vault is decided at packing time, out of
 // whatever is on the shelf, so brand is recorded on the move into PACKED.
 export interface CreateTransactionReq {
@@ -88,6 +91,9 @@ export interface CreateTransactionReq {
     weight: number
     // the only price supplied; the 99.9% quote is derived from it
     pricePerGb965: number
+    // `YYYY-MM-DD`, the day the deal was struck. Omitted means today. Distinct from recordedAt,
+    // which is the insert timestamp and is never accepted from a caller.
+    transactionDate?: string
     notes?: string
     recordedBy: string
 }
@@ -99,6 +105,8 @@ export interface UpdateTransactionReq {
     productTypeId?: string
     weight?: number
     pricePerGb965?: number
+    // correcting it re-derives the settlement period; only accepted while still CREATED
+    transactionDate?: string
     notes?: string
     updatedBy: string
 }

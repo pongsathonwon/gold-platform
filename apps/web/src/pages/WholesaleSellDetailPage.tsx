@@ -6,14 +6,17 @@ import {
   DialogActions, TextField, Divider, Stack, MenuItem,
 } from "@mui/material";
 import {
-  RETURN_REASONS, returnReasonLabel, type ReturnReasonValue, type WholeSellStatusValue,
+  businessDateOf, RETURN_REASONS, returnReasonLabel,
+  type ReturnReasonValue, type WholeSellStatusValue,
 } from "@gold-platform/types";
 import { useWholesaleSellDetail } from "../hooks/useWholesaleSell";
 import { useAdvanceWholesaleSellStatus } from "../hooks/useWholesaleSellMutations";
 import { useBrands, useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
 import { BrandSplitFields, toBrandSplit, type BrandSplitDraft } from "../components/BrandSplitFields";
-import { formatNumber, formatWeight, nextStatuses, requiresNote, statusColor, statusLabel } from "../utils/wholeSellStatus";
+import {
+  formatBusinessDate, formatNumber, formatWeight, nextStatuses, requiresNote, statusColor, statusLabel,
+} from "../utils/wholeSellStatus";
 
 // Packing and shipping are two separate operator actions. They used to be fused behind one
 // button, copied from the buy side by symmetry rather than from how the floor works: receiving
@@ -117,7 +120,9 @@ export function WholesaleSellDetailPage() {
     );
   }
 
+  // the business date up top with the deal, the insert timestamp at the bottom with who typed it
   const rows: [string, React.ReactNode][] = [
+    ["วันที่ทำรายการ", formatBusinessDate(t.transactionDate)],
     ["ผู้รับซื้อส่ง", supplierName],
     ["ประเภททองคำ", productTypeName],
     ["% ทอง", is999 ? "99.9%" : "96.5%"],
@@ -135,7 +140,17 @@ export function WholesaleSellDetailPage() {
     ["ราคาต่อบาททอง 99.9%", formatNumber(t.pricePerGb999)],
     ["ยอดรวมที่ตกลง", formatNumber(t.totalAmount)],
     ["งวดชำระ", t.settlementPeriod],
-    ["บันทึกโดย", `${t.recordedBy} · ${new Date(t.recordedAt).toLocaleString("th-TH")}`],
+    [
+      "บันทึกโดย",
+      <Box component="span">
+        {t.recordedBy} · {new Date(t.recordedAt).toLocaleString("th-TH")}
+        {businessDateOf(new Date(t.recordedAt)) !== t.transactionDate && (
+          <Typography component="span" variant="caption" color="warning.main" sx={{ ml: 1 }}>
+            (บันทึกย้อนหลัง)
+          </Typography>
+        )}
+      </Box>,
+    ],
   ];
 
   // editable only while CREATED, and the nightly sweep is what ends that — so the deadline is

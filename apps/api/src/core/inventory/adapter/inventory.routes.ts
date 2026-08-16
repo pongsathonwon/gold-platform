@@ -3,7 +3,7 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { runEffect } from "../../../infrastructure/runtime.js";
 import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
-import { stockGainSchema, stockLossSchema, productSwitchSchema } from "@gold-platform/types";
+import { businessDaySchema, stockGainSchema, stockLossSchema, productSwitchSchema } from "@gold-platform/types";
 import { InsufficientStockError } from "../port/inventories.port.js";
 import { InvalidQuantityError, ProductTypePurityNotFoundError } from "../../../infrastructure/quantity.js";
 import { PurityNotFoundError, NoConversionRateError } from "../../../infrastructure/weight.js";
@@ -17,9 +17,11 @@ const movementsQuerySchema = z.object({
     origin: z.enum(['domestic', 'foreign']).optional(),
     productTypeId: z.string().optional(),
     referenceType: z.string().optional(),
-    // ISO datetimes: start-of-`from`-day and end-of-`to`-day; window is [from, to] inclusive
-    from: z.string().datetime().optional(),
-    to: z.string().datetime().optional(),
+    // Business days (`YYYY-MM-DD`), not instants: the window is over each movement's
+    // `movementDate`, and both ends are inclusive. Callers used to send ISO datetimes and had to
+    // remember an end-of-day time on `to` or lose the last day's movements.
+    from: businessDaySchema.optional(),
+    to: businessDaySchema.optional(),
 })
 
 function toHttpError(error: unknown): [string, number] {

@@ -85,6 +85,13 @@
       "when": 1786850552401,
       "tag": "0011_brand_at_inventory_time",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786852820557,
+      "tag": "0012_business_transaction_date",
+      "breakpoints": true
     }
   ]
 }

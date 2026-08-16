@@ -286,11 +286,23 @@ box waits for a courier where an accepted delivery does not wait to be put away.
 
 ---
 
-## 7. Settlement Period
+## 7. Two dates, and the settlement period
 
-Derived server-side from `recordedAt` by `resolveSettlementPeriod()` (`infrastructure/settlement.ts`)
-using the Fri 00:00 → Thu 23:59 boundary, and frozen. Callers never supply it, and it is never
-reassigned.
+A transaction carries **`transactionDate`** — the day the order was placed, as the operator states
+it — and **`recordedAt`**, the instant the row was written. On day one these routinely differ,
+because the shop is documenting orders that already happened; under a proper workflow they agree
+and nothing draws attention to them. `transactionDate` is optional on the wire and defaults to
+today (Bangkok); `recordedAt` is the server clock and is never accepted from a caller.
+
+`settlementPeriod` is derived from **`transactionDate`** by `resolveSettlementPeriodOn()`
+(`infrastructure/settlement.ts`) using the Fri 00:00 → Thu 23:59 boundary, and frozen. Callers
+never supply it. Deriving it from `recordedAt` would make backdating decorative — an order
+backdated to last Thursday has to land in last week's period.
+
+Correcting the date via `PATCH` re-derives the period with it; both are refused once the
+transaction leaves `CREATED`, which is the same lock that governs every other editable field.
+`confirmDueAt` is unaffected — the edit window closes at the next real nightly sweep, however old
+the order being typed in is.
 
 ---
 

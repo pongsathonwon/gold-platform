@@ -21,6 +21,10 @@ export interface WholeBuyTransaction {
   settledAmount: number | null;
   // why the shipment went back; set on the move into RETURNED
   returnReason: ReturnReasonValue | null;
+  // the day the order was placed, `YYYY-MM-DD` — what the settlement period is derived from and
+  // what lists and reports read. Distinct from recordedAt below, which is when the row was
+  // written; they agree unless the entry was made after the fact.
+  transactionDate: string;
   settlementPeriod: string;
   currentStatus: string;
   confirmDueAt: string;

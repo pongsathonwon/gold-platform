@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { BrandSplit, derivePricePerGb999 } from "@gold-platform/types";
+import { BrandSplit, derivePricePerGb999, todayBusinessDate } from "@gold-platform/types";
 import {
     AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CONTESTED_STATUS,
     CreateTransactionReq, INVENTORY_STATUS, InvalidTransitionError, ListFilter,
@@ -13,7 +13,7 @@ import { WholeBuyStatus, WholeBuyTransactionShape } from "../../../infrastructur
 import { findBrandSplitByReference, incrementSplit } from "../../inventory/application/inventory.usecase.js";
 import { findQuantityRule, resolveMeasuredQuantity, resolveQuantity } from "../../../infrastructure/quantity.js";
 import { apportionCost, resolveBrandSplit } from "../../../infrastructure/brand-split.js";
-import { resolveSettlementPeriod } from "../../../infrastructure/settlement.js";
+import { resolveSettlementPeriodOn } from "../../../infrastructure/settlement.js";
 
 const wholeBuyLive = Layer.effect(WholeBuyRepository, makeWholeBuyRepository);
 
@@ -33,6 +33,10 @@ export const createTransaction = (req: CreateTransactionReq) =>
         const repo = yield* WholeBuyRepository;
         const id = randomUUID();
         const now = new Date();
+        // The day the order happened, per the operator; today when they say nothing. Everything
+        // that reports on *when the business did something* keys off this. `now` stays the
+        // bookkeeping instant and is written to recordedAt untouched.
+        const transactionDate = req.transactionDate ?? todayBusinessDate(now);
 
         // validates the productType/purity pairing and the orderable-quantity rule for it
         const { weightGb, weightGm, conversionFactor, unitOfMeasure } =
@@ -58,10 +62,15 @@ export const createTransaction = (req: CreateTransactionReq) =>
             actualAmount: null,
             settledAmount: null,
             returnReason: null,
-            // callers never supply the period — it is derived from the recording time and frozen
-            settlementPeriod: resolveSettlementPeriod(now),
+            transactionDate,
+            // callers never supply the period — it is derived from the day the order happened and
+            // frozen there. A backdated order lands in the period it belongs to, which is the
+            // whole reason the date is pickable.
+            settlementPeriod: resolveSettlementPeriodOn(transactionDate),
             currentStatus: 'CREATED',
-            // informational: when the nightly job will sweep this up if nobody confirms it first
+            // informational: when the nightly job will sweep this up if nobody confirms it first.
+            // Real time, not business date — the edit window closes at the next actual sweep,
+            // however old the order being typed in is.
             confirmDueAt: nextAutoConfirmAt(now),
             notes: req.notes ?? null,
             recordedBy: req.recordedBy,
@@ -99,6 +108,15 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
         const fields: UpdateTransactionFields = {};
         if (req.supplierId !== undefined) fields.supplierId = req.supplierId;
         if (req.notes !== undefined) fields.notes = req.notes;
+
+        // Correcting the date moves the settlement period with it — they are one fact, and a
+        // transaction whose stated day and whose reporting bucket disagree is worse than either
+        // being wrong alone. Immutability of the period assignment starts at confirmation, which
+        // is the same lock guarding every other field here: nothing has been reported on yet.
+        if (req.transactionDate !== undefined) {
+            fields.transactionDate = req.transactionDate;
+            fields.settlementPeriod = resolveSettlementPeriodOn(req.transactionDate);
+        }
 
         // weight, purity, product type and price all feed weightGb/totalAmount — if any of them
         // moved, both the resolved weights and the amount are recomputed from the merged values

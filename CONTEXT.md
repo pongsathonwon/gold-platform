@@ -163,9 +163,25 @@ Interchangeable within the same brand and purity for fulfilment (two 5 GB bars =
 
 ## 5. Settlement Period Model
 
-Every transaction belongs to exactly one **Fri 00:00 → Thu 23:59** period, assigned at recording time. Assignment is immutable.
+Every transaction belongs to exactly one **Fri 00:00 → Thu 23:59** period, assigned at creation. Assignment is immutable once the transaction is confirmed.
 
-`settlementPeriod` is auto-derived server-side from `recordedAt`. **Callers never supply it.** Format: ISO week string e.g. `"2026-W24"`.
+`settlementPeriod` is auto-derived server-side from **`transactionDate`** — the day the operator says the deal happened, not the instant the row was written. **Callers never supply the period.** Format: ISO week string e.g. `"2026-W24"`.
+
+### Two dates on every record
+
+Recording an event and the event happening are different facts, and on day one they routinely differ: the shop is documenting operations that already took place, and even under full adoption an entry can land the morning after.
+
+| Field | Meaning | Who sets it |
+|---|---|---|
+| `transactionDate` | the business day the deal/adjustment happened — a `date`, defaulting to today | operator picks it; optional on the wire |
+| `recordedAt` / `auditedAt` | the instant the row reached the database | server clock, never caller-supplied |
+
+- **The period follows `transactionDate`.** An order backdated to last Thursday lands in last week's period. Deriving it from the insert time would make backdating decorative.
+- **A day, not an instant.** The only thing the picked date decides is which Fri–Thu period the record falls in, and that boundary is a day boundary. A time of day would add no information and one more timezone to get wrong. "Today" means today in `Asia/Bangkok` (`todayBusinessDate()` in `@gold-platform/types`), not on whatever clock the server or browser runs.
+- **The future is refused**; there is no floor on backdating.
+- **Correcting the date re-derives the period**, and is accepted only while a transaction is still `CREATED` — the same lock that governs every other editable field.
+- **On adjustments, the picked date documents; it does not replay.** A backdated stock gain or loss moves the balance *now*, at today's live WAC. It dates the record and the movement, so reports read on the day it happened, but it does not retroactively re-average costs already applied.
+- Carried by: wholesale-buy, wholesale-sell, stock gain, stock loss. Inventory movements carry `movementDate`, the trading day the metal moved — the picked date for a manual adjustment, the day of the transition for everything else.
 
 ### Period Net Calculation (Phase 4 — not yet built)
 
@@ -215,7 +231,7 @@ One immutable row per Fri–Thu period. Rows never auto-sum. Each row shows Net 
 6. **Domestic pool is protected.** Only `convert_out` can decrement domestic-origin stock. All other outbound domains are hardcoded to `foreign` and cannot touch the domestic pool.
 6. **Bar sizes are interchangeable within the same brand.** Two 5 GB = one 10 GB. Brand segregation still applies.
 7. **Inventory and position are decoupled.** A retail-buy feeds position (period net). It does not touch HQ inventory.
-8. **Period assignment is immutable.** Transactions cannot be reassigned after posting.
+8. **Period assignment is immutable.** Transactions cannot be reassigned after posting. It is derived from `transactionDate` — the picked business day — and correcting that date is accepted only while the transaction is still `CREATED`; confirmation is the lock.
 9. **Internal transfers are excluded from period net.** They are inventory-only events.
 10. **`conversionFactor` is snapshotted at creation.** Historical records stay accurate if the master rate changes.
 11. **`gold_market_price` is never cached.** Always query live: `ORDER BY recorded_at DESC LIMIT 1`.

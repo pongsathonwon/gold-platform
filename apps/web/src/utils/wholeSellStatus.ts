@@ -55,4 +55,4 @@ export const countsTowardTotal = (status: string) => {
   return !WHOLE_SELL_EXCLUDED_FROM_TOTALS.includes(status as WholeSellStatusValue);
 };
 
-export { formatNumber, formatWeight } from "./format";
+export { formatNumber, formatWeight, formatBusinessDate } from "./format";

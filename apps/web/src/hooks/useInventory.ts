@@ -23,6 +23,9 @@ export interface InventoryMovementRow {
   weightGmDelta: number;
   costDelta: number;
   notes: string | null;
+  // the trading day this movement belongs to (`YYYY-MM-DD`) — what the window filters on, and
+  // what a backdated adjustment carries. `movedAt` is when the row was written.
+  movementDate: string;
   movedAt: string;
   movedBy: string;
 }
@@ -33,7 +36,8 @@ export interface InventoryMovementFilter {
   origin?: "domestic" | "foreign";
   productTypeId?: string;
   referenceType?: string;
-  // ISO datetimes bounding the window [from, to] inclusive
+  // business days (`YYYY-MM-DD`) bounding the window [from, to] inclusive, matched against each
+  // movement's movementDate — no times, so the last day of a range cannot fall off the end
   from?: string;
   to?: string;
 }

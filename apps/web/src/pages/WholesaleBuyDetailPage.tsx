@@ -6,14 +6,17 @@ import {
   DialogActions, TextField, Divider, Stack, MenuItem,
 } from "@mui/material";
 import {
-  RETURN_REASONS, returnReasonLabel, type ReturnReasonValue, type WholeBuyStatusValue,
+  businessDateOf, RETURN_REASONS, returnReasonLabel,
+  type ReturnReasonValue, type WholeBuyStatusValue,
 } from "@gold-platform/types";
 import { useWholesaleBuyDetail } from "../hooks/useWholesaleBuy";
 import { useAdvanceWholesaleBuyStatus, useReceiveStockWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
 import { useBrands, useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
 import { BrandSplitFields, toBrandSplit, type BrandSplitDraft } from "../components/BrandSplitFields";
-import { formatNumber, formatWeight, nextStatuses, requiresNote, statusColor, statusLabel } from "../utils/wholeBuyStatus";
+import {
+  formatBusinessDate, formatNumber, formatWeight, nextStatuses, requiresNote, statusColor, statusLabel,
+} from "../utils/wholeBuyStatus";
 
 // the combined receive+stock action, offered alongside the plain transitions
 const RECEIVE_STOCK = "RECEIVE_STOCK" as const;
@@ -130,7 +133,12 @@ export function WholesaleBuyDetailPage() {
     );
   }
 
+  // The two dates sit at opposite ends of the summary on purpose: the business date belongs with
+  // the deal, up top with the supplier and the goods; the insert timestamp belongs at the bottom
+  // with who typed it. They agree on a same-day entry and the page says nothing about it; when
+  // they differ, the "บันทึกย้อนหลัง" caption below is the whole disclosure.
   const rows: [string, React.ReactNode][] = [
+    ["วันที่ทำรายการ", formatBusinessDate(t.transactionDate)],
     ["ผู้ขายส่ง", supplierName],
     ["ประเภททองคำ", productTypeName],
     ["% ทอง", is999 ? "99.9%" : "96.5%"],
@@ -150,7 +158,17 @@ export function WholesaleBuyDetailPage() {
     ["ราคาต่อบาททอง 99.9%", formatNumber(t.pricePerGb999)],
     ["ยอดรวมที่สั่ง", formatNumber(t.totalAmount)],
     ["งวดชำระ", t.settlementPeriod],
-    ["บันทึกโดย", `${t.recordedBy} · ${new Date(t.recordedAt).toLocaleString("th-TH")}`],
+    [
+      "บันทึกโดย",
+      <Box component="span">
+        {t.recordedBy} · {new Date(t.recordedAt).toLocaleString("th-TH")}
+        {businessDateOf(new Date(t.recordedAt)) !== t.transactionDate && (
+          <Typography component="span" variant="caption" color="warning.main" sx={{ ml: 1 }}>
+            (บันทึกย้อนหลัง)
+          </Typography>
+        )}
+      </Box>,
+    ],
   ];
 
   // editable only while CREATED, and the nightly job is what ends that — so the deadline is

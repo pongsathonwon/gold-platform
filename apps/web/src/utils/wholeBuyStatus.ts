@@ -64,6 +64,6 @@ export const countsTowardTotal = (status: string) => {
   return !WHOLE_BUY_EXCLUDED_FROM_TOTALS.includes(status as WholeBuyStatusValue);
 };
 
-// Both formatters are domain-agnostic and shared with wholesale-sell; re-exported here so the
+// The formatters are domain-agnostic and shared with wholesale-sell; re-exported here so the
 // existing call sites keep importing them from the util they already use.
-export { formatNumber, formatWeight } from "./format";
+export { formatNumber, formatWeight, formatBusinessDate } from "./format";

@@ -10,7 +10,7 @@ import { useConfirmAllWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
 import { useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
 import { splitByPurity } from "../utils/inventoryVolume";
-import { countsTowardTotal, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeBuyStatus";
+import { countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeBuyStatus";
 
 // 96.5% is ordered in gold baht, 99.9% in kilograms — the same split the inventory pages use.
 // Sectioning by purity is what lets each table state one unit in its header instead of showing
@@ -105,7 +105,9 @@ export function WholesaleBuyListPage() {
 
                 return (
                   <TableRow key={t.id} hover>
-                    <TableCell>{new Date(t.recordedAt).toLocaleDateString("th-TH")}</TableCell>
+                    {/* the day the order was placed, not the day it was typed in — the list is
+                        sorted by it too, so a backdated entry reads where it belongs */}
+                    <TableCell>{formatBusinessDate(t.transactionDate)}</TableCell>
                     <TableCell>{supplierName(t.supplierId)}</TableCell>
                     <TableCell>{productTypeName(t.productTypeId)}</TableCell>
                     <TableCell align="right">

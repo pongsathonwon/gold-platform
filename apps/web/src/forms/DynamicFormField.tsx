@@ -1,4 +1,5 @@
 import { TextField, MenuItem } from "@mui/material";
+import { todayBusinessDate } from "@gold-platform/types";
 import { resolveFieldProp, type FieldConfig } from "./types";
 
 interface DynamicFormFieldProps<V extends Record<string, string>> {
@@ -33,6 +34,26 @@ export function DynamicFormField<V extends Record<string, string>>({
           </MenuItem>
         ))}
       </TextField>
+    );
+  }
+
+  if (kind === "date") {
+    return (
+      <TextField
+        label={label}
+        type="date"
+        value={values[field.name]}
+        onChange={(e) => onChange(field.name, e.target.value)}
+        required={field.required}
+        helperText={helperText}
+        slotProps={{
+          // a date input is never empty-looking, so the label has to start shrunk
+          inputLabel: { shrink: true },
+          // the picker itself refuses tomorrow — the same rule the server enforces, said once
+          // more where the operator can see it rather than after a failed submit
+          htmlInput: { max: todayBusinessDate() },
+        }}
+      />
     );
   }
 

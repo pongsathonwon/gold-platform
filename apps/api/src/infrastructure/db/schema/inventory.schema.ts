@@ -1,4 +1,4 @@
-import { decimal, pgTable, primaryKey, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { date, decimal, pgTable, primaryKey, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { brands, originEnum, productTypes, purities } from "./master.schema.js";
 
 // aggregate balance — one row per pool (purityId, brandId, origin, productTypeId)
@@ -35,6 +35,15 @@ export const inventoryMovements = pgTable('inventory_movements', {
     costDelta: decimal({ mode: 'number' }).notNull(),
     notes: text(),
 
+    // The trading day this movement belongs to. It is what the movement report windows on, so a
+    // gain or loss written up two days late still reads on the day it happened.
+    //
+    // For movements booked by a transaction's own transitions (a buy reaching STOCKED, a sell
+    // reaching PACKED) this is simply the day of the transition — the metal moved when it moved,
+    // whatever date the order carries. Only the manual adjustment forms let an operator pick it.
+    movementDate: date({ mode: 'string' }).notNull(),
+
+    // when the row was written — the bookkeeping instant, kept for ordering within a day
     movedAt: timestamp().notNull().defaultNow(),
     movedBy: varchar().notNull(),
 })
@@ -56,6 +65,9 @@ export const stockGainAdjustments = pgTable('stock_gain_adjustments', {
     totalCost: decimal({ mode: 'number' }).notNull(),
     referenceType: varchar().notNull(),
     notes: text(),
+    // the day the correction is being made *for* — a Friday stock count typed up on Monday is
+    // Friday's. Defaults to today; `auditedAt` below is when the row was actually written.
+    transactionDate: date({ mode: 'string' }).notNull(),
     auditedBy: varchar().notNull(),
     auditedAt: timestamp().notNull().defaultNow(),
 })
@@ -74,6 +86,8 @@ export const stockLossAdjustments = pgTable('stock_loss_adjustments', {
     weightGm: decimal({ mode: 'number' }).notNull(),
     referenceType: varchar().notNull(),
     notes: text(),
+    // as on the gain side — the day the loss belongs to, not the day it was typed
+    transactionDate: date({ mode: 'string' }).notNull(),
     auditedBy: varchar().notNull(),
     auditedAt: timestamp().notNull().defaultNow(),
 })

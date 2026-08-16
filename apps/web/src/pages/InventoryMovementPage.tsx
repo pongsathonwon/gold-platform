@@ -19,7 +19,8 @@ import {
 import { useInventoryMovements } from "../hooks/useInventory";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 import { withCumulative, type WithCumulative } from "../utils/inventoryVolume";
-import { TRANSACTION_TYPES } from "@gold-platform/types";
+import { formatBusinessDate } from "../utils/format";
+import { todayBusinessDate, TRANSACTION_TYPES } from "@gold-platform/types";
 
 const REFERENCE_TYPE_LABEL: Record<string, string> = Object.fromEntries(
   TRANSACTION_TYPES.map((t) => [t.value, t.label]),
@@ -29,11 +30,6 @@ const PRODUCT_TYPE_LABEL: Record<string, string> = {
   Goldbar: "ทองแท่ง",
   "Gold Plate": "ทองแผ่น",
 };
-
-// YYYY-MM-DD in the viewer's local time (en-CA renders ISO-style)
-function localDateStr(d = new Date()) {
-  return d.toLocaleDateString("en-CA");
-}
 
 function formatCostDelta(value: number) {
   const sign = value >= 0 ? "+" : "-";
@@ -53,6 +49,8 @@ type MovementRow = {
   weightGbDelta: number;
   weightGmDelta: number;
   costDelta: number;
+  // the trading day the movement belongs to; movedAt is when the row was written
+  movementDate: string;
   movedAt: string;
   movedBy: string;
   notes: string | null;
@@ -61,16 +59,14 @@ type MovementRow = {
 type CumulativeRow = WithCumulative<MovementRow>;
 
 export function InventoryMovementPage() {
-  const [fromDate, setFromDate] = useState(localDateStr());
-  const [toDate, setToDate] = useState(localDateStr());
+  // the shop's today, not the viewer's — the ledger is kept on the Bangkok calendar
+  const [fromDate, setFromDate] = useState(todayBusinessDate());
+  const [toDate, setToDate] = useState(todayBusinessDate());
 
-  const filter = useMemo(
-    () => ({
-      from: new Date(`${fromDate}T00:00:00`).toISOString(),
-      to: new Date(`${toDate}T23:59:59.999`).toISOString(),
-    }),
-    [fromDate, toDate],
-  );
+  // Plain days, both ends inclusive. The window is matched against each movement's business date
+  // server-side, so this no longer has to manufacture an end-of-day instant — and the last day of
+  // a range can no longer lose everything recorded after midnight.
+  const filter = useMemo(() => ({ from: fromDate, to: toDate }), [fromDate, toDate]);
 
   const { data: movementsRes, isPending, isError } = useInventoryMovements(filter);
   const { data: puritiesRes } = usePurities();
@@ -138,7 +134,9 @@ export function InventoryMovementPage() {
 
                 return (
                   <TableRow key={row.id}>
-                    <TableCell>{new Date(row.movedAt).toLocaleString()}</TableCell>
+                    {/* the day the movement belongs to; for a backdated adjustment that is the
+                        day it happened, not the day it was entered */}
+                    <TableCell>{formatBusinessDate(row.movementDate)}</TableCell>
                     <TableCell>{brandOrOrigin}</TableCell>
                     <TableCell>{PRODUCT_TYPE_LABEL[productType ?? ""] ?? productType ?? row.productTypeId}</TableCell>
                     <TableCell>

@@ -41,6 +41,67 @@ export type PublicUser = z.infer<typeof publicUserSchema>
 
 export type AuthResponse = z.infer<typeof LoginResponseSchema>
 
+// --- Business date ---
+
+/**
+ * Two dates, not one. Recording something is not the same event as it happening: on day one the
+ * shop is documenting operations that already took place, and even under full adoption an entry
+ * can land the morning after. So every record the operator creates carries
+ *
+ *  - `transactionDate` — the day the business event happened, picked by the operator, defaulting
+ *    to today. It is what the settlement period is derived from and what reports read.
+ *  - the insert timestamp (`recordedAt` / `auditedAt`) — when the row reached the database,
+ *    written by the server and never supplied by a caller.
+ *
+ * Under a proper workflow the two agree, and nothing in the UI draws attention to them. When they
+ * differ, the difference *is* the audit trail: it says this was written up after the fact.
+ *
+ * A day, not an instant. The only thing the picked date decides is which Fri–Thu settlement period
+ * the record falls in, and that boundary is a day boundary — a time of day adds no information to
+ * it, only a timezone to get wrong.
+ */
+export const BUSINESS_TIME_ZONE = 'Asia/Bangkok'
+
+/**
+ * The Bangkok day an instant falls in, as `YYYY-MM-DD`.
+ *
+ * Pinned to the shop's timezone rather than the machine's: the server may run in UTC and a
+ * browser anywhere, but a Thai trading day is a Thai trading day. It is also the only correct way
+ * to ask whether an insert timestamp and a picked date describe the same day — slicing the first
+ * ten characters off an ISO string answers that question in UTC, which is a different calendar
+ * for seven hours out of every twenty-four. `en-CA` formats as `YYYY-MM-DD`.
+ */
+export function businessDateOf(at: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: BUSINESS_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(at)
+}
+
+/** Today on the shop's calendar — the default every picked date starts at. */
+export const todayBusinessDate = (at: Date = new Date()) => businessDateOf(at)
+
+// A floor no real record predates, so a mistyped year (0226, 1026) is rejected as input rather
+// than silently filed 1,800 years back. It cannot catch a plausible-looking wrong year, and is
+// not meant to — the not-future rule is the one that carries weight.
+export const EARLIEST_BUSINESS_DATE = '2000-01-01'
+
+/** A `YYYY-MM-DD` day, shape only. Report windows use this — a range may reach into the future. */
+export const businessDaySchema = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่ต้องอยู่ในรูปแบบ YYYY-MM-DD')
+
+/**
+ * A picked business day *on a record*. Backdating is the point, so there is no floor on how far
+ * back an entry may be filed — but the future is not documentation, it is a typo or a guess.
+ *
+ * ISO dates compare correctly as strings, so none of this parses anything.
+ */
+export const businessDateSchema = businessDaySchema
+  .refine((d) => d >= EARLIEST_BUSINESS_DATE, { message: 'วันที่เก่าเกินกว่าจะเป็นไปได้' })
+  .refine((d) => d <= todayBusinessDate(), { message: 'วันที่ทำรายการต้องไม่เป็นวันในอนาคต' })
+
 //inventory
 
 // Combined transaction-type list used as the "remark" dropdown on the gain/loss forms.
@@ -88,6 +149,10 @@ export const stockGainSchema = z.object({
   weight: z.number().int().positive(),
   pricePerGb: z.number().positive(),
   referenceType: transactionTypeSchema,
+  // the day the discrepancy is being corrected *for* — a stock count done Friday and typed up
+  // Monday is Friday's correction. Omit to file it under today. The balance still moves now:
+  // this dates the record, it does not rewrite history. See `businessDateSchema`.
+  transactionDate: businessDateSchema.optional(),
   notes: z.string().optional(),
 })
 
@@ -100,6 +165,8 @@ export const stockLossSchema = z.object({
   productTypeId: z.string(),
   weight: z.number().int().positive(),
   referenceType: transactionTypeSchema,
+  // as on the gain form — the day the loss belongs to, not the day it was typed
+  transactionDate: businessDateSchema.optional(),
   notes: z.string().optional(),
 })
 
@@ -299,6 +366,10 @@ export const createWholeBuySchema = z.object({
   // the only price the operator enters. The 99.9% quote is derived from it server-side;
   // both end up stored, and the item's purity decides which one drives the amount.
   pricePerGb965: z.number().positive(),
+  // The day the order was actually placed, which on day one is routinely not the day it is being
+  // typed in. Omit and the server files it under today. **This is what the settlement period is
+  // derived from** — backdating that did not move the period would be decoration.
+  transactionDate: businessDateSchema.optional(),
   notes: z.string().optional(),
 })
 
@@ -454,6 +525,9 @@ export const createWholeSellSchema = z.object({
   // the only price the operator enters. The 99.9% quote is derived from it server-side;
   // both end up stored, and the item's purity decides which one drives the amount.
   pricePerGb965: z.number().positive(),
+  // as on the buy side: the day the deal was struck, defaulting to today, and the value the
+  // settlement period is derived from
+  transactionDate: businessDateSchema.optional(),
   notes: z.string().optional(),
 })
 

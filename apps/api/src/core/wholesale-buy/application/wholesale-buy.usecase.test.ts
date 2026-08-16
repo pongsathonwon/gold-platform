@@ -1,8 +1,10 @@
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { todayBusinessDate } from "@gold-platform/types";
 import {
     buyTransaction, expectFailure, expectSuccess, loggedStatuses, makeFakeBuyRepo,
 } from "../../../test/fakes.js";
+import { resolveSettlementPeriodOn } from "../../../infrastructure/settlement.js";
 import type { WholeBuyTransactionShape } from "../../../infrastructure/db/schema/wholesale-buy.schema.js";
 
 // The three seams between this usecase and the outside world. Mocking them leaves the domain
@@ -63,7 +65,9 @@ vi.mock("../../../infrastructure/quantity.js", async () => {
 let repoState: ReturnType<typeof makeFakeBuyRepo>["state"];
 
 const { incrementSplit } = await import("../../inventory/application/inventory.usecase.js");
-const { advanceStatus, receiveAndStock } = await import("./wholesale-buy.usecase.js");
+const {
+    advanceStatus, createTransaction, receiveAndStock, updateTransaction,
+} = await import("./wholesale-buy.usecase.js");
 
 /** Puts a transaction in the fake repo and returns it, so each test starts from a known status. */
 function given(overrides: Partial<WholeBuyTransactionShape> = {}) {
@@ -272,5 +276,79 @@ describe("ordering between the inventory hook and the status log", () => {
         await expectFailure(move(t.id, { toStatus: "STOCKED" }));
         expect(repoState.statuses).toHaveLength(0);
         expect(repoState.transaction.currentStatus).toBe("RECEIVED");
+    });
+});
+
+/**
+ * Two dates per transaction: the day the order happened, which the operator states, and the
+ * instant the row was written, which only the server decides. What makes the first one load-
+ * bearing rather than decorative is that the settlement period follows it.
+ */
+describe("the picked business date and the insert timestamp", () => {
+    const createReq = {
+        supplierId: "11111111-1111-1111-1111-111111111111",
+        purityId: "965",
+        productTypeId: "BAR",
+        weight: 12,
+        pricePerGb965: 48250,
+        recordedBy: "tester",
+    };
+
+    it("files a backdated order in the period its own date falls in", async () => {
+        given();
+        // Thursday 11 June is the last day of 2026-W23; the following day opens W24. Typing this
+        // up on any later day must not drag it forward into the week it was typed in.
+        const created = await expectSuccess(
+            createTransaction({ ...createReq, transactionDate: "2026-06-11" }),
+        );
+
+        expect(created.transactionDate).toBe("2026-06-11");
+        expect(created.settlementPeriod).toBe("2026-W23");
+    });
+
+    it("keeps the insert timestamp on the server clock, not on the picked date", async () => {
+        given();
+        const before = new Date();
+        const created = await expectSuccess(
+            createTransaction({ ...createReq, transactionDate: "2026-06-11" }),
+        );
+
+        // the whole point of the second field: it says when this was written up, and a caller
+        // cannot move it by picking a date
+        expect(created.recordedAt.getTime()).toBeGreaterThanOrEqual(before.getTime());
+        expect(created.recordedAt.getTime()).toBeLessThanOrEqual(Date.now());
+    });
+
+    it("defaults to today when the operator picks nothing", async () => {
+        given();
+        const created = await expectSuccess(createTransaction(createReq));
+
+        expect(created.transactionDate).toBe(todayBusinessDate());
+        expect(created.settlementPeriod).toBe(resolveSettlementPeriodOn(todayBusinessDate()));
+    });
+
+    it("re-derives the period when the date is corrected while still CREATED", async () => {
+        const t = given({ currentStatus: "CREATED", transactionDate: "2026-06-12", settlementPeriod: "2026-W24" });
+
+        const updated = await expectSuccess(updateTransaction({
+            transactionId: t.id, transactionDate: "2026-06-11", updatedBy: "tester",
+        }));
+
+        // a corrected date that left the period behind would file the order in a week it does
+        // not claim to belong to — the two are one fact and move together
+        expect(updated.transactionDate).toBe("2026-06-11");
+        expect(updated.settlementPeriod).toBe("2026-W23");
+    });
+
+    it("refuses to correct the date once the transaction has been confirmed", async () => {
+        const t = given({ currentStatus: "CONFIRMED" });
+
+        const error = await expectFailure(updateTransaction({
+            transactionId: t.id, transactionDate: "2026-06-11", updatedBy: "tester",
+        }));
+
+        // confirmation is the lock on every field, and the period assignment is what it protects
+        expect(error).toMatchObject({ _tag: "WholeBuyNotEditableError", currentStatus: "CONFIRMED" });
+        expect(repoState.transaction.settlementPeriod).toBe("2026-W24");
     });
 });

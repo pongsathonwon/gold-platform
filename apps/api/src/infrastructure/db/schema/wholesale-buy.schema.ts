@@ -1,4 +1,4 @@
-import { decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { date, decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { productTypes, purities, suppliers } from "./master.schema.js";
 
 // Happy path:  CREATED → CONFIRMED → PAID → RECEIVED → STOCKED
@@ -88,7 +88,21 @@ export const wholeBuyTransactions = pgTable('whole_buy_transactions', {
     // A column rather than prose because supplier reliability has to be reportable.
     returnReason: wholeBuyReturnReasonEnum(),
 
-    settlementPeriod: varchar().notNull(), // Fri–Thu week index e.g. "2026-W24", derived from recordedAt
+    // The day the order was placed, as the operator states it — which is not necessarily the day
+    // this row was written. Two dates, because recording an event and the event happening are two
+    // different things: `transactionDate` is the business fact, `recordedAt` below is the
+    // bookkeeping fact. Under a proper workflow they agree; on day one, and any morning-after
+    // entry, they do not, and the gap is exactly the audit trail worth keeping.
+    //
+    // A `date`, not a `timestamp`: the only thing it decides is which Fri–Thu period the order
+    // falls in, and that boundary is a day boundary. A time of day would add no information to it
+    // and one more timezone to get wrong.
+    transactionDate: date({ mode: 'string' }).notNull(),
+
+    // Fri–Thu week index e.g. "2026-W24" — derived from transactionDate, not from recordedAt.
+    // An order backdated to last Thursday belongs in last week's period; deriving it from the
+    // insert time would put the whole point of backdating out of reach.
+    settlementPeriod: varchar().notNull(),
 
     // write-through cache of the latest status row — recomputable from whole_buy_statuses
     currentStatus: wholeBuyStatusEnum().notNull().default('CREATED'),
@@ -100,6 +114,8 @@ export const wholeBuyTransactions = pgTable('whole_buy_transactions', {
     notes: text(),
 
     recordedBy: varchar().notNull(),
+    // when the row reached the database — server-written, never caller-supplied. See
+    // transactionDate above for why both exist.
     recordedAt: timestamp().defaultNow().notNull(),
 })
 

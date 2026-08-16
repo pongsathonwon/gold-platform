@@ -8,7 +8,11 @@ type OrFn<T, V> = T | ((values: V) => T);
 export interface FieldConfig<V extends Record<string, string>> {
   name: keyof V;
   label: OrFn<string, V>;
-  kind: OrFn<"select" | "number" | "text" | "multiline", V>;
+  // "date" is a plain `YYYY-MM-DD` day — the picked business date every create form carries.
+  // Not a datetime: the only thing that date decides is which Fri–Thu settlement period the
+  // record lands in, and that boundary falls on a day, so a time would add nothing but a
+  // timezone to get wrong.
+  kind: OrFn<"select" | "number" | "text" | "multiline" | "date", V>;
   required?: boolean;
   isVisible?: (values: V) => boolean;
   getOptions?: (values: V) => FieldOption[];

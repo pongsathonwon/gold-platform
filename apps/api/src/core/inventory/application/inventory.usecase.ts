@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { StockGainReq, StockLossReq } from "@gold-platform/types";
+import { StockGainReq, StockLossReq, todayBusinessDate } from "@gold-platform/types";
 import {
     DecrementReq, IncrementReq, InventoriesRepository, InventoryVolume, MovementEntry,
     MovementFilter, ProductSwitchReq, ReverseDecrementReq, SplitMovementReq,
@@ -9,8 +9,6 @@ import { makeInventoryRepository } from "../adapter/inventory.repository.js";
 import { resolveQuantity } from "../../../infrastructure/quantity.js";
 
 const inventoryLive = Layer.effect(InventoriesRepository, makeInventoryRepository);
-
-const today = () => new Date().toISOString().slice(0, 10);
 
 // --- Public usecases (HTTP) ---
 
@@ -29,11 +27,24 @@ export const getInventoryVolume = () =>
         }));
     }).pipe(Effect.provide(inventoryLive))
 
+/**
+ * A manual gain, recorded against the day it belongs to.
+ *
+ * `transactionDate` is the day the operator says the discrepancy arose — today unless they pick
+ * otherwise, since a correction is routinely written up after the count that found it. It dates
+ * the adjustment record and the movement, so the ledger reads on the day the gold really turned up.
+ *
+ * **The balance still moves now.** Backdating documents an event, it does not replay one: cost is
+ * averaged into the pool at today's balance whatever date the form carries, because that is when
+ * the weight became available to sell. Retroactively re-averaging every WAC computed since would
+ * mean rewriting movements that have already been costed and reported on.
+ */
 export const stockGain = (req: StockGainReq, auditedBy: string) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
         const adjustmentId = randomUUID();
         const brandId = req.brandId ?? 'NA';
+        const transactionDate = req.transactionDate ?? todayBusinessDate();
         const { weightGb, weightGm, conversionFactor } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
         // operator enters price per gold baht (บาททอง); total cost is derived from the resolved GB weight
         const totalCost = req.pricePerGb * weightGb;
@@ -51,7 +62,9 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
             totalCost,
             referenceType: req.referenceType,
             notes: req.notes ?? null,
+            transactionDate,
             auditedBy,
+            // the insert instant, always the server's own clock — never the picked date
             auditedAt: new Date(),
         });
 
@@ -77,6 +90,9 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
             weightGmDelta: weightGm,
             costDelta: totalCost,
             notes: req.notes ?? null,
+            // the ledger carries the same business day as the adjustment, so the movement report
+            // shows it under the day it happened rather than the day it was typed
+            movementDate: transactionDate,
             movedAt: new Date(),
             movedBy: auditedBy,
         });
@@ -84,11 +100,17 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
         return { id: adjustmentId };
     }).pipe(Effect.provide(inventoryLive))
 
+/**
+ * A manual loss, recorded against the day it belongs to — the mirror of `stockGain`, including
+ * the rule that matters: the picked date documents the event, the balance still moves now, and
+ * the cost that leaves is the pool's live WAC at this moment, not at the backdated one.
+ */
 export const stockLoss = (req: StockLossReq, auditedBy: string) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
         const adjustmentId = randomUUID();
         const brandId = req.brandId ?? 'NA';
+        const transactionDate = req.transactionDate ?? todayBusinessDate();
         const { weightGb, weightGm } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
         // decrement first so an insufficient-stock failure leaves no adjustment record;
@@ -108,6 +130,7 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
             weightGm,
             referenceType: req.referenceType,
             notes: req.notes ?? null,
+            transactionDate,
             auditedBy,
             auditedAt: new Date(),
         });
@@ -124,6 +147,7 @@ export const stockLoss = (req: StockLossReq, auditedBy: string) =>
             weightGmDelta: -weightGm,
             costDelta: -costDelta,
             notes: req.notes ?? null,
+            movementDate: transactionDate,
             movedAt: new Date(),
             movedBy: auditedBy,
         });
@@ -145,6 +169,9 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
         const origin = 'foreign' as const;
+        // no picked date on this form — a reclassification is done when it is done, and both
+        // legs must obviously carry the same day
+        const movementDate = todayBusinessDate();
         const { weightGb, weightGm } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
         // decrement non-fungible pool at its live WAC (returns the cost removed); the reclassification
@@ -193,6 +220,7 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
             weightGmDelta: -weightGm,
             costDelta: -fromCostDelta,
             notes: req.notes ?? null,
+            movementDate,
             movedAt: new Date(),
             movedBy: switchedBy,
         });
@@ -209,6 +237,7 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
             weightGmDelta: weightGm,
             costDelta: toCostDelta,
             notes: req.notes ?? null,
+            movementDate,
             movedAt: new Date(),
             movedBy: switchedBy,
         });
@@ -330,6 +359,9 @@ export const reverseDecrement = (req: ReverseDecrementReq) =>
                 weightGmDelta: Math.abs(movement.weightGmDelta),
                 costDelta: Math.abs(movement.costDelta),
                 notes: null,
+                // the reversal happens today; it does not inherit the original's day, because
+                // the gold coming back is its own event on its own date
+                movementDate: todayBusinessDate(),
                 movedAt: new Date(),
                 movedBy: req.movedBy,
             });

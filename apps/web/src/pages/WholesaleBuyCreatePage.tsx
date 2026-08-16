@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Container, Typography, Card, CardContent, Button, Box, Alert,
 } from "@mui/material";
-import { createWholeBuySchema, derivePricePerGb999 } from "@gold-platform/types";
+import { createWholeBuySchema, derivePricePerGb999, todayBusinessDate } from "@gold-platform/types";
 import { useProductTypePurities, useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useCreateWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
 import { useToast } from "../components/ToastContext";
@@ -14,6 +14,7 @@ import { getVisibleFields, type FieldConfig } from "../forms/types";
 // No brand field. An order cannot know what stamp will turn up — that is recorded when the
 // delivery is put into stock, against the pools it actually lands in.
 interface BuyValues extends Record<string, string> {
+  transactionDate: string;
   supplierId: string;
   productTypeId: string;
   purityId: string;
@@ -22,7 +23,11 @@ interface BuyValues extends Record<string, string> {
   notes: string;
 }
 
+// The date defaults to today, so a shop working in real time never touches it. It is editable
+// because on day one the operator is writing up orders that already happened — and the value
+// they pick is what decides the settlement period, not the moment they hit save.
 const initialValues: BuyValues = {
+  transactionDate: todayBusinessDate(),
   supplierId: "",
   productTypeId: "",
   purityId: "",
@@ -58,6 +63,16 @@ export function WholesaleBuyCreatePage() {
   }
 
   const fields: FieldConfig<BuyValues>[] = [
+    {
+      name: "transactionDate",
+      label: "วันที่ทำรายการ",
+      kind: "date",
+      required: true,
+      helperText: (v) =>
+        v.transactionDate && v.transactionDate !== todayBusinessDate()
+          ? "บันทึกย้อนหลัง — รายการนี้จะถูกนับในงวดของวันที่เลือก"
+          : undefined,
+    },
     {
       name: "supplierId",
       label: "ผู้ขายส่ง",
@@ -124,6 +139,7 @@ export function WholesaleBuyCreatePage() {
       productTypeId: values.productTypeId,
       weight: Number(values.weight),
       pricePerGb965: Number(values.pricePerGb965),
+      transactionDate: values.transactionDate,
       notes: values.notes || undefined,
     };
 

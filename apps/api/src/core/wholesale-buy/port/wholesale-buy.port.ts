@@ -45,10 +45,13 @@ export class ReturnReasonRequiredError extends Data.TaggedError("WholeBuyReturnR
 export type ListFilter = Partial<Pick<WholeBuyTransactionShape,
     'currentStatus' | 'settlementPeriod' | 'supplierId'>>
 
+// transactionDate and settlementPeriod move together — the period is derived from the date, so
+// neither is ever patched without the other
 export type UpdateTransactionFields = Partial<Pick<WholeBuyTransactionShape,
     | 'supplierId' | 'purityId' | 'productTypeId'
     | 'weightGb' | 'weightGm' | 'conversionFactor'
-    | 'pricePerGb965' | 'pricePerGb999' | 'totalAmount' | 'notes'>>
+    | 'pricePerGb965' | 'pricePerGb999' | 'totalAmount' | 'notes'
+    | 'transactionDate' | 'settlementPeriod'>>
 
 // the contested weight, written on a move into DISPUTED and cleared again on acceptance
 export type ContestedFields = Pick<WholeBuyTransactionShape,
@@ -78,7 +81,7 @@ export class WholeBuyRepository extends Context.Tag('wholesale-buy/repository')<
 
 // --- Command shapes ---
 
-// settlementPeriod is never caller-supplied — it is derived from recordedAt server-side.
+// settlementPeriod is never caller-supplied — it is derived server-side from transactionDate.
 // Brand is not supplied either: an order cannot know what stamp will turn up, so brand is
 // recorded on the move into STOCKED against the pools the gold actually lands in.
 export interface CreateTransactionReq {
@@ -88,6 +91,10 @@ export interface CreateTransactionReq {
     weight: number
     // the only price supplied; the 99.9% quote is derived from it
     pricePerGb965: number
+    // `YYYY-MM-DD`, the day the order was placed. Optional: omitted means today, which is what a
+    // shop working in real time sends. What it is *not* is the insert timestamp — that is
+    // recordedAt, written from the server clock and never accepted from a caller.
+    transactionDate?: string
     notes?: string
     recordedBy: string
 }
@@ -99,6 +106,9 @@ export interface UpdateTransactionReq {
     productTypeId?: string
     weight?: number
     pricePerGb965?: number
+    // correcting it re-derives the settlement period; only accepted while still CREATED, like
+    // every other field here
+    transactionDate?: string
     notes?: string
     updatedBy: string
 }

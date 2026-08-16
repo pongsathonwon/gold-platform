@@ -89,7 +89,7 @@ function toHttpError(error: unknown): [string, number] {
 
 All domains share the same status-log pattern: two tables (`*_transactions` + `*_statuses`), `currentStatus` as write-through cache, `allowedTransitions` map in port file, `InvalidTransitionError` → 422 on invalid moves.
 
-`settlementPeriod` is **auto-derived from `recordedAt`** on the server using Fri–Thu boundary — callers never send it.
+`settlementPeriod` is **auto-derived from `transactionDate`** on the server using the Fri–Thu boundary — callers never send the period itself. See "Two dates on every record" below.
 
 | Domain | Status Flow | Inventory Hook |
 |--------|-------------|----------------|
@@ -272,11 +272,30 @@ lands as one inventory movement per pool.
 - Cost is apportioned across an increment's pools by weight, last line absorbing the rounding, so
   they reconcile to `totalAmount` exactly. Decrements ignore it — each pool's own live WAC decides.
 
+## Two dates on every record
+
+Recording an event and the event happening are different facts. On day one the shop is writing up operations that already took place, and even under full adoption an entry can land the morning after — so everything the operator creates carries both:
+
+| Field | Meaning | Source |
+|---|---|---|
+| `transactionDate` (`movementDate` on the ledger) | the business day the deal or adjustment happened — a `date` column, `YYYY-MM-DD` | operator picks it, optional on the wire, defaults to today |
+| `recordedAt` / `auditedAt` / `movedAt` | when the row reached the database | server clock, never accepted from a caller |
+
+- Carried by **wholesale-buy**, **wholesale-sell**, **stock gain** and **stock loss**. `inventory_movements.movementDate` is the trading day the metal moved: the picked date for a manual adjustment, the day of the transition for a buy reaching `STOCKED` or a sell reaching `PACKED` — the order's own date may be older, but the metal moved when it moved.
+- **A day, not an instant.** All the picked date decides is which Fri–Thu period the record lands in, and that boundary falls on a day. A time would add no information and one more timezone to get wrong.
+- **"Today" is Bangkok's today.** `todayBusinessDate()` / `businessDateOf(date)` in `@gold-platform/types` format on `Asia/Bangkok`, not on the server's or browser's clock. Never compare `recordedAt.slice(0, 10)` against a picked date — that answers the question in UTC, a different calendar for seven hours a day.
+- **`businessDateSchema`** (also in types) validates a picked date: `YYYY-MM-DD`, not in the future, no floor on backdating. **`businessDaySchema`** is the shape-only form used for report windows, which may reach forward.
+- **On adjustments the date documents, it does not replay.** A backdated gain or loss moves the balance now, at today's live WAC. It dates the record and the movement so reports read correctly; it does not retroactively re-average costs already applied to movements that have been reported on.
+- Both wholesale list endpoints sort by `(transactionDate DESC, recordedAt DESC)` — a backdated entry belongs where its date puts it, not at the top of the list.
+- `GET /inventory/movements` windows on `movementDate` with plain `from`/`to` days, both ends inclusive. It used to take ISO datetimes compared against `movedAt`, where a caller who forgot an end-of-day time on `to` silently lost the last day's movements.
+
 ## Settlement Period
 
-`settlementPeriod` is a reporting bucket — a week label (e.g. `"2026-W24"`) auto-computed from `recordedAt` using a fixed Fri–Thu boundary. Callers never supply it.
+`settlementPeriod` is a reporting bucket — a week label (e.g. `"2026-W24"`) auto-computed from `transactionDate` using a fixed Fri–Thu boundary. Callers never supply it. Deriving it from the insert time instead would make backdating cosmetic: an order backdated to last Thursday has to land in last week's period.
 
-`resolveSettlementPeriod(date)` lives in `infrastructure/settlement.ts`. It shifts the date back 4 days before computing the ISO week, which maps each Fri–Thu span onto exactly one Mon–Sun ISO week so no two periods collide. **wholesale-buy uses it; the other transaction domains still take `settlementPeriod` from the caller and should be migrated onto it.**
+`infrastructure/settlement.ts` exports `resolveSettlementPeriodOn(businessDate)` — the form the domains call, since what they hold is a day — over `resolveSettlementPeriod(date)`. It shifts the date back 4 days before computing the ISO week, which maps each Fri–Thu span onto exactly one Mon–Sun ISO week so no two periods collide. **Both wholesale domains use it; retail and receive still take `settlementPeriod` from the caller and should be migrated onto it along with `transactionDate`.**
+
+Correcting `transactionDate` re-derives the period, and `PATCH` accepts it only while the transaction is `CREATED` — the same lock that governs every other editable field. After confirmation the assignment is immutable.
 
 Each domain exposes a summary endpoint for net position reporting:
 - `GET /retail-buy/settlement/:period/summary`

@@ -176,6 +176,27 @@ The API must be running at `VITE_API_URL` for data fetching to work in dev. Run 
 
 ---
 
+## 9a. Every create form picks its own date
+
+Recording something and it happening are two events. On day one the operator is writing up
+operations that already took place, so every create form — both wholesale ones, plus stock gain
+and stock loss — opens with a **วันที่ทำรายการ** field defaulting to today.
+
+- `kind: "date"` in `DynamicFormField` renders a native day picker capped at `todayBusinessDate()`.
+  A day, not a datetime: all the picked date decides is which Fri–Thu settlement period the record
+  lands in, and that boundary falls on a day.
+- `todayBusinessDate()` from `@gold-platform/types` is **Bangkok's** today, not the browser's. Use
+  `businessDateOf(date)` to ask which business day an insert timestamp fell on — never
+  `recordedAt.slice(0, 10)`, which answers in UTC.
+- When the picked date is not today the field shows a `บันทึกย้อนหลัง` helper line, and the detail
+  pages tag the บันทึกโดย row the same way. Same-day entry says nothing at all: the two dates
+  agreeing is the ordinary case and deserves no chrome.
+- **The lists show and sort by `transactionDate`**, not `recordedAt` — a backdated entry reads
+  where it belongs rather than jumping to the top.
+- `formatBusinessDate()` in `utils/format.ts` renders a `YYYY-MM-DD` from its own parts. Passing it
+  through `new Date()` would apply a timezone to a value that has no instant behind it.
+- The movements page sends plain `from`/`to` days and shows each row's `movementDate`.
+
 ## 9b. Wholesale Buy UI
 
 Three pages plus one shared helper:
@@ -186,7 +207,7 @@ Three pages plus one shared helper:
 | `pages/WholesaleBuyCreatePage.tsx` | create form on the shared `useDynamicForm` / `DynamicFormField` pattern. **One price field only** — the 96.5% quote; `derivePricePerGb999()` previews the 99.9% figure in helper text, and the server does the real conversion. **No brand field** — see below |
 | `pages/WholesaleBuyDetailPage.tsx` | summary, status timeline, action buttons + confirm dialog |
 | `utils/wholeBuyStatus.ts` | chip colours, Thai labels, `nextStatuses()`, `requiresNote()` |
-| `utils/format.ts` | `formatNumber()` / `formatWeight()` — domain-agnostic, shared with wholesale-sell and re-exported from both status utils |
+| `utils/format.ts` | `formatNumber()` / `formatWeight()` / `formatBusinessDate()` — domain-agnostic, shared with wholesale-sell and re-exported from both status utils |
 
 **Action buttons come from `WHOLE_BUY_TRANSITIONS` in `@gold-platform/types`** — the same map the
 API validates against, so the UI cannot offer a move the server will reject. Never hard-code a

@@ -21,6 +21,8 @@ export interface WholeSellTransaction {
   settledAmount: number | null;
   // why the gold came home; set on the move into RETURNED
   returnReason: ReturnReasonValue | null;
+  // the day the deal was struck, `YYYY-MM-DD` — the settlement period follows it, not recordedAt
+  transactionDate: string;
   settlementPeriod: string;
   currentStatus: string;
   confirmDueAt: string;

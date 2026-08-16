@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { BrandSplit, derivePricePerGb999 } from "@gold-platform/types";
+import { BrandSplit, derivePricePerGb999, todayBusinessDate } from "@gold-platform/types";
 import {
     AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CONTESTED_STATUS,
     CreateTransactionReq, INVENTORY_STATUS, InvalidTransitionError, ListFilter,
@@ -16,7 +16,7 @@ import {
 } from "../../inventory/application/inventory.usecase.js";
 import { findQuantityRule, resolveMeasuredQuantity, resolveQuantity } from "../../../infrastructure/quantity.js";
 import { resolveBrandSplit } from "../../../infrastructure/brand-split.js";
-import { resolveSettlementPeriod } from "../../../infrastructure/settlement.js";
+import { resolveSettlementPeriodOn } from "../../../infrastructure/settlement.js";
 
 const wholeSellLive = Layer.effect(WholeSellRepository, makeWholeSellRepository);
 
@@ -37,6 +37,9 @@ export const createTransaction = (req: CreateTransactionReq) =>
         const repo = yield* WholeSellRepository;
         const id = randomUUID();
         const now = new Date();
+        // the day the deal happened, per the operator; today when they say nothing. `now` stays
+        // the bookkeeping instant and goes to recordedAt untouched.
+        const transactionDate = req.transactionDate ?? todayBusinessDate(now);
 
         // validates the productType/purity pairing and the sellable-quantity rule for it
         const { weightGb, weightGm, conversionFactor, unitOfMeasure } =
@@ -62,10 +65,13 @@ export const createTransaction = (req: CreateTransactionReq) =>
             actualAmount: null,
             settledAmount: null,
             returnReason: null,
-            // callers never supply the period — it is derived from the recording time and frozen
-            settlementPeriod: resolveSettlementPeriod(now),
+            transactionDate,
+            // callers never supply the period — it is derived from the day the deal happened and
+            // frozen there, so a backdated sale lands in the period it belongs to
+            settlementPeriod: resolveSettlementPeriodOn(transactionDate),
             currentStatus: 'CREATED',
-            // informational: when the nightly job will sweep this up if nobody confirms it first
+            // informational: when the nightly job will sweep this up if nobody confirms it first.
+            // Real time, not business date — the edit window closes at the next actual sweep.
             confirmDueAt: nextAutoConfirmAt(now),
             notes: req.notes ?? null,
             recordedBy: req.recordedBy,
@@ -103,6 +109,13 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
         const fields: UpdateTransactionFields = {};
         if (req.supplierId !== undefined) fields.supplierId = req.supplierId;
         if (req.notes !== undefined) fields.notes = req.notes;
+
+        // the date and its settlement period are one fact — correcting one without the other
+        // would leave the transaction filed in a week it does not claim to belong to
+        if (req.transactionDate !== undefined) {
+            fields.transactionDate = req.transactionDate;
+            fields.settlementPeriod = resolveSettlementPeriodOn(req.transactionDate);
+        }
 
         // weight, purity, product type and price all feed weightGb/totalAmount — if any of them
         // moved, both the resolved weights and the amount are recomputed from the merged values

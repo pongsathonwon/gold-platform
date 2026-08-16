@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Container, Typography, Card, CardContent, Button, Box, Alert,
 } from "@mui/material";
-import { createWholeSellSchema, derivePricePerGb999 } from "@gold-platform/types";
+import { createWholeSellSchema, derivePricePerGb999, todayBusinessDate } from "@gold-platform/types";
 import { useProductTypePurities, useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useCreateWholesaleSell } from "../hooks/useWholesaleSellMutations";
 import { useToast } from "../components/ToastContext";
@@ -14,6 +14,7 @@ import { getVisibleFields, type FieldConfig } from "../forms/types";
 // No brand field. Which stamps leave the vault is decided when the box is packed, out of whatever
 // is actually on the shelf — so brand is recorded on the move into เบิกทองแพ็คแล้ว.
 interface SellValues extends Record<string, string> {
+  transactionDate: string;
   supplierId: string;
   productTypeId: string;
   purityId: string;
@@ -22,7 +23,10 @@ interface SellValues extends Record<string, string> {
   notes: string;
 }
 
+// today by default, editable because an entry is routinely written up after the deal — and the
+// date picked here, not the moment of saving, is what assigns the settlement period
 const initialValues: SellValues = {
+  transactionDate: todayBusinessDate(),
   supplierId: "",
   productTypeId: "",
   purityId: "",
@@ -58,6 +62,16 @@ export function WholesaleSellCreatePage() {
   }
 
   const fields: FieldConfig<SellValues>[] = [
+    {
+      name: "transactionDate",
+      label: "วันที่ทำรายการ",
+      kind: "date",
+      required: true,
+      helperText: (v) =>
+        v.transactionDate && v.transactionDate !== todayBusinessDate()
+          ? "บันทึกย้อนหลัง — รายการนี้จะถูกนับในงวดของวันที่เลือก"
+          : undefined,
+    },
     {
       name: "supplierId",
       label: "ผู้รับซื้อส่ง",
@@ -124,6 +138,7 @@ export function WholesaleSellCreatePage() {
       productTypeId: values.productTypeId,
       weight: Number(values.weight),
       pricePerGb965: Number(values.pricePerGb965),
+      transactionDate: values.transactionDate,
       notes: values.notes || undefined,
     };
 

@@ -9,7 +9,7 @@ import {
   Box,
   Alert,
 } from "@mui/material";
-import { stockGainSchema, GAIN_TRANSACTION_TYPES } from "@gold-platform/types";
+import { stockGainSchema, todayBusinessDate, GAIN_TRANSACTION_TYPES } from "@gold-platform/types";
 import { useBrands, useProductTypePurities, useProductTypes } from "../hooks/useMasterData";
 import { useStockGain } from "../hooks/useInventoryMutations";
 import { useToast } from "../components/ToastContext";
@@ -18,6 +18,7 @@ import { DynamicFormField } from "../forms/DynamicFormField";
 import { getVisibleFields, type FieldConfig } from "../forms/types";
 
 interface GainValues extends Record<string, string> {
+  transactionDate: string;
   productTypeId: string;
   purityId: string;
   brandId: string;
@@ -28,7 +29,11 @@ interface GainValues extends Record<string, string> {
   notes: string;
 }
 
+// A correction is usually typed up after the count that found it, so the day it belongs to and
+// the day it is entered are routinely different. Defaults to today; the stock still moves now
+// whichever day is picked — the date documents the event, it does not replay it.
 const initialValues: GainValues = {
+  transactionDate: todayBusinessDate(),
   productTypeId: "",
   purityId: "",
   brandId: "",
@@ -68,6 +73,16 @@ export function StockGainPage() {
   }
 
   const fields: FieldConfig<GainValues>[] = [
+    {
+      name: "transactionDate",
+      label: "วันที่ทำรายการ",
+      kind: "date",
+      required: true,
+      helperText: (v) =>
+        v.transactionDate && v.transactionDate !== todayBusinessDate()
+          ? "บันทึกย้อนหลัง — สต๊อกจะเพิ่มทันที แต่รายการจะแสดงตามวันที่เลือก"
+          : undefined,
+    },
     {
       name: "productTypeId",
       label: "ประเภททองคำ",
@@ -146,6 +161,7 @@ export function StockGainPage() {
       weight: Number(values.weight),
       pricePerGb: Number(values.pricePerGb),
       referenceType: values.referenceType,
+      transactionDate: values.transactionDate,
       notes: values.notes || undefined,
     };
 

@@ -43,7 +43,9 @@ class WholeSellRepositoryImpl implements ForWholeSellRepository {
         return Effect.tryPromise({
             try: () => this.db.select().from(wholeSellTransactions)
                 .where(conditions.length > 0 ? and(...conditions) : undefined)
-                .orderBy(desc(wholeSellTransactions.recordedAt))
+                // newest business day first, insert order breaking ties inside a day — a
+                // backdated entry belongs where its date puts it, not at the top
+                .orderBy(desc(wholeSellTransactions.transactionDate), desc(wholeSellTransactions.recordedAt))
                 .execute(),
             catch: () => new RepositoryError({ message: "cannot list wholesale sell transactions" }),
         });

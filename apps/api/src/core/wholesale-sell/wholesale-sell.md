@@ -253,10 +253,13 @@ All require a JWT. `recordedBy` / `updatedBy` come from the token, never the bod
 
 ---
 
-## 8. Settlement Period
+## 8. Two dates, and the settlement period
 
-Derived server-side from `recordedAt` by `resolveSettlementPeriod()` using the Fri 00:00 → Thu
-23:59 boundary, and frozen. Callers never supply it, and it is never reassigned.
+Exactly as on the buy side: **`transactionDate`** is the day the deal was struck, picked by the
+operator and defaulting to today; **`recordedAt`** is when the row was written, from the server
+clock. `settlementPeriod` is derived from `transactionDate` by `resolveSettlementPeriodOn()` using
+the Fri 00:00 → Thu 23:59 boundary, and frozen. Callers never supply the period. Correcting the
+date re-derives it, and is accepted only while the transaction is still `CREATED`.
 
 ---
 

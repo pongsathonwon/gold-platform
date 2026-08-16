@@ -34,11 +34,15 @@ const baseFields = {
     actualAmount: null,
     settledAmount: null,
     returnReason: null,
+    // The day the deal happened, the period it therefore falls in, and the instant it was
+    // written — all consistent, which is the ordinary same-day case. Friday 12 June opens
+    // 2026-W24. A test about backdating overrides transactionDate alone.
+    transactionDate: "2026-06-12",
     settlementPeriod: "2026-W24",
-    confirmDueAt: new Date("2026-06-12T00:00:00Z"),
+    confirmDueAt: new Date("2026-06-13T00:00:00Z"),
     notes: null,
     recordedBy: "tester",
-    recordedAt: new Date("2026-06-11T09:00:00Z"),
+    recordedAt: new Date("2026-06-12T09:00:00Z"),
 }
 
 export function buyTransaction(

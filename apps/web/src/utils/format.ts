@@ -8,3 +8,16 @@ export const formatNumber = (n: number, digits = 2) =>
  * is well inside a double's ~15 significant digits, so it never touches a real value.
  */
 export const formatWeight = (n: number) => String(Number(n.toPrecision(12)));
+
+/**
+ * A business date (`YYYY-MM-DD`) as a Thai calendar date.
+ *
+ * Formatted from its own parts rather than through `new Date(...)`: a bare ISO date parses as UTC
+ * midnight, which a browser west of Greenwich renders as the day before. The stored value is a
+ * calendar day with no instant behind it, so no timezone should be applied to it at all.
+ */
+export const formatBusinessDate = (isoDate: string) => {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  if (!year || !month || !day) return isoDate;
+  return new Date(year, month - 1, day).toLocaleDateString("th-TH");
+};
