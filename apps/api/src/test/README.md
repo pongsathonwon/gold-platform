@@ -9,13 +9,14 @@ ports can be swapped for in-memory fakes and the domain logic runs **unchanged**
 mocked-out unit tests of individual functions — `advanceStatus` executes exactly as it does in
 production, guards and all. Only the edges are replaced.
 
-Three seams per suite:
+Four seams per suite:
 
 | Mocked | Replaced with | Why |
 |---|---|---|
 | `adapter/<domain>.repository.js` | in-memory repo from `test/fakes.ts` | holds one transaction and its full status log, so a test can assert *how many* rows a call wrote |
 | `core/inventory/application/inventory.usecase.js` | `vi.fn()` spies returning `Effect.void` | the question is *did the hook fire, once, with what* — inventory's own correctness is a separate concern |
 | `infrastructure/quantity.js` | fixed resolvers | they hit the DB for the product-type/purity rule, and the numbers are not what these tests are about |
+| `infrastructure/brand-split.js` | `resolveBrandSplit` as a pass-through | it reads supplier, purity and `suppler_brands` rows. Its own rules are tested directly — see below |
 
 ### One trap worth knowing
 
@@ -43,6 +44,8 @@ the web app and tested there:
 - `returnReason` required on `RETURNED`, in both domains
 - which effect each move owns: increment on `STOCKED`, decrement on `PACKED`, reversal on
   `RETURNED`, contested weight on `DISPUTED`, `settledAmount` on `PAID`
+- that a mixed brand split still moves in **one** call and that its pools sum back to the
+  transaction's weight and value — brand chooses which pools move, never how much does
 - that accepting and packing take **no weight**, so a supplied one cannot change what moves
 - that acceptance clears a contested weight recorded by an earlier dispute
 - that `settledAmount` is cleared when a retry settles exactly
@@ -54,6 +57,16 @@ the web app and tested there:
 Each of these was mutation-checked when written: the guard was removed, the hook moved, the
 ordering swapped, and the suite was confirmed to fail on exactly the relevant test.
 
+### `brand-split.test.ts` — the exception to the pattern
+
+`divideWeight()` is the brand rule as a **pure function**, with its three DB lookups lifted out
+into the `resolveBrandSplit()` wrapper. So that suite mocks nothing at all and asserts the
+invariant directly: every split reconstructs the transaction's `weightGb` **and** `weightGm`,
+including when the conversion factor does not divide evenly, because the residual is taken by
+subtraction rather than reconversion. It also covers what cannot be expressed — over-naming, an
+unregistered brand, a split sent to a `brandLock` supplier or a 99.9% order — and that
+`apportionCost` reconciles to the transaction total when the share does not divide cleanly.
+
 ## What is NOT covered
 
 Do not read a green run as "the domain is safe end to end":
@@ -64,8 +77,9 @@ Do not read a green run as "the domain is safe end to end":
    transaction is the one piece that genuinely needs Postgres. Not covered anywhere.
 3. **No HTTP layer.** Zod validation, `toHttpError` status-code mapping, and JWT auth are untested;
    the suites call usecases directly.
-4. **Inventory internals.** `increment`/`decrement`/`reverseDecrement` are spies here and have no
-   tests of their own.
+4. **Inventory internals.** `incrementSplit`/`decrementSplit`/`reverseDecrement` are spies here
+   and have no tests of their own — including the all-or-nothing property of `incrementMany` /
+   `decrementMany`, which is a DB-transaction guarantee and needs Postgres to demonstrate.
 5. **`createTransaction` pricing.** The quantity resolvers are stubbed, so the derived-price and
    settlement-period paths are only covered by the shared-types tests in the web app.
 

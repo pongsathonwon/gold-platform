@@ -2,8 +2,8 @@ import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
 import { StockGainReq, StockLossReq } from "@gold-platform/types";
 import {
-    DecrementReq, IncrementReq, InventoriesRepository, InventoryVolume, MovementFilter,
-    ProductSwitchReq, ReverseDecrementReq,
+    DecrementReq, IncrementReq, InventoriesRepository, InventoryVolume, MovementEntry,
+    MovementFilter, ProductSwitchReq, ReverseDecrementReq, SplitMovementReq,
 } from "../port/inventories.port.js";
 import { makeInventoryRepository } from "../adapter/inventory.repository.js";
 import { resolveQuantity } from "../../../infrastructure/quantity.js";
@@ -218,62 +218,88 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
 
 // --- Internal cross-domain commands ---
 
-export const increment = (req: IncrementReq) =>
+// flattens a split into the per-pool rows the repository moves atomically
+const toEntries = (req: SplitMovementReq): MovementEntry[] =>
+    req.brands.map((brand) => ({
+        purityId: req.purityId,
+        brandId: brand.brandId,
+        origin: req.origin,
+        productTypeId: req.productTypeId,
+        weightGb: brand.weightGb,
+        weightGm: brand.weightGm,
+        totalCost: brand.totalCost,
+        referenceType: req.referenceType,
+        referenceId: req.referenceId,
+        movedBy: req.movedBy,
+    }))
+
+/**
+ * Books a delivery into every branded pool it landed in, in one transaction.
+ *
+ * The split is resolved upstream (`infrastructure/brand-split.ts`) and always sums to the
+ * transaction's weight, so this never has to check that it does — it books what it is given.
+ */
+export const incrementSplit = (req: SplitMovementReq) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
-
-        yield* repo.upsertBalance({
-            purityId: req.purityId,
-            brandId: req.brandId,
-            origin: req.origin,
-            productTypeId: req.productTypeId,
-            totalWeightGb: req.weightGb,
-            totalWeightGm: req.weightGm,
-            totalCost: req.totalCost,
-        });
-
-        yield* repo.createMovement({
-            id: randomUUID(),
-            purityId: req.purityId,
-            brandId: req.brandId,
-            origin: req.origin,
-            productTypeId: req.productTypeId,
-            referenceType: req.referenceType,
-            referenceId: req.referenceId,
-            weightGbDelta: req.weightGb,
-            weightGmDelta: req.weightGm,
-            costDelta: req.totalCost,
-            notes: null,
-            movedAt: new Date(),
-            movedBy: req.createdBy,
-        });
+        yield* repo.incrementMany(toEntries(req));
     }).pipe(Effect.provide(inventoryLive))
 
-export const decrement = (req: DecrementReq) =>
+/**
+ * Takes a shipment out of every pool it was drawn from, in one transaction. Each pool is costed
+ * at its own live WAC, and one short pool fails the whole move with nothing decremented.
+ */
+export const decrementSplit = (req: SplitMovementReq) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
+        yield* repo.decrementMany(toEntries(req));
+    }).pipe(Effect.provide(inventoryLive))
 
-        // cost removed is derived from the pool's live WAC inside the locked transaction
-        const costDelta = yield* repo.decrementBalance(
-            { purityId: req.purityId, brandId: req.brandId, origin: req.origin, productTypeId: req.productTypeId },
-            req.weightGb, req.weightGm,
-        );
+// The single-brand case, expressed through the split path so every movement in the system takes
+// the same all-or-nothing route. Callers that deal in one pool (receive, retail-sell) keep the
+// simpler shape rather than building a one-element array at every call site.
+export const increment = (req: IncrementReq) =>
+    incrementSplit({
+        purityId: req.purityId,
+        origin: req.origin,
+        productTypeId: req.productTypeId,
+        brands: [{
+            brandId: req.brandId, weightGb: req.weightGb, weightGm: req.weightGm, totalCost: req.totalCost,
+        }],
+        referenceType: req.referenceType,
+        referenceId: req.referenceId,
+        movedBy: req.createdBy,
+    })
 
-        yield* repo.createMovement({
-            id: randomUUID(),
-            purityId: req.purityId,
-            brandId: req.brandId,
-            origin: req.origin,
-            productTypeId: req.productTypeId,
-            referenceType: req.referenceType,
-            referenceId: req.referenceId,
-            weightGbDelta: -req.weightGb,
-            weightGmDelta: -req.weightGm,
-            costDelta: -costDelta,
-            notes: null,
-            movedAt: new Date(),
-            movedBy: req.movedBy,
-        });
+export const decrement = (req: DecrementReq) =>
+    decrementSplit({
+        purityId: req.purityId,
+        origin: req.origin,
+        productTypeId: req.productTypeId,
+        // cost removed comes from the pool's live WAC, not from here
+        brands: [{ brandId: req.brandId, weightGb: req.weightGb, weightGm: req.weightGm, totalCost: 0 }],
+        referenceType: req.referenceType,
+        referenceId: req.referenceId,
+        movedBy: req.movedBy,
+    })
+
+/**
+ * The brand split a transaction actually moved, read back off the movement ledger.
+ *
+ * There is no separate allocation table, and deliberately so: the movements booked under a
+ * transaction's reference *are* its split, so the figures a detail page shows are the same rows
+ * the balances were built from and cannot drift from them. Weights come back positive whichever
+ * direction the movement went — the caller already knows whether it bought or sold.
+ */
+export const findBrandSplitByReference = (referenceType: string, referenceId: string) =>
+    Effect.gen(function* () {
+        const repo = yield* InventoriesRepository;
+        const movements = yield* repo.findMovementsByReference(referenceType, referenceId);
+        return movements.map((m) => ({
+            brandId: m.brandId,
+            weightGb: Math.abs(m.weightGbDelta),
+            weightGm: Math.abs(m.weightGmDelta),
+        }));
     }).pipe(Effect.provide(inventoryLive))
 
 export const reverseDecrement = (req: ReverseDecrementReq) =>

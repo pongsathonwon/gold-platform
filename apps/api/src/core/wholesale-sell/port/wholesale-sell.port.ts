@@ -1,6 +1,6 @@
 import { Context, Data, Effect } from "effect";
 import {
-    WHOLE_SELL_INVENTORY_STATUS, WHOLE_SELL_RETURN_STATUS,
+    BrandSplit, WHOLE_SELL_INVENTORY_STATUS, WHOLE_SELL_RETURN_STATUS,
     WHOLE_SELL_REVERSAL_STATUS, WHOLE_SELL_TRANSITIONS,
 } from "@gold-platform/types";
 import { RepositoryError } from "../../../infrastructure/db/client.js";
@@ -45,7 +45,7 @@ export type ListFilter = Partial<Pick<WholeSellTransactionShape,
     'currentStatus' | 'settlementPeriod' | 'supplierId'>>
 
 export type UpdateTransactionFields = Partial<Pick<WholeSellTransactionShape,
-    | 'supplierId' | 'purityId' | 'brandId' | 'productTypeId'
+    | 'supplierId' | 'purityId' | 'productTypeId'
     | 'weightGb' | 'weightGm' | 'conversionFactor'
     | 'pricePerGb965' | 'pricePerGb999' | 'totalAmount' | 'notes'>>
 
@@ -78,12 +78,12 @@ export class WholeSellRepository extends Context.Tag('wholesale-sell/repository'
 
 // --- Command shapes ---
 
-// settlementPeriod is never caller-supplied — it is derived from recordedAt server-side
+// settlementPeriod is never caller-supplied — it is derived from recordedAt server-side.
+// Brand is not supplied either: which stamps leave the vault is decided at packing time, out of
+// whatever is on the shelf, so brand is recorded on the move into PACKED.
 export interface CreateTransactionReq {
     supplierId: string
     purityId: string
-    // absent for 99.9% — the server substitutes the 'NA' sentinel so the inventory pool key matches
-    brandId?: string
     productTypeId: string
     weight: number
     // the only price supplied; the 99.9% quote is derived from it
@@ -96,7 +96,6 @@ export interface UpdateTransactionReq {
     transactionId: string
     supplierId?: string
     purityId?: string
-    brandId?: string
     productTypeId?: string
     weight?: number
     pricePerGb965?: number
@@ -114,6 +113,9 @@ export interface AdvanceStatusReq {
     settledAmount?: number
     // required on a move into RETURNED
     returnReason?: ReturnReason
+    // only read on a move into PACKED — which pools the shipment is drawn from. The fungible pool
+    // takes the residual, so this divides the agreed weight and can never change it.
+    brandSplit?: BrandSplit
     updatedBy: string
 }
 

@@ -18,8 +18,24 @@ vi.mock("../../inventory/application/inventory.usecase.js", async () => {
     const { Effect } = await import("effect");
     return {
         increment: vi.fn(() => Effect.void),
+        incrementSplit: vi.fn(() => Effect.void),
         decrement: vi.fn(() => Effect.void),
+        decrementSplit: vi.fn(() => Effect.void),
         reverseDecrement: vi.fn(() => Effect.void),
+        findBrandSplitByReference: vi.fn(() => Effect.succeed([])),
+    };
+});
+
+// The brand split resolver reads supplier, purity and supplier-brand rows. Its own rules live in
+// infrastructure/brand-split.test.ts; here it is a pass-through so the transitions are what's
+// under test.
+vi.mock("../../../infrastructure/brand-split.js", async () => {
+    const actual = await import("../../../infrastructure/brand-split.js");
+    const { Effect } = await import("effect");
+    return {
+        ...actual,
+        resolveBrandSplit: vi.fn((req: { weightGb: number; weightGm: number }) =>
+            Effect.succeed([{ brandId: "NA", weightGb: req.weightGb, weightGm: req.weightGm }])),
     };
 });
 
@@ -39,7 +55,7 @@ vi.mock("../../../infrastructure/quantity.js", async () => {
 
 let repoState: ReturnType<typeof makeFakeSellRepo>["state"];
 
-const { decrement, reverseDecrement } = await import("../../inventory/application/inventory.usecase.js");
+const { decrementSplit, reverseDecrement } = await import("../../inventory/application/inventory.usecase.js");
 const { advanceStatus } = await import("./wholesale-sell.usecase.js");
 
 function given(overrides: Partial<WholeSellTransactionShape> = {}) {
@@ -54,7 +70,7 @@ const move = (id: string, req: Record<string, unknown>) =>
     advanceStatus({ transactionId: id, updatedBy: "tester", ...req } as never);
 
 beforeEach(() => {
-    vi.mocked(decrement).mockClear();
+    vi.mocked(decrementSplit).mockClear();
     vi.mocked(reverseDecrement).mockClear();
 });
 
@@ -64,7 +80,7 @@ describe("transition guards", () => {
         const error = await expectFailure(move(t.id, { toStatus: "SHIPPED" }));
         expect(error).toMatchObject({ _tag: "WholeSellInvalidTransitionError", from: "CREATED", to: "SHIPPED" });
         expect(repoState.statuses).toHaveLength(0);
-        expect(decrement).not.toHaveBeenCalled();
+        expect(decrementSplit).not.toHaveBeenCalled();
     });
 
     it("refuses every failure branch without a note", async () => {
@@ -109,22 +125,45 @@ describe("packing", () => {
         const t = given({ currentStatus: "CONFIRMED" });
         await expectSuccess(move(t.id, { toStatus: "PACKED" }));
 
-        expect(decrement).toHaveBeenCalledTimes(1);
-        expect(vi.mocked(decrement).mock.calls[0][0]).toMatchObject({
-            weightGb: t.weightGb,
-            weightGm: t.weightGm,
+        expect(decrementSplit).toHaveBeenCalledTimes(1);
+        const call = vi.mocked(decrementSplit).mock.calls[0][0];
+        expect(call).toMatchObject({
             origin: "foreign",
             referenceType: "WHOLESALE_SELL",
             referenceId: t.id,
         });
+        // one call, however many pools it draws from — they always come to the agreed weight
+        expect(call.brands.reduce((sum, b) => sum + b.weightGb, 0)).toBe(t.weightGb);
+        expect(call.brands.reduce((sum, b) => sum + b.weightGm, 0)).toBe(t.weightGm);
     });
 
     it("takes no weight — we packed our own gold, so the agreement is what left", async () => {
         const t = given({ currentStatus: "CONFIRMED" });
         await expectSuccess(move(t.id, { toStatus: "PACKED", actualWeight: 11.95 }));
 
-        expect(vi.mocked(decrement).mock.calls[0][0]).toMatchObject({ weightGb: t.weightGb });
+        const call = vi.mocked(decrementSplit).mock.calls[0][0];
+        expect(call.brands.reduce((sum, b) => sum + b.weightGb, 0)).toBe(t.weightGb);
         expect(repoState.transaction.actualWeightGb).toBeNull();
+    });
+
+    it("draws a mixed shipment from each pool named, in one move", async () => {
+        // brand chooses which pools go down, never how much does — and one short pool must fail
+        // the whole move rather than leave a half-packed box
+        const { resolveBrandSplit } = await import("../../../infrastructure/brand-split.js");
+        vi.mocked(resolveBrandSplit).mockReturnValueOnce(
+            Effect.succeed([
+                { brandId: "HUA_GOLD", weightGb: 8, weightGm: 121.6 },
+                { brandId: "NA", weightGb: 4, weightGm: 60.8 },
+            ]) as never,
+        );
+
+        const t = given({ currentStatus: "CONFIRMED" });
+        await expectSuccess(move(t.id, { toStatus: "PACKED", brandSplit: [{ brandId: "HUA_GOLD", weight: 8 }] }));
+
+        expect(decrementSplit).toHaveBeenCalledTimes(1);
+        const { brands } = vi.mocked(decrementSplit).mock.calls[0][0];
+        expect(brands.map((b) => b.brandId)).toEqual(["HUA_GOLD", "NA"]);
+        expect(brands.reduce((sum, b) => sum + b.weightGb, 0)).toBe(t.weightGb);
     });
 
     it("is a separate step from shipping, and only one of them moves stock", async () => {
@@ -135,11 +174,11 @@ describe("packing", () => {
         await expectSuccess(move(t.id, { toStatus: "SHIPPED" }));
 
         expect(loggedStatuses(repoState.statuses)).toEqual(["PACKED", "SHIPPED"]);
-        expect(decrement).toHaveBeenCalledTimes(1);
+        expect(decrementSplit).toHaveBeenCalledTimes(1);
     });
 
     it("records no status when the pool is short", async () => {
-        vi.mocked(decrement).mockReturnValueOnce(
+        vi.mocked(decrementSplit).mockReturnValueOnce(
             Effect.fail({ _tag: "InsufficientStockError" }) as never,
         );
         const t = given({ currentStatus: "CONFIRMED" });
@@ -175,7 +214,7 @@ describe("the buyer's own figures", () => {
         await expectSuccess(move(t.id, { toStatus: "DISPUTED", note: "ผู้ซื้อชั่งได้น้อยกว่า", actualWeight: 11.9 }));
 
         expect(repoState.transaction.actualWeightGb).toBe(11.9);
-        expect(decrement).not.toHaveBeenCalled();
+        expect(decrementSplit).not.toHaveBeenCalled();
         expect(reverseDecrement).not.toHaveBeenCalled();
     });
 

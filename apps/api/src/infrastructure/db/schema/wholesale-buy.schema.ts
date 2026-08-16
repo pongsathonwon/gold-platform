@@ -1,5 +1,5 @@
 import { decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
-import { brands, productTypes, purities, suppliers } from "./master.schema.js";
+import { productTypes, purities, suppliers } from "./master.schema.js";
 
 // Happy path:  CREATED → CONFIRMED → PAID → RECEIVED → STOCKED
 // Failure branches:
@@ -46,8 +46,13 @@ export const wholeBuyTransactions = pgTable('whole_buy_transactions', {
 
     supplierId: uuid().notNull().references(() => suppliers.id),
     purityId: varchar().notNull().references(() => purities.id),
-    brandId: varchar().notNull().references(() => brands.id),
     productTypeId: varchar().notNull().references(() => productTypes.id),
+
+    // No brand column. An order cannot state what stamp will arrive — that is an observation made
+    // when the metal is on the counter, and from a supplier without brandLock it is routinely a
+    // mix. The split is recorded on the move into STOCKED as one inventory movement per pool, so
+    // the ledger holding the balances is also the record of what was stamped what. A column here
+    // would be a second copy of those same numbers, free to drift from them.
 
     // ordered weight — snapshotted at creation, only editable while CREATED
     weightGb: decimal({ mode: 'number' }).notNull(),

@@ -6,7 +6,6 @@ export interface WholeSellTransaction {
   id: string;
   supplierId: string;
   purityId: string;
-  brandId: string;
   productTypeId: string;
   weightGb: number;
   weightGm: number;
@@ -28,6 +27,17 @@ export interface WholeSellTransaction {
   notes: string | null;
   recordedBy: string;
   recordedAt: string;
+}
+
+/**
+ * What a transaction actually moved, per branded pool — read back off the inventory movement
+ * ledger rather than a column on the transaction, because the movements are where it was written.
+ * Empty until the transition that moves stock has run.
+ */
+export interface BrandSplitLine {
+  brandId: string;
+  weightGb: number;
+  weightGm: number;
 }
 
 export interface WholeSellStatusEntry {
@@ -67,7 +77,7 @@ export function useWholesaleSellDetail(id: string) {
     enabled: !!id,
     queryFn: async () => {
       const res = await client["wholesale-sell"][":id"].$get({ param: { id } });
-      return unwrap<{ transaction: WholeSellTransaction; statuses: WholeSellStatusEntry[] }>(
+      return unwrap<{ transaction: WholeSellTransaction; statuses: WholeSellStatusEntry[]; brandSplit: BrandSplitLine[] }>(
         res,
         "Failed to fetch transaction",
       );

@@ -200,7 +200,7 @@ midnight). It is **informational**: nothing in the API tests against it.
 
 | When | Effect |
 |---|---|
-| Entering `PACKED` | `decrement()` of the agreed weight — `referenceType: 'WHOLESALE_SELL'`, `referenceId` = transaction id |
+| Entering `PACKED` | `decrementSplit()` of the agreed weight — one movement **per branded pool**, all in one DB transaction, `referenceType: 'WHOLESALE_SELL'`, `referenceId` = transaction id |
 | Entering `RETURNED` | `reverseDecrement()` — restores the balance, books opposite movements under `WHOLESALE_SELL_RETURN` |
 | Every other status, including `DISPUTED` | nothing |
 
@@ -210,7 +210,27 @@ where it was rather than recording a move that never physically happened.
 **Always `origin: 'foreign'`, at every purity.** The domestic pool is smelted stock and only
 `convert_out` may consume it. Hardcoded in the usecase, never caller-supplied.
 
-For 99.9% the server also forces `brandId = 'NA'` (those pools are keyed by origin, not brand).
+### Brand is recorded at the vault door
+
+There is **no `brand_id` column** on `whole_sell_transactions`, mirroring the buy side for the
+mirror-image reason: which stamps go in the box is decided when the vault is opened, out of
+whatever is actually on the shelf, not months earlier when the deal was struck. The split is
+supplied on the move into `PACKED` and becomes one `decrement` per pool — `brandLock`
+counterparties take their single brand, everyone else names weights with the fungible `NA` pool
+absorbing the residual, and 99.9% never splits at all. The full rule lives in
+`infrastructure/brand-split.ts` and is shared verbatim with wholesale-buy.
+
+**A split cannot change how much leaves the vault**, only which pools it comes out of: the caller
+names branded portions and the residual is taken by subtraction, so the lines always reconstruct
+the agreed weight.
+
+**All the pools move in one DB transaction.** One pool short of stock fails the whole move with
+nothing decremented anywhere and the transaction still `CONFIRMED` — a half-packed shipment is
+worse than an unpacked one.
+
+`RETURNED` needs no split of its own: `reverseDecrement()` replays every movement booked under the
+reference back into the pool it came from, which is precisely why the ledger rather than a column
+is where the split belongs.
 
 **Corrections after `PAID`** do not reopen the transaction. Post a manual adjustment through
 `POST /inventory/gain` (or `/loss`) with `referenceType: WHOLESALE_SELL` and a note pointing at the

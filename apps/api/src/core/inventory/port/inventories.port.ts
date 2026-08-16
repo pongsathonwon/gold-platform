@@ -30,12 +30,31 @@ export type MovementFilter = Partial<Pick<MovementShape, 'purityId' | 'brandId' 
 // running cumulative on the movements page
 export type MovementOpening = { purityId: string; weightGb: number; weightGm: number }
 
+// One pool's share of a movement. `totalCost` is the cost entering the pool on an increment and
+// is ignored on a decrement, where the pool's own live WAC decides what leaves.
+export type MovementEntry = BalanceKey & {
+    weightGb: number
+    weightGm: number
+    totalCost: number
+    referenceType: string
+    referenceId: string
+    movedBy: string
+}
+
 export interface ForInventoriesRepository {
     listBalances(): Effect.Effect<BalanceShape[], RepositoryError>
     getBalance(key: BalanceKey): Effect.Effect<BalanceShape | null, RepositoryError>
     upsertBalance(req: UpsertBalance): Effect.Effect<void, RepositoryError>
     // returns the cost removed, derived from the pool's live WAC inside the locked transaction
     decrementBalance(key: BalanceKey, weightGb: number, weightGm: number): Effect.Effect<number, RepositoryError | InsufficientStockError>
+    // Balance upsert + movement row for every pool in one DB transaction. A transaction whose
+    // gold splits across brands moves several pools at once, and a partial application would
+    // book stock the operator never agreed to — so all of them land or none do.
+    incrementMany(entries: MovementEntry[]): Effect.Effect<void, RepositoryError>
+    // The same all-or-nothing rule on the way out, with each pool's cost taken from its own live
+    // WAC inside the shared transaction. One short pool fails the whole move: a half-packed
+    // shipment is worse than an unpacked one.
+    decrementMany(entries: MovementEntry[]): Effect.Effect<void, RepositoryError | InsufficientStockError>
     createMovement(req: CreateMovement): Effect.Effect<void, RepositoryError>
     createStockGainAdjustment(req: CreateStockGain): Effect.Effect<void, RepositoryError>
     createStockLossAdjustment(req: CreateStockLoss): Effect.Effect<void, RepositoryError>
@@ -84,6 +103,35 @@ export interface DecrementReq {
     productTypeId: string
     weightGb: number
     weightGm: number
+    referenceType: string
+    referenceId: string
+    movedBy: string
+}
+
+/**
+ * One brand's share of a transaction whose gold is split across stamps.
+ *
+ * `totalCost` is read on the way in and ignored on the way out — an increment carries the cost
+ * the buyer paid for that portion, a decrement takes whatever the pool's own live WAC says.
+ */
+export interface BrandWeight {
+    brandId: string
+    weightGb: number
+    weightGm: number
+    totalCost: number
+}
+
+/**
+ * A stock movement spanning one or more branded pools of the same purity, origin and product type.
+ *
+ * This is the general shape; `increment`/`decrement` are the single-brand case expressed through
+ * it, so every inventory movement in the system goes through the same all-or-nothing path.
+ */
+export interface SplitMovementReq {
+    purityId: string
+    origin: 'domestic' | 'foreign'
+    productTypeId: string
+    brands: BrandWeight[]
     referenceType: string
     referenceId: string
     movedBy: string

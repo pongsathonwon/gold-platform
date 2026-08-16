@@ -1,6 +1,6 @@
 import { Context, Data, Effect } from "effect";
 import {
-    WHOLE_BUY_INVENTORY_STATUS, WHOLE_BUY_RETURN_STATUS, WHOLE_BUY_TRANSITIONS,
+    BrandSplit, WHOLE_BUY_INVENTORY_STATUS, WHOLE_BUY_RETURN_STATUS, WHOLE_BUY_TRANSITIONS,
 } from "@gold-platform/types";
 import { RepositoryError } from "../../../infrastructure/db/client.js";
 import {
@@ -46,7 +46,7 @@ export type ListFilter = Partial<Pick<WholeBuyTransactionShape,
     'currentStatus' | 'settlementPeriod' | 'supplierId'>>
 
 export type UpdateTransactionFields = Partial<Pick<WholeBuyTransactionShape,
-    | 'supplierId' | 'purityId' | 'brandId' | 'productTypeId'
+    | 'supplierId' | 'purityId' | 'productTypeId'
     | 'weightGb' | 'weightGm' | 'conversionFactor'
     | 'pricePerGb965' | 'pricePerGb999' | 'totalAmount' | 'notes'>>
 
@@ -78,12 +78,12 @@ export class WholeBuyRepository extends Context.Tag('wholesale-buy/repository')<
 
 // --- Command shapes ---
 
-// settlementPeriod is never caller-supplied — it is derived from recordedAt server-side
+// settlementPeriod is never caller-supplied — it is derived from recordedAt server-side.
+// Brand is not supplied either: an order cannot know what stamp will turn up, so brand is
+// recorded on the move into STOCKED against the pools the gold actually lands in.
 export interface CreateTransactionReq {
     supplierId: string
     purityId: string
-    // absent for 99.9% — the server substitutes the 'NA' sentinel so the inventory pool key matches
-    brandId?: string
     productTypeId: string
     weight: number
     // the only price supplied; the 99.9% quote is derived from it
@@ -96,7 +96,6 @@ export interface UpdateTransactionReq {
     transactionId: string
     supplierId?: string
     purityId?: string
-    brandId?: string
     productTypeId?: string
     weight?: number
     pricePerGb965?: number
@@ -114,12 +113,16 @@ export interface AdvanceStatusReq {
     settledAmount?: number
     // required on a move into RETURNED
     returnReason?: ReturnReason
+    // only read on a move into STOCKED — the named stamps the delivery carried. The fungible pool
+    // takes the residual, so this divides the ordered weight and can never change it.
+    brandSplit?: BrandSplit
     updatedBy: string
 }
 
 export interface ReceiveAndStockReq {
     transactionId: string
     note?: string
+    brandSplit?: BrandSplit
     updatedBy: string
 }
 

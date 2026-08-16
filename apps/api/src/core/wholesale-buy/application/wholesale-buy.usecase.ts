@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { derivePricePerGb999 } from "@gold-platform/types";
+import { BrandSplit, derivePricePerGb999 } from "@gold-platform/types";
 import {
     AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CONTESTED_STATUS,
     CreateTransactionReq, INVENTORY_STATUS, InvalidTransitionError, ListFilter,
@@ -10,8 +10,9 @@ import {
 } from "../port/wholesale-buy.port.js";
 import { makeWholeBuyRepository } from "../adapter/wholesale-buy.repository.js";
 import { WholeBuyStatus, WholeBuyTransactionShape } from "../../../infrastructure/db/schema/wholesale-buy.schema.js";
-import { increment } from "../../inventory/application/inventory.usecase.js";
+import { findBrandSplitByReference, incrementSplit } from "../../inventory/application/inventory.usecase.js";
 import { findQuantityRule, resolveMeasuredQuantity, resolveQuantity } from "../../../infrastructure/quantity.js";
+import { apportionCost, resolveBrandSplit } from "../../../infrastructure/brand-split.js";
 import { resolveSettlementPeriod } from "../../../infrastructure/settlement.js";
 
 const wholeBuyLive = Layer.effect(WholeBuyRepository, makeWholeBuyRepository);
@@ -19,16 +20,11 @@ const wholeBuyLive = Layer.effect(WholeBuyRepository, makeWholeBuyRepository);
 // wholesale-buy always lands in the foreign pool — only smelting produces domestic stock
 const ORIGIN = 'foreign' as const
 const REFERENCE_TYPE = 'WHOLESALE_BUY'
-// 99.9% pools are keyed by origin, not brand; 'NA' is the sentinel that keeps the key shape uniform
-const NA_BRAND = 'NA'
 
 // Which of the two recorded quotes applies. 99.9% gold (unitOfMeasure 'g') is priced off the
 // 96.5% quote by the purity ratio — the operator enters both, the item's purity picks one.
 const applicablePrice = (unitOfMeasure: 'g' | 'gb', pricePerGb965: number, pricePerGb999: number) =>
     unitOfMeasure === 'g' ? pricePerGb999 : pricePerGb965
-
-const brandFor = (unitOfMeasure: 'g' | 'gb', brandId?: string) =>
-    unitOfMeasure === 'g' ? NA_BRAND : (brandId ?? NA_BRAND)
 
 // --- Commands ---
 
@@ -50,7 +46,6 @@ export const createTransaction = (req: CreateTransactionReq) =>
             id,
             supplierId: req.supplierId,
             purityId: req.purityId,
-            brandId: brandFor(unitOfMeasure, req.brandId),
             productTypeId: req.productTypeId,
             weightGb,
             weightGm,
@@ -113,7 +108,7 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
         const pricePerGb999 = derivePricePerGb999(pricePerGb965);
         const pricingChanged =
             req.weight !== undefined || req.purityId !== undefined || req.productTypeId !== undefined ||
-            req.pricePerGb965 !== undefined || req.brandId !== undefined;
+            req.pricePerGb965 !== undefined;
 
         if (pricingChanged) {
             // when the weight itself is unchanged it still has to be re-expressed in the target
@@ -128,7 +123,6 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
 
             fields.purityId = purityId;
             fields.productTypeId = productTypeId;
-            fields.brandId = brandFor(unitOfMeasure, req.brandId ?? transaction.brandId);
             fields.weightGb = weightGb;
             fields.weightGm = weightGm;
             fields.conversionFactor = conversionFactor;
@@ -148,11 +142,24 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
  * was the number already on the order. A field that permits exactly one value carries no
  * information, and mistyping it used to divert a perfectly good delivery into `DISPUTED`.
  *
- * The check that matters happens earlier and physically: at the door, against the document,
- * before custody transfers. A delivery whose weight, brand or purity disagrees is refused
- * outright (`PAID → RETURNED`) and never reaches this path.
+ * **It does take the brand split**, and this is the only place a buy records brand at all. What
+ * stamp the gold carries is not something an order can state in advance — it is what turns up, and
+ * from a supplier that is not brand-locked it is routinely a mix. So brand is not a check the
+ * delivery can fail; it is an observation made when the metal is on the counter. A `brandLock`
+ * supplier's single stamp takes all of it and the operator enters nothing.
+ *
+ * The split cannot change *how much* enters stock. It divides the agreed weight and the residual
+ * falls to the fungible pool by subtraction, so the pools always sum back to the order.
+ *
+ * The check that matters still happens earlier and physically: at the door, against the document,
+ * before custody transfers. A delivery whose weight or purity disagrees is refused outright
+ * (`PAID → RETURNED`) and never reaches this path.
  */
-const acceptIntoStock = (transaction: WholeBuyTransactionShape, actor: string) =>
+const acceptIntoStock = (
+    transaction: WholeBuyTransactionShape,
+    actor: string,
+    brandSplit: BrandSplit | undefined,
+) =>
     Effect.gen(function* () {
         const repo = yield* WholeBuyRepository;
 
@@ -166,19 +173,26 @@ const acceptIntoStock = (transaction: WholeBuyTransactionShape, actor: string) =
             });
         }
 
-        yield* increment({
+        const split = yield* resolveBrandSplit({
+            supplierId: transaction.supplierId,
             purityId: transaction.purityId,
-            brandId: transaction.brandId,
+            conversionFactor: transaction.conversionFactor,
+            weightGb: transaction.weightGb,
+            weightGm: transaction.weightGm,
+            requested: brandSplit ?? [],
+        });
+
+        yield* incrementSplit({
+            purityId: transaction.purityId,
             // wholesale-buy never produces domestic stock, whatever the purity — only smelting does
             origin: ORIGIN,
             productTypeId: transaction.productTypeId,
-            weightGb: transaction.weightGb,
-            weightGm: transaction.weightGm,
-            conversionFactor: transaction.conversionFactor,
-            totalCost: transaction.totalAmount,
+            // what we paid follows the metal: each pool is credited its share of the order value,
+            // with the last line absorbing the rounding so the pools reconcile to totalAmount
+            brands: apportionCost(split, transaction.totalAmount, transaction.weightGb),
             referenceType: REFERENCE_TYPE,
             referenceId: transaction.id,
-            createdBy: actor,
+            movedBy: actor,
         });
     })
 
@@ -264,7 +278,7 @@ const assertTransitionAllowed = (
  */
 const applyTransitionEffect = (
     transaction: WholeBuyTransactionShape,
-    req: Pick<AdvanceStatusReq, 'actualWeight' | 'settledAmount' | 'returnReason'>,
+    req: Pick<AdvanceStatusReq, 'actualWeight' | 'settledAmount' | 'returnReason' | 'brandSplit'>,
     toStatus: WholeBuyStatus,
     actor: string,
 ) =>
@@ -272,7 +286,7 @@ const applyTransitionEffect = (
         const repo = yield* WholeBuyRepository;
 
         if (toStatus === INVENTORY_STATUS) {
-            yield* acceptIntoStock(transaction, actor);
+            yield* acceptIntoStock(transaction, actor, req.brandSplit);
             return;
         }
         if (toStatus === CONTESTED_STATUS) {
@@ -309,7 +323,8 @@ export const advanceStatus = (req: AdvanceStatusReq) =>
  * later changes nothing about the history already recorded.
  *
  * No weight is taken. Reaching this call already means the delivery was checked against its
- * document at the door and accepted; one that failed that check never got this far.
+ * document at the door and accepted; one that failed that check never got this far. The brand
+ * split is taken, because putting the gold away is the moment its stamps are known.
  */
 export const receiveAndStock = (req: ReceiveAndStockReq) =>
     Effect.gen(function* () {
@@ -322,7 +337,7 @@ export const receiveAndStock = (req: ReceiveAndStockReq) =>
         }
 
         yield* applyStatus(transaction.id, 'RECEIVED', req.note, req.updatedBy);
-        yield* acceptIntoStock(transaction, req.updatedBy);
+        yield* acceptIntoStock(transaction, req.updatedBy, req.brandSplit);
         yield* applyStatus(transaction.id, INVENTORY_STATUS, req.note, req.updatedBy);
 
         return { status: INVENTORY_STATUS };
@@ -355,14 +370,18 @@ export const confirmAllCreated = (actor?: string) =>
 
 // --- Queries ---
 
+// The brand split comes off the movement ledger rather than a column, because that is where it
+// was written — before STOCKED there is nothing to report, and after it the ledger and the
+// balances are the same rows.
 export const getTransaction = (id: string) =>
     Effect.gen(function* () {
         const repo = yield* WholeBuyRepository;
-        const [transaction, statuses] = yield* Effect.all([
+        const [transaction, statuses, brandSplit] = yield* Effect.all([
             repo.findTransactionById(id),
             repo.listStatuses(id),
+            findBrandSplitByReference(REFERENCE_TYPE, id),
         ]);
-        return { transaction, statuses };
+        return { transaction, statuses, brandSplit };
     }).pipe(Effect.provide(wholeBuyLive))
 
 export const listTransactions = (req: ListFilter) =>

@@ -10,8 +10,9 @@ import {
 } from "@gold-platform/types";
 import { useWholesaleSellDetail } from "../hooks/useWholesaleSell";
 import { useAdvanceWholesaleSellStatus } from "../hooks/useWholesaleSellMutations";
-import { useProductTypes, useSuppliers } from "../hooks/useMasterData";
+import { useBrands, useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
+import { BrandSplitFields, toBrandSplit, type BrandSplitDraft } from "../components/BrandSplitFields";
 import { formatNumber, formatWeight, nextStatuses, requiresNote, statusColor, statusLabel } from "../utils/wholeSellStatus";
 
 // Packing and shipping are two separate operator actions. They used to be fused behind one
@@ -26,6 +27,7 @@ export function WholesaleSellDetailPage() {
   const { data, isPending, isError, error } = useWholesaleSellDetail(id);
   const { data: suppliersRes } = useSuppliers();
   const { data: productTypesRes } = useProductTypes();
+  const { data: brandsRes } = useBrands();
 
   const advance = useAdvanceWholesaleSellStatus(id);
 
@@ -34,6 +36,7 @@ export function WholesaleSellDetailPage() {
   const [actualWeight, setActualWeight] = useState("");
   const [settledAmount, setSettledAmount] = useState("");
   const [returnReason, setReturnReason] = useState<ReturnReasonValue | "">("");
+  const [brandSplit, setBrandSplit] = useState<BrandSplitDraft>({});
   const [actionError, setActionError] = useState<string | null>(null);
 
   if (isPending) return <Container sx={{ py: 4 }}><CircularProgress /></Container>;
@@ -45,11 +48,12 @@ export function WholesaleSellDetailPage() {
     );
   }
 
-  const { transaction: t, statuses } = data;
+  const { transaction: t, statuses, brandSplit: recordedSplit } = data;
   const is999 = t.purityId === "999";
   const weightUnit = is999 ? "กรัม" : "บาท";
   const supplierName = suppliersRes?.data.find((s) => s.id === t.supplierId)?.supplierName ?? t.supplierId;
   const productTypeName = productTypesRes?.data.find((p) => p.id === t.productTypeId)?.productType ?? t.productTypeId;
+  const brandName = (id: string) => brandsRes?.data.find((b) => b.id === id)?.brand ?? id;
 
   const moves = nextStatuses(t.currentStatus);
   // DISPUTED is the only move that carries a weight, and it is the *buyer's* number — the whole
@@ -58,6 +62,8 @@ export function WholesaleSellDetailPage() {
   const contestsWeight = pending === "DISPUTED";
   const collectsSettledAmount = pending === "PAID";
   const collectsReturnReason = pending === "RETURNED";
+  // brand is recorded at the vault door, on the one move that takes gold out of the books
+  const collectsBrandSplit = pending === "PACKED";
   const noteRequired = pending !== null && requiresNote(pending);
   const agreedInInputUnit = is999 ? t.weightGm / 1000 : t.weightGb;
   const inputUnitLabel = is999 ? "kg" : "บาท";
@@ -68,6 +74,7 @@ export function WholesaleSellDetailPage() {
     setActualWeight("");
     setSettledAmount("");
     setReturnReason("");
+    setBrandSplit({});
     setActionError(null);
   }
 
@@ -87,6 +94,8 @@ export function WholesaleSellDetailPage() {
 
     const weight = actualWeight ? Number(actualWeight) : undefined;
     const settled = settledAmount ? Number(settledAmount) : undefined;
+    // only the named lines travel — the fungible residual is the server's subtraction
+    const split = toBrandSplit(brandSplit);
 
     const onSuccess = () => {
       showToast("อัปเดตสถานะแล้ว");
@@ -102,6 +111,7 @@ export function WholesaleSellDetailPage() {
         ...(contestsWeight && weight !== undefined ? { actualWeight: weight } : {}),
         ...(collectsSettledAmount && settled !== undefined ? { settledAmount: settled } : {}),
         ...(collectsReturnReason && returnReason ? { returnReason } : {}),
+        ...(collectsBrandSplit && split.length > 0 ? { brandSplit: split } : {}),
       },
       { onSuccess, onError },
     );
@@ -111,7 +121,15 @@ export function WholesaleSellDetailPage() {
     ["ผู้รับซื้อส่ง", supplierName],
     ["ประเภททองคำ", productTypeName],
     ["% ทอง", is999 ? "99.9%" : "96.5%"],
-    ["ยี่ห้อ", t.brandId === "NA" ? "—" : t.brandId],
+    // known only once the gold is out of a pool, so before PACKED there is nothing to show
+    [
+      "ยี่ห้อ",
+      recordedSplit.length === 0
+        ? "— (บันทึกเมื่อเบิกทองแพ็ค)"
+        : recordedSplit
+            .map((s) => `${brandName(s.brandId)} ${formatWeight(is999 ? s.weightGm : s.weightGb)} ${weightUnit}`)
+            .join(" · "),
+    ],
     ["น้ำหนักที่ตกลง", `${formatWeight(is999 ? t.weightGm : t.weightGb)} ${weightUnit}`],
     ["ราคาต่อบาททอง 96.5%", formatNumber(t.pricePerGb965)],
     ["ราคาต่อบาททอง 99.9%", formatNumber(t.pricePerGb999)],
@@ -250,6 +268,21 @@ export function WholesaleSellDetailPage() {
         <DialogTitle>เปลี่ยนสถานะเป็น {pending ? statusLabel(pending) : ""}</DialogTitle>
         <DialogContent>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
+            {/* the only place a sell records brand: the stamps divide the agreed weight, and the
+                residual falls to อื่นๆ, so this cannot change how much leaves the vault */}
+            {collectsBrandSplit && (
+              <>
+                <BrandSplitFields
+                  supplierId={t.supplierId}
+                  totalWeight={t.weightGb}
+                  unitLabel="บาท"
+                  applicable={!is999}
+                  value={brandSplit}
+                  onChange={setBrandSplit}
+                />
+                {!is999 && <Divider />}
+              </>
+            )}
             {contestsWeight && (
               <>
                 <TextField

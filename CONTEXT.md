@@ -120,7 +120,25 @@ Callers always send a single `weight` field. The server resolves both units:
 |---|---|---|
 | ฮั่วเซ็งเฮ็ง | 96.5% | `nonFungible = true`. Cannot substitute for or with any other brand. |
 | AU, Inter | 96.5% | Generic — fungible within same purity |
-| N/A (sentinel `id='NA'`) | 99.9% | System brand for investment goldbar. Never user-selectable. `active=false` so it never appears in brand dropdowns. Brand is irrelevant for 99.9% — inventory pools are keyed by **origin** instead. |
+| N/A (sentinel `id='NA'`) | 96.5% + 99.9% | The fungible pool. Every brand split's residual lands here, and it is the only pool 99.9% uses — brand is irrelevant there, those pools are keyed by **origin** instead. Never enterable. |
+
+### Brand is recorded when stock moves, not when the order is placed
+
+An order cannot state what stamp will arrive. Brand is a property of the metal, observed when the
+metal is in front of you, and a supplier that is not `brandLock` routinely delivers a **mix**. So
+the wholesale domains carry no brand on the transaction at all: it is entered on the transition
+that moves inventory (buy at `STOCKED`, sell at `PACKED`) as a split across pools.
+
+| Supplier | Operator enters |
+|---|---|
+| `brandLock = true` (ฮั่วเซ็งเฮ็ง) | nothing — its single registered brand takes 100% |
+| `brandLock = false` | a weight per brand the supplier is registered for; `NA` absorbs the rest |
+
+**A split divides the transaction weight and can never change it.** Only the branded portions are
+entered; the residual is derived by subtraction, so there is no total to disagree with and no way
+to increment or decrement an amount other than the one agreed. Which brands a supplier may ship is
+`suppler_brands` master data — BU tracks only ฮั่วเซ็งเฮ็ง and `NA` today because identifying every
+stamp on the floor is not work they can do, but adding one is a data row, not a code change.
 
 ### Origin (99.9% goldbar only)
 
@@ -189,6 +207,8 @@ One immutable row per Fri–Thu period. Rows never auto-sum. Each row shows Net 
 
 1. **Gold Baht is the customer unit; grams/kg is the supplier unit.** Always store both. Never recalculate at query time.
 2. **ฮั่วเซ็งเฮ็ง is non-fungible (96.5% only).** Cannot substitute for or with any other brand, ever.
+   Its brand is recorded when stock moves, not when the order is placed — and a split can only ever
+   divide the transaction weight, never change it.
 3. **96.5% and 99.9% are separate inventory pools.** Never mix in any query, pick, or calculation.
 4. **`supplierTradeable` is configurable, not hard-coded.** ทองแผ่น may become tradeable in future.
 5. **Inventory cost is WAC via daily opening snapshot.** At day-open, `snapshotRate = totalCost / totalWeightGb` per pool is frozen. All outbound cost attribution uses `weight × snapshotRate`. No outbound movement is permitted before the snapshot is computed for today.

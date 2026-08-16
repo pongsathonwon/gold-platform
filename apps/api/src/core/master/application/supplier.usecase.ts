@@ -21,3 +21,9 @@ export const findSupplierProductTypes = (id: string) =>
         const repo = yield* SupplierRepository;
         return yield* repo.findSupplierProductTypes(id);
     }).pipe(Effect.provide(supplierLive))
+
+export const findSupplierBrands = (id: string) =>
+    Effect.gen(function* () {
+        const repo = yield* SupplierRepository;
+        return yield* repo.findSupplierBrands(id);
+    }).pipe(Effect.provide(supplierLive))

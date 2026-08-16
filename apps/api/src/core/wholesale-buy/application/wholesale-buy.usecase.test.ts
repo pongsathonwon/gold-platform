@@ -23,8 +23,24 @@ vi.mock("../../inventory/application/inventory.usecase.js", async () => {
     const { Effect } = await import("effect");
     return {
         increment: vi.fn(() => Effect.void),
+        incrementSplit: vi.fn(() => Effect.void),
         decrement: vi.fn(() => Effect.void),
+        decrementSplit: vi.fn(() => Effect.void),
         reverseDecrement: vi.fn(() => Effect.void),
+        findBrandSplitByReference: vi.fn(() => Effect.succeed([])),
+    };
+});
+
+// The brand split resolver reads supplier, purity and supplier-brand rows. Its own rules are
+// tested directly against the pure `divideWeight` in infrastructure/brand-split.test.ts; here it
+// stands in as a plain pass-through so the transition logic is what's under test.
+vi.mock("../../../infrastructure/brand-split.js", async () => {
+    const actual = await import("../../../infrastructure/brand-split.js");
+    const { Effect } = await import("effect");
+    return {
+        ...actual,
+        resolveBrandSplit: vi.fn((req: { weightGb: number; weightGm: number }) =>
+            Effect.succeed([{ brandId: "NA", weightGb: req.weightGb, weightGm: req.weightGm }])),
     };
 });
 
@@ -46,7 +62,7 @@ vi.mock("../../../infrastructure/quantity.js", async () => {
 
 let repoState: ReturnType<typeof makeFakeBuyRepo>["state"];
 
-const { increment } = await import("../../inventory/application/inventory.usecase.js");
+const { incrementSplit } = await import("../../inventory/application/inventory.usecase.js");
 const { advanceStatus, receiveAndStock } = await import("./wholesale-buy.usecase.js");
 
 /** Puts a transaction in the fake repo and returns it, so each test starts from a known status. */
@@ -62,7 +78,7 @@ const move = (id: string, req: Record<string, unknown>) =>
     advanceStatus({ transactionId: id, updatedBy: "tester", ...req } as never);
 
 beforeEach(() => {
-    vi.mocked(increment).mockClear();
+    vi.mocked(incrementSplit).mockClear();
 });
 
 describe("transition guards", () => {
@@ -120,7 +136,7 @@ describe("refusing a delivery at the door", () => {
         expect(repoState.transaction.returnReason).toBe("BRAND");
         expect(loggedStatuses(repoState.statuses)).toEqual(["RETURNED"]);
         // refusing means never taking custody, so nothing can have entered stock
-        expect(increment).not.toHaveBeenCalled();
+        expect(incrementSplit).not.toHaveBeenCalled();
     });
 
     it("keeps the return open until the money is accounted for", async () => {
@@ -141,15 +157,17 @@ describe("accepting into stock", () => {
         const t = given({ currentStatus: "RECEIVED" });
         await expectSuccess(move(t.id, { toStatus: "STOCKED" }));
 
-        expect(increment).toHaveBeenCalledTimes(1);
-        expect(vi.mocked(increment).mock.calls[0][0]).toMatchObject({
-            weightGb: t.weightGb,
-            weightGm: t.weightGm,
-            totalCost: t.totalAmount,
+        expect(incrementSplit).toHaveBeenCalledTimes(1);
+        const call = vi.mocked(incrementSplit).mock.calls[0][0];
+        expect(call).toMatchObject({
             origin: "foreign",
             referenceType: "WHOLESALE_BUY",
             referenceId: t.id,
         });
+        // one call, however many pools it spans — the pools always reconstruct the order
+        expect(call.brands.reduce((sum, b) => sum + b.weightGb, 0)).toBe(t.weightGb);
+        expect(call.brands.reduce((sum, b) => sum + b.weightGm, 0)).toBe(t.weightGm);
+        expect(call.brands.reduce((sum, b) => sum + b.totalCost, 0)).toBe(t.totalAmount);
     });
 
     it("takes no weight — a supplied one cannot change what enters stock", async () => {
@@ -158,9 +176,30 @@ describe("accepting into stock", () => {
         const t = given({ currentStatus: "RECEIVED" });
         await expectSuccess(move(t.id, { toStatus: "STOCKED", actualWeight: 11.95 }));
 
-        expect(vi.mocked(increment).mock.calls[0][0]).toMatchObject({ weightGb: t.weightGb });
+        const call = vi.mocked(incrementSplit).mock.calls[0][0];
+        expect(call.brands.reduce((sum, b) => sum + b.weightGb, 0)).toBe(t.weightGb);
         expect(repoState.transaction.currentStatus).toBe("STOCKED");
         expect(repoState.transaction.actualWeightGb).toBeNull();
+    });
+
+    it("splits the order value across the pools it lands in, losing nothing", async () => {
+        // brand decides which pools move, never how much does — a mixed delivery still books
+        // exactly the ordered weight and exactly the order's value
+        const { resolveBrandSplit } = await import("../../../infrastructure/brand-split.js");
+        vi.mocked(resolveBrandSplit).mockReturnValueOnce(
+            Effect.succeed([
+                { brandId: "HUA_GOLD", weightGb: 8, weightGm: 121.6 },
+                { brandId: "NA", weightGb: 4, weightGm: 60.8 },
+            ]) as never,
+        );
+
+        const t = given({ currentStatus: "RECEIVED" });
+        await expectSuccess(move(t.id, { toStatus: "STOCKED", brandSplit: [{ brandId: "HUA_GOLD", weight: 8 }] }));
+
+        const { brands } = vi.mocked(incrementSplit).mock.calls[0][0];
+        expect(brands.map((b) => b.brandId)).toEqual(["HUA_GOLD", "NA"]);
+        expect(brands.reduce((sum, b) => sum + b.weightGb, 0)).toBe(t.weightGb);
+        expect(brands.reduce((sum, b) => sum + b.totalCost, 0)).toBe(t.totalAmount);
     });
 
     it("clears a contested weight when a dispute is resolved by acceptance", async () => {
@@ -181,7 +220,7 @@ describe("disputing after custody has transferred", () => {
         await expectSuccess(move(t.id, { toStatus: "DISPUTED", note: "ชั่งได้ไม่ตรง", actualWeight: 11.95 }));
 
         expect(repoState.transaction.actualWeightGb).toBe(11.95);
-        expect(increment).not.toHaveBeenCalled();
+        expect(incrementSplit).not.toHaveBeenCalled();
     });
 });
 
@@ -210,7 +249,7 @@ describe("receive + stock as one action", () => {
 
         expect(result).toEqual({ status: "STOCKED" });
         expect(loggedStatuses(repoState.statuses)).toEqual(["RECEIVED", "STOCKED"]);
-        expect(increment).toHaveBeenCalledTimes(1);
+        expect(incrementSplit).toHaveBeenCalledTimes(1);
     });
 
     it("refuses from a status that cannot reach RECEIVED", async () => {
@@ -218,14 +257,14 @@ describe("receive + stock as one action", () => {
         const error = await expectFailure(receiveAndStock({ transactionId: t.id, updatedBy: "tester" }));
         expect(error).toMatchObject({ _tag: "WholeBuyInvalidTransitionError", from: "CREATED" });
         expect(repoState.statuses).toHaveLength(0);
-        expect(increment).not.toHaveBeenCalled();
+        expect(incrementSplit).not.toHaveBeenCalled();
     });
 });
 
 describe("ordering between the inventory hook and the status log", () => {
     it("records no status when the increment fails", async () => {
         // a movement that did not happen must never leave a log row claiming it did
-        vi.mocked(increment).mockReturnValueOnce(
+        vi.mocked(incrementSplit).mockReturnValueOnce(
             Effect.fail({ _tag: "InsufficientStockError" }) as never,
         );
         const t = given({ currentStatus: "RECEIVED" });

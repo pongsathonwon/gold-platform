@@ -78,6 +78,13 @@
       "when": 1786336078440,
       "tag": "0010_realign_drizzle_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786850552401,
+      "tag": "0011_brand_at_inventory_time",
+      "breakpoints": true
     }
   ]
 }

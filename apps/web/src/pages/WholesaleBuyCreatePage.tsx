@@ -4,20 +4,19 @@ import {
   Container, Typography, Card, CardContent, Button, Box, Alert,
 } from "@mui/material";
 import { createWholeBuySchema, derivePricePerGb999 } from "@gold-platform/types";
-import {
-  useBrands, useProductTypePurities, useProductTypes, useSuppliers,
-} from "../hooks/useMasterData";
+import { useProductTypePurities, useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useCreateWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
 import { useToast } from "../components/ToastContext";
 import { useDynamicForm } from "../forms/useDynamicForm";
 import { DynamicFormField } from "../forms/DynamicFormField";
 import { getVisibleFields, type FieldConfig } from "../forms/types";
 
+// No brand field. An order cannot know what stamp will turn up — that is recorded when the
+// delivery is put into stock, against the pools it actually lands in.
 interface BuyValues extends Record<string, string> {
   supplierId: string;
   productTypeId: string;
   purityId: string;
-  brandId: string;
   weight: string;
   pricePerGb965: string;
   notes: string;
@@ -27,7 +26,6 @@ const initialValues: BuyValues = {
   supplierId: "",
   productTypeId: "",
   purityId: "",
-  brandId: "",
   weight: "",
   pricePerGb965: "",
   notes: "",
@@ -35,7 +33,7 @@ const initialValues: BuyValues = {
 
 // when an upstream field changes, downstream selections it no longer governs are reset
 const RESET_ON_CHANGE: Record<string, (keyof BuyValues)[]> = {
-  productTypeId: ["purityId", "weight", "brandId"],
+  productTypeId: ["purityId", "weight"],
   purityId: ["weight"],
 };
 
@@ -44,7 +42,6 @@ export function WholesaleBuyCreatePage() {
   const { showToast } = useToast();
   const { data: suppliersRes } = useSuppliers();
   const { data: productTypesRes } = useProductTypes();
-  const { data: brandsRes } = useBrands();
   const createTransaction = useCreateWholesaleBuy();
 
   const [fieldError, setFieldError] = useState<string | null>(null);
@@ -85,15 +82,6 @@ export function WholesaleBuyCreatePage() {
       getOptions: () => purityRules.map((p) => ({ value: p.purityId, label: p.label })),
     },
     {
-      // 99.9% pools are keyed by origin rather than brand — the server substitutes the sentinel
-      name: "brandId",
-      label: "ยี่ห้อ",
-      kind: "select",
-      required: true,
-      isVisible: (v) => !!v.purityId && matchingRule(v)?.percent !== 99.9,
-      getOptions: () => (brandsRes?.data ?? []).filter((b) => b.active).map((b) => ({ value: b.id, label: b.brand })),
-    },
-    {
       name: "weight",
       label: (v) => (matchingRule(v)?.inputUnit === "kg" ? "น้ำหนัก (kg)" : "น้ำหนัก (บาท)"),
       kind: (v) => (matchingRule(v)?.allowedValues ? "select" : "number"),
@@ -130,11 +118,9 @@ export function WholesaleBuyCreatePage() {
     e.preventDefault();
     setSubmitError(null);
 
-    const rule = matchingRule(values);
     const payload = {
       supplierId: values.supplierId,
       purityId: values.purityId,
-      brandId: rule?.percent === 99.9 ? undefined : values.brandId || undefined,
       productTypeId: values.productTypeId,
       weight: Number(values.weight),
       pricePerGb965: Number(values.pricePerGb965),

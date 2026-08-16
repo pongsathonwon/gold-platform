@@ -21,7 +21,6 @@ import { TransactionNotFoundError as SellNotFound } from "../core/wholesale-sell
 const baseFields = {
     supplierId: randomUUID(),
     purityId: "965",
-    brandId: "HUA_GOLD",
     productTypeId: "BAR",
     // a 12 gold-baht order at 48,250/GB
     weightGb: 12,

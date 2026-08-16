@@ -117,6 +117,52 @@ export type ProductSwitchReq = z.infer<typeof productSwitchSchema>
 
 // --- shared across both wholesale domains ---
 
+/**
+ * The fungible sentinel brand. It is the pool everything unstamped lands in, and the residual
+ * every brand split drains into — never something an operator picks or types.
+ */
+export const NA_BRAND = 'NA'
+
+/**
+ * One line of a brand split: how much of a transaction's weight carried this particular stamp.
+ *
+ * Only the *named* brands appear here. `NA` is never sent — the server computes it as whatever
+ * the named brands did not account for, which is the whole reason a split can never come out
+ * unequal to the transaction weight. There is no total field to disagree with, and no way to
+ * express a residual other than the one subtraction produces.
+ */
+export const brandSplitEntrySchema = z.object({
+  brandId: z.string().min(1),
+  // in the same unit the transaction's weight was entered in (gold baht for 96.5%)
+  weight: z.number().positive(),
+})
+
+export type BrandSplitEntry = z.infer<typeof brandSplitEntrySchema>
+
+/**
+ * The named-brand lines of a split, sent on the transition that moves stock.
+ *
+ * Omit it entirely and the whole weight goes to `NA`. A `brandLock` supplier ignores it — their
+ * one registered brand takes 100% and the server rejects anything sent alongside, because a
+ * field that permits exactly one value is a field that can only be got wrong.
+ */
+export const brandSplitSchema = z.array(brandSplitEntrySchema)
+
+export type BrandSplit = z.infer<typeof brandSplitSchema>
+
+/**
+ * What the fungible pool would absorb, given a total and the named lines so far.
+ *
+ * Shared with the UI so the remainder it displays is the remainder the server will book. It is
+ * derived, never entered: the split UI shows this as a read-only row and clamps each named input
+ * to what is left, so an operator cannot construct a split that sums to anything but `total`.
+ */
+export const brandSplitRemainder = (total: number, entries: BrandSplit) => {
+  const named = entries.reduce((sum, e) => sum + (Number.isFinite(e.weight) ? e.weight : 0), 0)
+  // strip binary floating-point residue so 12 - 8 - 4 reads as 0, not 1e-15
+  return Math.round((total - named) * 1e6) / 1e6
+}
+
 // Why a shipment went back to the party that sent it. A column rather than free text in the note,
 // because supplier reliability is the reason CANCELLED and REJECTED are separate statuses at all,
 // and "HUA sent the wrong purity four times this quarter" is only answerable if the cause is a
@@ -241,11 +287,12 @@ export const PURITY_RATIO_999_TO_965 = 99.9 / 96.5
 export const derivePricePerGb999 = (pricePerGb965: number) =>
   Math.round(pricePerGb965 * PURITY_RATIO_999_TO_965 * 100) / 100
 
+// No brand here. What stamp the gold carries is not known when the order is placed — it is what
+// physically turns up, and it can be a mix. Brand is recorded on the transition that moves stock
+// (see `brandSplitSchema`), against the pools it actually lands in.
 export const createWholeBuySchema = z.object({
   supplierId: z.string().uuid(),
   purityId: z.string().min(1),
-  // omitted for 99.9% — those pools are keyed by origin, and the server forces the 'NA' sentinel
-  brandId: z.string().optional(),
   productTypeId: z.string().min(1),
   // in the unit product_type_purities defines for this pairing (kg or gold baht)
   weight: z.number().int().positive(),
@@ -276,6 +323,10 @@ export const advanceWholeBuyStatusSchema = z.object({
   settledAmount: z.number().positive().optional(),
   // required on a move into RETURNED
   returnReason: returnReasonSchema.optional(),
+  // Only read on a move into STOCKED: which stamps the delivery actually carried. Omit for a
+  // brandLock supplier (their one brand takes all of it) and for 99.9%, whose pools are keyed by
+  // origin rather than brand.
+  brandSplit: brandSplitSchema.optional(),
 })
 
 export type AdvanceWholeBuyStatusReq = z.infer<typeof advanceWholeBuyStatusSchema>
@@ -287,8 +338,12 @@ export type AdvanceWholeBuyStatusReq = z.infer<typeof advanceWholeBuyStatusSchem
 // It takes no weight. The check that matters happens at the door, against the document, before
 // custody transfers — a delivery whose weight, brand or purity disagrees is refused via
 // PAID → RETURNED and never reaches this endpoint.
+// It does take the brand split, because this is the moment the gold enters a pool and the stamp
+// it carries is finally known. That is a different question from *how much* arrived: the split
+// says how the agreed weight divides, never what it adds up to.
 export const receiveStockWholeBuySchema = z.object({
   note: z.string().optional(),
+  brandSplit: brandSplitSchema.optional(),
 })
 
 export type ReceiveStockWholeBuyReq = z.infer<typeof receiveStockWholeBuySchema>
@@ -388,11 +443,11 @@ export const WHOLE_SELL_EXCLUDED_FROM_TOTALS: readonly WholeSellStatusValue[] =
 
 // Same one-price rule as wholesale-buy: the operator enters the 96.5% quote per gold baht and
 // the server derives the 99.9% one with `derivePricePerGb999()`.
+// No brand here either, and for the mirror-image reason: which stamps we hand over is decided
+// when the vault is opened and the box is packed, out of whatever is actually on the shelf.
 export const createWholeSellSchema = z.object({
   supplierId: z.string().uuid(),
   purityId: z.string().min(1),
-  // omitted for 99.9% — those pools are keyed by origin, and the server forces the 'NA' sentinel
-  brandId: z.string().optional(),
   productTypeId: z.string().min(1),
   // in the unit product_type_purities defines for this pairing (kg or gold baht)
   weight: z.number().int().positive(),
@@ -423,6 +478,10 @@ export const advanceWholeSellStatusSchema = z.object({
   settledAmount: z.number().positive().optional(),
   // required on a move into RETURNED
   returnReason: returnReasonSchema.optional(),
+  // Only read on a move into PACKED: which pools the gold is drawn out of. Each named brand is a
+  // separate decrement, so a pool short of stock fails the whole move — nothing half-packs.
+  // RETURNED needs no split: the reversal replays the movements this booked.
+  brandSplit: brandSplitSchema.optional(),
 })
 
 export type AdvanceWholeSellStatusReq = z.infer<typeof advanceWholeSellStatusSchema>

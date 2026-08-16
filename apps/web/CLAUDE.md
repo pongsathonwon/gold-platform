@@ -183,7 +183,7 @@ Three pages plus one shared helper:
 | File | Role |
 | --- | --- |
 | `pages/WholesaleBuyListPage.tsx` | split into `ทอง 96.5%` (บาท) and `ทอง 99.9%` (กก.) sections like the inventory pages, each with its own `รวม` footer. Status/supplier filters. Shows the delivered weight, with the ordered one beside it when they differ |
-| `pages/WholesaleBuyCreatePage.tsx` | create form on the shared `useDynamicForm` / `DynamicFormField` pattern. **One price field only** — the 96.5% quote; `derivePricePerGb999()` previews the 99.9% figure in helper text, and the server does the real conversion |
+| `pages/WholesaleBuyCreatePage.tsx` | create form on the shared `useDynamicForm` / `DynamicFormField` pattern. **One price field only** — the 96.5% quote; `derivePricePerGb999()` previews the 99.9% figure in helper text, and the server does the real conversion. **No brand field** — see below |
 | `pages/WholesaleBuyDetailPage.tsx` | summary, status timeline, action buttons + confirm dialog |
 | `utils/wholeBuyStatus.ts` | chip colours, Thai labels, `nextStatuses()`, `requiresNote()` |
 | `utils/format.ts` | `formatNumber()` / `formatWeight()` — domain-agnostic, shared with wholesale-sell and re-exported from both status utils |
@@ -200,7 +200,7 @@ one) plus one extra field per move, and **never more than one at a time**:
 | `DISPUTED` | the weight we contest — the only weight a buy ever records |
 | `PAID` | `settledAmount`, only when the payment differed from the order |
 | `RETURNED` | `returnReason` (required) — a select, not free text |
-| `RECEIVE_STOCK` / `STOCKED` | none. Acceptance means it matched the document |
+| `RECEIVE_STOCK` / `STOCKED` | the **brand split** (§9d). No weight — acceptance means it matched the document |
 
 **Nothing diverts any more.** The old dialog collected a delivered weight on the way into
 `CHECKED` and the server silently rerouted a mismatch to `DISPUTED`, so `onSuccess` had to read
@@ -254,6 +254,31 @@ Differences from the buy UI worth knowing:
   its decrement was reversed, so net stock is unchanged. The rule is simply *did the gold end up
   gone*, and it reads inverted on the buy side, where `WRITTEN_OFF` means no gold ever arrived.
   The set lives in `WHOLE_SELL_EXCLUDED_FROM_TOTALS`.
+
+## 9d. Brand is entered at the stock-moving transition — `components/BrandSplitFields.tsx`
+
+Neither create form has a brand field, and neither transaction carries a `brandId`. An order
+cannot know what stamp will turn up; a supplier that is not `brandLock` routinely ships a mix. So
+`<BrandSplitFields>` appears in the buy dialog on `รับของและเข้าสต๊อก` / `เข้าสต๊อกแล้ว` and in the
+sell dialog on `เบิกทองแพ็คแล้ว` — the two moments gold actually enters or leaves a pool.
+
+- **A `brandLock` supplier gets an `<Alert>`, not a field.** Its one registered brand takes 100%,
+  so the only legal value is already known and a field could only be got wrong.
+- Everyone else gets one number per brand from `useSupplierBrands(supplierId)`, plus a **disabled**
+  `อื่นๆ (ที่เหลือ)` row showing `brandSplitRemainder()` from `@gold-platform/types` — the same
+  helper the server subtracts with, so the preview is the booking.
+- **An unequal split cannot be typed.** There is no total field and no residual field; each named
+  input is clamped on change to the headroom left by the *other* brands, so typing 20 into a
+  12-baht order yields 12. Only the named lines are sent (`toBrandSplit()` drops blanks and
+  zeroes) — the server computes the residual itself, so nothing on the wire can disagree with the
+  transaction weight.
+- 99.9% passes `applicable={false}` and the component renders nothing: those pools are keyed by
+  origin, so brand is not a dimension of them.
+
+Both detail pages show the **recorded** split on the `ยี่ห้อ` row, read from `data.brandSplit`,
+which the API derives from the inventory movements booked under the transaction rather than from
+any column. Before the stock-moving transition it reads `— (บันทึกเมื่อเข้าสต๊อก)`, because there
+genuinely is no answer yet. Neither list page shows brand, so neither needed changing.
 
 ## 10. Current State
 

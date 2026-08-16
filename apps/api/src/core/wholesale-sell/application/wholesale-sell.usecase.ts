@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { derivePricePerGb999 } from "@gold-platform/types";
+import { BrandSplit, derivePricePerGb999 } from "@gold-platform/types";
 import {
     AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CONTESTED_STATUS,
     CreateTransactionReq, INVENTORY_STATUS, InvalidTransitionError, ListFilter,
@@ -11,8 +11,11 @@ import {
 } from "../port/wholesale-sell.port.js";
 import { makeWholeSellRepository } from "../adapter/wholesale-sell.repository.js";
 import { WholeSellStatus, WholeSellTransactionShape } from "../../../infrastructure/db/schema/wholesale-sell.schema.js";
-import { decrement, reverseDecrement } from "../../inventory/application/inventory.usecase.js";
+import {
+    decrementSplit, findBrandSplitByReference, reverseDecrement,
+} from "../../inventory/application/inventory.usecase.js";
 import { findQuantityRule, resolveMeasuredQuantity, resolveQuantity } from "../../../infrastructure/quantity.js";
+import { resolveBrandSplit } from "../../../infrastructure/brand-split.js";
 import { resolveSettlementPeriod } from "../../../infrastructure/settlement.js";
 
 const wholeSellLive = Layer.effect(WholeSellRepository, makeWholeSellRepository);
@@ -21,16 +24,11 @@ const wholeSellLive = Layer.effect(WholeSellRepository, makeWholeSellRepository)
 // only convert_out may consume it
 const ORIGIN = 'foreign' as const
 const REFERENCE_TYPE = 'WHOLESALE_SELL'
-// 99.9% pools are keyed by origin, not brand; 'NA' is the sentinel that keeps the key shape uniform
-const NA_BRAND = 'NA'
 
 // Which of the two recorded quotes applies. 99.9% gold (unitOfMeasure 'g') is priced off the
 // 96.5% quote by the purity ratio — the operator enters one, the item's purity picks which.
 const applicablePrice = (unitOfMeasure: 'g' | 'gb', pricePerGb965: number, pricePerGb999: number) =>
     unitOfMeasure === 'g' ? pricePerGb999 : pricePerGb965
-
-const brandFor = (unitOfMeasure: 'g' | 'gb', brandId?: string) =>
-    unitOfMeasure === 'g' ? NA_BRAND : (brandId ?? NA_BRAND)
 
 // --- Commands ---
 
@@ -52,7 +50,6 @@ export const createTransaction = (req: CreateTransactionReq) =>
             id,
             supplierId: req.supplierId,
             purityId: req.purityId,
-            brandId: brandFor(unitOfMeasure, req.brandId),
             productTypeId: req.productTypeId,
             weightGb,
             weightGm,
@@ -115,7 +112,7 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
         const pricePerGb999 = derivePricePerGb999(pricePerGb965);
         const pricingChanged =
             req.weight !== undefined || req.purityId !== undefined || req.productTypeId !== undefined ||
-            req.pricePerGb965 !== undefined || req.brandId !== undefined;
+            req.pricePerGb965 !== undefined;
 
         if (pricingChanged) {
             // when the weight itself is unchanged it still has to be re-expressed in the target
@@ -130,7 +127,6 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
 
             fields.purityId = purityId;
             fields.productTypeId = productTypeId;
-            fields.brandId = brandFor(unitOfMeasure, req.brandId ?? transaction.brandId);
             fields.weightGb = weightGb;
             fields.weightGm = weightGm;
             fields.conversionFactor = conversionFactor;
@@ -150,21 +146,41 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
  * they already have, and the old equality check could therefore only ever reject a typo. The
  * agreed weight is what leaves.
  *
- * A pool short of stock still fails `InsufficientStockError` with nothing written and nothing
- * decremented, leaving the transaction at CONFIRMED.
+ * **It does take the brand split**, and this is the only place a sell records brand at all. Which
+ * stamps go in the box is decided at the vault door out of what is actually on the shelf, not
+ * months earlier when the deal was struck. A `brandLock` counterparty takes their one stamp and
+ * the operator enters nothing.
+ *
+ * The split divides the agreed weight and the fungible pool absorbs the residual, so it can change
+ * *which* pools are drawn down but never *how much* leaves.
+ *
+ * Every named pool is decremented in one transaction. A pool short of stock fails
+ * `InsufficientStockError` with nothing written and nothing decremented anywhere, leaving the
+ * transaction at CONFIRMED — a half-packed shipment would be worse than an unpacked one.
  */
-const packGoods = (transaction: WholeSellTransactionShape, actor: string) =>
+const packGoods = (
+    transaction: WholeSellTransactionShape,
+    actor: string,
+    brandSplit: BrandSplit | undefined,
+) =>
     Effect.gen(function* () {
-        // cost comes off the pool's live WAC inside the locked transaction — totalAmount is the
-        // sale price, which is revenue, not the cost basis being removed
-        yield* decrement({
+        const split = yield* resolveBrandSplit({
+            supplierId: transaction.supplierId,
             purityId: transaction.purityId,
-            brandId: transaction.brandId,
+            conversionFactor: transaction.conversionFactor,
+            weightGb: transaction.weightGb,
+            weightGm: transaction.weightGm,
+            requested: brandSplit ?? [],
+        });
+
+        // cost comes off each pool's live WAC inside the locked transaction — totalAmount is the
+        // sale price, which is revenue, not the cost basis being removed
+        yield* decrementSplit({
+            purityId: transaction.purityId,
             // a sale never touches the domestic pool, whatever the purity — only convert_out may
             origin: ORIGIN,
             productTypeId: transaction.productTypeId,
-            weightGb: transaction.weightGb,
-            weightGm: transaction.weightGm,
+            brands: split.map((line) => ({ ...line, totalCost: 0 })),
             referenceType: REFERENCE_TYPE,
             referenceId: transaction.id,
             movedBy: actor,
@@ -178,6 +194,10 @@ const packGoods = (transaction: WholeSellTransactionShape, actor: string) =>
  * The reversal is booked as its own movement rather than by editing the original: the ledger then
  * shows the gold leaving and coming back, which is what actually happened. Its own reference type
  * keeps the pair legible on the movements page.
+ *
+ * It needs no split of its own. A mixed shipment booked several movements under this reference,
+ * and the reversal replays each one back into the pool it came out of — which is exactly why the
+ * ledger, rather than a column, is where the split belongs.
  */
 const returnGoods = (transaction: WholeSellTransactionShape, actor: string) =>
     reverseDecrement({
@@ -266,7 +286,7 @@ const assertTransitionAllowed = (
  */
 const applyTransitionEffect = (
     transaction: WholeSellTransactionShape,
-    req: Pick<AdvanceStatusReq, 'actualWeight' | 'settledAmount' | 'returnReason'>,
+    req: Pick<AdvanceStatusReq, 'actualWeight' | 'settledAmount' | 'returnReason' | 'brandSplit'>,
     toStatus: WholeSellStatus,
     actor: string,
 ) =>
@@ -274,7 +294,7 @@ const applyTransitionEffect = (
         const repo = yield* WholeSellRepository;
 
         if (toStatus === INVENTORY_STATUS) {
-            yield* packGoods(transaction, actor);
+            yield* packGoods(transaction, actor, req.brandSplit);
             return;
         }
         // only a shipment that actually left needs putting back — a deal that dies before PACKED
@@ -335,14 +355,17 @@ export const confirmAllCreated = (actor?: string) =>
 
 // --- Queries ---
 
+// The brand split comes off the movement ledger rather than a column: before PACKED there is
+// nothing to report, and after it the ledger and the balances are the same rows.
 export const getTransaction = (id: string) =>
     Effect.gen(function* () {
         const repo = yield* WholeSellRepository;
-        const [transaction, statuses] = yield* Effect.all([
+        const [transaction, statuses, brandSplit] = yield* Effect.all([
             repo.findTransactionById(id),
             repo.listStatuses(id),
+            findBrandSplitByReference(REFERENCE_TYPE, id),
         ]);
-        return { transaction, statuses };
+        return { transaction, statuses, brandSplit };
     }).pipe(Effect.provide(wholeSellLive))
 
 export const listTransactions = (req: ListFilter) =>

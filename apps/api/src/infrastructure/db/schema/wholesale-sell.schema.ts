@@ -1,5 +1,5 @@
 import { decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
-import { brands, productTypes, purities, suppliers } from "./master.schema.js";
+import { productTypes, purities, suppliers } from "./master.schema.js";
 
 // Happy path:  CREATED → CONFIRMED → PACKED → SHIPPED → PAID
 // Inventory decrements on entering PACKED — gold stops being ours when it leaves the vault,
@@ -43,8 +43,12 @@ export const wholeSellTransactions = pgTable('whole_sell_transactions', {
 
     supplierId: uuid().notNull().references(() => suppliers.id),
     purityId: varchar().notNull().references(() => purities.id),
-    brandId: varchar().notNull().references(() => brands.id),
     productTypeId: varchar().notNull().references(() => productTypes.id),
+
+    // No brand column, mirroring the buy side for the mirror-image reason: which stamps we hand
+    // over is decided when the vault is opened, out of whatever is on the shelf. The split is
+    // recorded on the move into PACKED as one decrement per pool, and the ledger is the record —
+    // which is also what lets RETURNED reverse a mixed shipment pool by pool.
 
     // agreed weight — snapshotted at creation, only editable while CREATED
     weightGb: decimal({ mode: 'number' }).notNull(),

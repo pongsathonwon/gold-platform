@@ -1,8 +1,8 @@
 import { Database, DrizzleClient, RepositoryError } from "../../../../infrastructure/db/client.js";
-import { productTypes, suppliers, supplierProductTypes } from "../../../../infrastructure/db/schema/master.schema.js";
+import { brands, productTypes, suppliers, supplierBrands, supplierProductTypes } from "../../../../infrastructure/db/schema/master.schema.js";
 import { ForViewSupplier, SupplierNotFound } from "../../port/supplier.port.js";
 import { Effect } from "effect";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 class SupplierRepository implements ForViewSupplier {
     constructor(private readonly db: Database) { }
@@ -45,6 +45,23 @@ class SupplierRepository implements ForViewSupplier {
                             .where(eq(supplierProductTypes.supplierId, id))
                             .execute(),
                     catch: () => new RepositoryError({ message: `cannot find product types for supplier id: ${id}` }),
+                })
+            )
+        );
+    }
+
+    findSupplierBrands(id: string) {
+        return this.findSupplierById(id).pipe(
+            Effect.flatMap(() =>
+                Effect.tryPromise({
+                    try: () =>
+                        this.db
+                            .select({ id: brands.id, brand: brands.brand, nonFungible: brands.nonFungible, active: brands.active })
+                            .from(supplierBrands)
+                            .innerJoin(brands, eq(supplierBrands.brandId, brands.id))
+                            .where(and(eq(supplierBrands.supplierId, id), eq(brands.active, true)))
+                            .execute(),
+                    catch: () => new RepositoryError({ message: `cannot find brands for supplier id: ${id}` }),
                 })
             )
         );

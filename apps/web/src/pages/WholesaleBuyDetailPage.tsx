@@ -10,8 +10,9 @@ import {
 } from "@gold-platform/types";
 import { useWholesaleBuyDetail } from "../hooks/useWholesaleBuy";
 import { useAdvanceWholesaleBuyStatus, useReceiveStockWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
-import { useProductTypes, useSuppliers } from "../hooks/useMasterData";
+import { useBrands, useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
+import { BrandSplitFields, toBrandSplit, type BrandSplitDraft } from "../components/BrandSplitFields";
 import { formatNumber, formatWeight, nextStatuses, requiresNote, statusColor, statusLabel } from "../utils/wholeBuyStatus";
 
 // the combined receive+stock action, offered alongside the plain transitions
@@ -24,6 +25,7 @@ export function WholesaleBuyDetailPage() {
   const { data, isPending, isError, error } = useWholesaleBuyDetail(id);
   const { data: suppliersRes } = useSuppliers();
   const { data: productTypesRes } = useProductTypes();
+  const { data: brandsRes } = useBrands();
 
   const advance = useAdvanceWholesaleBuyStatus(id);
   const receiveStock = useReceiveStockWholesaleBuy(id);
@@ -33,6 +35,7 @@ export function WholesaleBuyDetailPage() {
   const [actualWeight, setActualWeight] = useState("");
   const [settledAmount, setSettledAmount] = useState("");
   const [returnReason, setReturnReason] = useState<ReturnReasonValue | "">("");
+  const [brandSplit, setBrandSplit] = useState<BrandSplitDraft>({});
   const [actionError, setActionError] = useState<string | null>(null);
 
   if (isPending) return <Container sx={{ py: 4 }}><CircularProgress /></Container>;
@@ -44,11 +47,12 @@ export function WholesaleBuyDetailPage() {
     );
   }
 
-  const { transaction: t, statuses } = data;
+  const { transaction: t, statuses, brandSplit: recordedSplit } = data;
   const is999 = t.purityId === "999";
   const weightUnit = is999 ? "กรัม" : "บาท";
   const supplierName = suppliersRes?.data.find((s) => s.id === t.supplierId)?.supplierName ?? t.supplierId;
   const productTypeName = productTypesRes?.data.find((p) => p.id === t.productTypeId)?.productType ?? t.productTypeId;
+  const brandName = (id: string) => brandsRes?.data.find((b) => b.id === id)?.brand ?? id;
 
   const moves = nextStatuses(t.currentStatus);
   // Accepting takes no weight — it means the delivery matched its document, so the only figure it
@@ -57,6 +61,9 @@ export function WholesaleBuyDetailPage() {
   const contestsWeight = pending === "DISPUTED";
   const collectsSettledAmount = pending === "PAID";
   const collectsReturnReason = pending === "RETURNED";
+  // brand is recorded at the moment gold enters a pool, and only then — both routes into stock
+  // collect it. 99.9% is keyed by origin rather than brand, so it never asks.
+  const collectsBrandSplit = pending === RECEIVE_STOCK || pending === "STOCKED";
   const noteRequired = pending !== null && pending !== RECEIVE_STOCK && requiresNote(pending);
 
   function closeDialog() {
@@ -65,6 +72,7 @@ export function WholesaleBuyDetailPage() {
     setActualWeight("");
     setSettledAmount("");
     setReturnReason("");
+    setBrandSplit({});
     setActionError(null);
   }
 
@@ -94,10 +102,16 @@ export function WholesaleBuyDetailPage() {
 
     const weight = actualWeight ? Number(actualWeight) : undefined;
     const settled = settledAmount ? Number(settledAmount) : undefined;
+    // only the named lines go over the wire — the fungible residual is the server's subtraction,
+    // so there is nothing here that could disagree with the ordered weight
+    const split = toBrandSplit(brandSplit);
 
     if (pending === RECEIVE_STOCK) {
       receiveStock.mutate(
-        { ...(trimmedNote ? { note: trimmedNote } : {}) },
+        {
+          ...(trimmedNote ? { note: trimmedNote } : {}),
+          ...(split.length > 0 ? { brandSplit: split } : {}),
+        },
         { onSuccess, onError },
       );
       return;
@@ -110,6 +124,7 @@ export function WholesaleBuyDetailPage() {
         ...(contestsWeight && weight !== undefined ? { actualWeight: weight } : {}),
         ...(collectsSettledAmount && settled !== undefined ? { settledAmount: settled } : {}),
         ...(collectsReturnReason && returnReason ? { returnReason } : {}),
+        ...(collectsBrandSplit && split.length > 0 ? { brandSplit: split } : {}),
       },
       { onSuccess, onError },
     );
@@ -119,7 +134,17 @@ export function WholesaleBuyDetailPage() {
     ["ผู้ขายส่ง", supplierName],
     ["ประเภททองคำ", productTypeName],
     ["% ทอง", is999 ? "99.9%" : "96.5%"],
-    ["ยี่ห้อ", t.brandId === "NA" ? "—" : t.brandId],
+    // Brand is known only once the gold is in a pool, so before STOCKED there is genuinely
+    // nothing to show. Reading it back off the movements is what guarantees the figures here are
+    // the ones the balances were built from.
+    [
+      "ยี่ห้อ",
+      recordedSplit.length === 0
+        ? "— (บันทึกเมื่อเข้าสต๊อก)"
+        : recordedSplit
+            .map((s) => `${brandName(s.brandId)} ${formatWeight(is999 ? s.weightGm : s.weightGb)} ${weightUnit}`)
+            .join(" · "),
+    ],
     ["น้ำหนักที่สั่ง", `${formatWeight(is999 ? t.weightGm : t.weightGb)} ${weightUnit}`],
     ["ราคาต่อบาททอง 96.5%", formatNumber(t.pricePerGb965)],
     ["ราคาต่อบาททอง 99.9%", formatNumber(t.pricePerGb999)],
@@ -272,6 +297,21 @@ export function WholesaleBuyDetailPage() {
                 เข้าสต๊อกตามน้ำหนักที่สั่ง {formatWeight(is999 ? t.weightGm / 1000 : t.weightGb)}{" "}
                 {is999 ? "kg" : "บาท"} — หากของไม่ตรงกับเอกสาร ให้ปฏิเสธด้วย "ตีกลับผู้ขาย" แทน
               </Alert>
+            )}
+            {/* the only place a buy records brand: the stamps divide the ordered weight, and the
+                residual falls to อื่นๆ, so this can never change how much enters stock */}
+            {collectsBrandSplit && (
+              <>
+                <BrandSplitFields
+                  supplierId={t.supplierId}
+                  totalWeight={t.weightGb}
+                  unitLabel="บาท"
+                  applicable={!is999}
+                  value={brandSplit}
+                  onChange={setBrandSplit}
+                />
+                {!is999 && <Divider />}
+              </>
             )}
             {contestsWeight && (
               <>

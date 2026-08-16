@@ -158,7 +158,7 @@ on the order — a field that permits exactly one value carries no information, 
 diverted a perfectly good delivery into `DISPUTED`.
 
 The check that matters is physical and happens **before custody transfers**: the receiver compares
-weight, brand and purity against the document with the courier still there. Three outcomes:
+weight and purity against the document with the courier still there. Three outcomes:
 
 | At the door | Move | Effect |
 |---|---|---|
@@ -166,10 +166,15 @@ weight, brand and purity against the document with the courier still there. Thre
 | anything disagrees | `PAID → RETURNED` + `returnReason` | nothing enters inventory, nothing is signed for |
 | found wrong later, after signing | `RECEIVED → DISPUTED` + `actualWeight` | nothing enters inventory; the contested figure is recorded |
 
-**Brand and purity are not discrepancies — they are the wrong product.** Purity drives
-`unitOfMeasure`, the derived price and the target inventory pool, and the transaction locked at
-`CONFIRMED` with its price already derived from the purity ordered. There is no amend path: refuse,
-terminate, and create a new transaction.
+**Acceptance does take the brand split**, and this is the only thing on a buy that brand is
+recorded on. See §5.1 — brand is no longer something a delivery can fail, because the order never
+claimed one.
+
+**Purity is not a discrepancy — it is the wrong product.** Purity drives `unitOfMeasure`, the
+derived price and the target inventory pool, and the transaction locked at `CONFIRMED` with its
+price already derived from the purity ordered. There is no amend path: refuse, terminate, and
+create a new transaction. `returnReason: 'BRAND'` survives for the case where the stamp is not one
+this supplier is registered to ship at all.
 
 `RECEIVED` has **no direct route to `RETURNED`**. Once custody has transferred, sending gold back
 goes through `DISPUTED`, because that is where the reason and the contested weight get recorded.
@@ -207,7 +212,7 @@ again on a retry after `PAYMENT_FAILED` overwrites it; omitting it clears it.
 
 | When | Effect |
 |---|---|
-| Entering `STOCKED` (from `RECEIVED` or `DISPUTED`) | `increment()` of the **ordered** weight — one balance upsert + one movement row, `referenceType: 'WHOLESALE_BUY'`, `referenceId` = transaction id |
+| Entering `STOCKED` (from `RECEIVED` or `DISPUTED`) | `incrementSplit()` of the **ordered** weight — one balance upsert + one movement row **per branded pool**, all in one DB transaction, `referenceType: 'WHOLESALE_BUY'`, `referenceId` = transaction id |
 | Every other status, including `DISPUTED` | nothing |
 
 **Always `origin: 'foreign'`, at every purity.** Only smelting produces domestic stock, and only
@@ -215,8 +220,33 @@ again on a retry after `PAYMENT_FAILED` overwrites it; omitting it clears it.
 land in the foreign pool exactly like 96.5% ones. The constant is hardcoded in the usecase and is
 not caller-supplied.
 
-For 99.9% the server also forces `brandId = 'NA'` (those pools are keyed by origin, not brand), so
-the caller omits the brand entirely.
+### 5.1 Brand is recorded here, and nowhere else
+
+There is **no `brand_id` column** on `whole_buy_transactions`. An order cannot state what stamp
+will arrive — that is an observation made when the metal is on the counter, and from a supplier
+that is not `brandLock` it is routinely a mix. So brand is supplied on the move into `STOCKED`
+(via `/status` or `/receive-stock`) as a `brandSplit`, and lands as one movement per pool.
+
+| Supplier | What the operator enters |
+|---|---|
+| `brandLock = true` (ฮั่วเซ่งเฮง) | nothing — its single registered brand takes 100%, and sending a split is a 422 |
+| `brandLock = false` | a weight per brand in `suppler_brands`; the fungible `NA` pool takes the residual |
+| 99.9%, any supplier | nothing — those pools are keyed by origin, so brand is not a dimension of them and a split is a 422 |
+
+**The split can never change how much enters stock.** Callers name only the branded portions and
+the residual is `weightGb − Σ named`, taken by subtraction. There is no total field to disagree
+with and no residual field to mistype, so an unequal increment is not representable — the one
+failure mode left is naming *more* than the order, which is refused outright rather than clamped.
+Cost is apportioned by weight with the last line absorbing the rounding, so the pools reconcile to
+`totalAmount` exactly.
+
+Which brands a supplier may ship is `suppler_brands` data, not code: registering a second stamp is
+a row, not a change here. BU tracks only ฮั่วเซ่งเฮง and `NA` today because identifying every stamp
+on the floor is not work they can do.
+
+`GET /wholesale-buy/:id` returns the recorded split by reading the movements back under the
+transaction's reference. **There is no allocation table** — the movements the balances were built
+from *are* the split, so the two cannot drift.
 
 **Corrections after `STOCKED`** do not reopen the transaction. It is terminal by design. Post a
 manual adjustment through `POST /inventory/loss` (or `/gain`) with `referenceType: WHOLESALE_BUY`

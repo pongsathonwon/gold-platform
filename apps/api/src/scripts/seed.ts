@@ -13,7 +13,7 @@ const client = postgres(DATABASE_URL);
 const db = drizzle(client, { casing: "snake_case" });
 
 // lazy imports so schema types resolve after casing is set
-const { brands, purities, productTypes, unitConversions, productTypePurities, suppliers } = await import(
+const { brands, purities, productTypes, unitConversions, productTypePurities, suppliers, supplierBrands } = await import(
     "../infrastructure/db/schema/master.schema.js"
 );
 const { users } = await import("../infrastructure/db/schema/user.schema.js");
@@ -82,6 +82,22 @@ async function seed() {
         ])
         .onConflictDoNothing();
     console.log("  ✓ suppliers");
+
+    // --- Supplier brands ---
+    // Which stamps each supplier can ship. This is what the brand-split UI reads, and it is the
+    // whole reason the HUA rule is data rather than code:
+    //   ฮั่วเซ่งเฮง is brandLock, so its one registered brand takes 100% and nothing is enterable
+    //   ออโรร่า is not, so HUA_GOLD becomes an enterable line and the rest falls to NA
+    // Registering a second stamped brand later is another row here, not a code change. BU tracks
+    // only these two today because identifying every stamp on the floor is not work they can do.
+    await db
+        .insert(supplierBrands)
+        .values([
+            { supplierId: "11111111-1111-4111-8111-111111111111", brandId: "HUA_GOLD" },
+            { supplierId: "22222222-2222-4222-8222-222222222222", brandId: "HUA_GOLD" },
+        ])
+        .onConflictDoNothing();
+    console.log("  ✓ supplier brands");
 
     // --- Admin user ---
     const username = process.env.SEED_USERNAME ?? "admin";

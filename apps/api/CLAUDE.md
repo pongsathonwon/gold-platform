@@ -138,9 +138,11 @@ CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> STOC
   `origin: 'foreign'` at **every** purity (only smelting makes domestic stock).
 - **Accept as documented.** Acceptance takes *no* weight: it means the delivery matched its
   document, so the ordered weight is what enters stock. The check is physical and happens at the
-  door, before custody transfers — a delivery whose weight, brand or purity disagrees is refused
-  via `PAID → RETURNED` and never signed for. Brand and purity are not discrepancies to negotiate
-  but the wrong product, and there is no amend path: refuse, terminate, create a new transaction.
+  door, before custody transfers — a delivery whose weight or purity disagrees is refused
+  via `PAID → RETURNED` and never signed for. Purity is not a discrepancy to negotiate but the
+  wrong product, and there is no amend path: refuse, terminate, create a new transaction.
+- **Acceptance *does* take the brand split.** There is no `brand_id` on either wholesale
+  transaction table. See "Brand at inventory time" below.
 - **`RETURNED` is not terminal.** Our money left at `PAID`, so a shipment going back leaves the
   supplier holding it. It resolves to `REFUNDED` (money back), `RECEIVED` (they re-delivered the
   correct item) or `WRITTEN_OFF` (they never made us whole).
@@ -231,6 +233,45 @@ irreversible events happen in the opposite order**: we hand over gold first and 
 `WHOLE_SELL_TRANSITIONS` in `@gold-platform/types` is the shared map, re-typed against the DB enum
 in the port exactly as buy does it. `WHOLESALE_SELL_AUTO_CONFIRM_HOUR` is its own env var.
 
+### Brand at inventory time — `infrastructure/brand-split.ts`
+
+**Neither wholesale table has a `brand_id` column.** Brand is not a property of an order, it is a
+property of the metal, and it is only known when the metal is in front of you — a supplier that is
+not `brandLock` routinely ships a mix of stamps. So brand is supplied on the transition that moves
+stock (buy: `STOCKED` via `/status` or `/receive-stock`; sell: `PACKED`) as a `brandSplit`, and
+lands as one inventory movement per pool.
+
+| Supplier | What the caller sends |
+|---|---|
+| `brandLock = true` | nothing — its one `suppler_brands` row takes 100%; a split is a 422 |
+| `brandLock = false` | a weight per registered brand; `NA` takes the residual |
+| 99.9%, any supplier | nothing — pools are keyed by origin; a split is a 422 |
+
+- **The split always sums to the transaction weight, by construction.** Callers name only the
+  branded portions; the residual is `weightGb − Σ named`, taken by **subtraction** so the lines
+  restore the stored `weightGm` to the last decimal whatever the conversion factor rounds to.
+  There is no total field to disagree with and no residual field to mistype, so an unequal
+  increment/decrement is unrepresentable. Naming *more* than the transaction is the one failure
+  left, and it is refused (`BrandSplitExceedsWeightError` → 422) rather than clamped.
+- **`divideWeight()` is the whole rule as a pure function**, with the three DB lookups lifted out
+  into the thin `resolveBrandSplit()` wrapper around it. That is what lets
+  `brand-split.test.ts` assert the reconstruct-the-transaction invariant with no database and no
+  mocking. Both domains' usecase suites mock `resolveBrandSplit` as a pass-through.
+- **Which brands a supplier may ship is `suppler_brands` data, not code.** Registering a second
+  stamp is a seed row. BU tracks only ฮั่วเซ่งเฮง and `NA` today because identifying every stamp on
+  the floor is not work they can do — but nothing in the code knows that.
+- **`incrementSplit` / `decrementSplit` move every pool in one DB transaction**
+  (`incrementMany` / `decrementMany` in the inventory repository). One short pool fails the whole
+  move with nothing written anywhere. `increment` / `decrement` are now the single-brand case
+  expressed through the same path, so *every* movement in the system is all-or-nothing.
+- **The ledger is the record — there is no allocation table.** The movements booked under a
+  transaction's reference *are* its split, so the figures a detail page shows are the rows the
+  balances were built from and cannot drift from them. `getTransaction` reads them back via
+  `findBrandSplitByReference()`. It is also why `reverseDecrement()` unwinds a mixed sell
+  correctly with no new code: it replays each movement into the pool it came from.
+- Cost is apportioned across an increment's pools by weight, last line absorbing the rounding, so
+  they reconcile to `totalAmount` exactly. Decrements ignore it — each pool's own live WAC decides.
+
 ## Settlement Period
 
 `settlementPeriod` is a reporting bucket — a week label (e.g. `"2026-W24"`) auto-computed from `recordedAt` using a fixed Fri–Thu boundary. Callers never supply it.
@@ -282,14 +323,18 @@ Stock is tracked as a single aggregate row per pool `(purityId, brandId, origin,
 All domain callers hardcode their origin. Only `convert_out` accepts `origin` as caller input.
 
 **99.9% goldbar:** `brandId = 'NA'` (sentinel, `active=false`), origin is the meaningful pool key.  
-**96.5% products:** `brandId` = actual brand, `origin = 'foreign'` always.
+**96.5% products:** `brandId` = actual brand, `origin = 'foreign'` always. On the wholesale domains
+that brand comes from the brand split recorded at the stock-moving transition, not from the order.
 
 ### Functions
 
 | Function | Caller | Effect |
 |----------|--------|--------|
-| `increment(req)` | wholesale-buy at `RECEIVED`, receive at `CONFIRMED`, smelting at `CONFIRMED` | upsert balance `+delta`, insert movement |
-| `decrement(req)` | wholesale-sell/retail-sell at `SHIPPED`, convert-out at `CONFIRMED` | `decrementBalance` computes cost from the pool's live WAC inside the locked transaction and returns it → insert movement `-delta`. Fails `InsufficientStockError` if balance short. |
+| `incrementSplit(req)` | wholesale-buy at `STOCKED` | upsert balance `+delta` + movement **per branded pool**, all in one DB transaction |
+| `decrementSplit(req)` | wholesale-sell at `PACKED` | per pool: lock, check, cost at that pool's live WAC, movement `-delta` — one DB transaction, so one short pool fails the lot with nothing written |
+| `increment(req)` | receive at `CONFIRMED`, smelting at `CONFIRMED` | the single-brand case, delegating to `incrementSplit` |
+| `decrement(req)` | retail-sell at `SHIPPED`, convert-out at `CONFIRMED` | the single-brand case, delegating to `decrementSplit`. Fails `InsufficientStockError` if the balance is short. |
+| `findBrandSplitByReference(type, id)` | wholesale-buy/sell `getTransaction` | reads a transaction's recorded brand split back off the movement ledger — there is no allocation table |
 | `reverseDecrement(req)` | (not yet wired) | find movements by reference → reverse balance delta → insert reverse movements |
 | `productSwitch(req)` | `POST /inventory/product-switch` | decrement non-fungible brand pool at its live WAC (`fromCostDelta`) → increment `'NA'` pool with the same value (`toCostDelta = fromCostDelta`, cost conserved). Same purity + productType only. Atomic. |
 | `stockGain(req)` | `POST /inventory/gain` | operator enters `pricePerGb`; `totalCost = pricePerGb × weightGb` → insert adjustment record → upsert balance `+delta` → insert movement |
@@ -309,7 +354,7 @@ Outbound cost is derived from the current balance at decrement time — **no dai
 
 | File | Tables |
 |------|--------|
-| `master.schema.ts` | `gold_product_type`, `gold_brands`, `purities`, `bar_sizes`, `suppliers`, `supplier_product_types`, `suppler_brands`, `unit_conversion`, `branches`, `product_type_purities` (planned) |
+| `master.schema.ts` | `gold_product_type`, `gold_brands`, `purities`, `bar_sizes`, `suppliers`, `supplier_product_types`, `suppler_brands` (now read — drives the brand split), `unit_conversion`, `branches`, `product_type_purities` (planned) |
 | `inventory.schema.ts` | `inventory_balance`, `inventory_movements`, `stock_gain_adjustments`, `stock_loss_adjustments`, `product_switch_adjustments` |
 | `wholesale-buy.schema.ts` | `whole_buy_transactions`, `whole_buy_statuses` |
 | `wholesale-sell.schema.ts` | `whole_sell_transactions`, `whole_sell_statuses` |

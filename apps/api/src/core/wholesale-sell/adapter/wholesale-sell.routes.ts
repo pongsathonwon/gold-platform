@@ -16,11 +16,15 @@ import {
     ReturnReasonRequiredError, type ReturnReason, TransactionNotFoundError,
 } from "../port/wholesale-sell.port.js";
 import { InvalidQuantityError, ProductTypePurityNotFoundError } from "../../../infrastructure/quantity.js";
+import { brandSplitHttpError } from "../../../infrastructure/brand-split.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
 import { InsufficientStockError } from "../../inventory/port/inventories.port.js";
 import type { WholeSellStatus } from "../../../infrastructure/db/schema/wholesale-sell.schema.js";
 
 function toHttpError(error: unknown): [string, number] {
+    // the brand-split rejections are shared with wholesale-buy — one wording for both domains
+    const brandSplitError = brandSplitHttpError(error)
+    if (brandSplitError) return brandSplitError
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
     if (error instanceof NoteRequiredError) return [`a note is required when moving to ${error.status}`, 422]

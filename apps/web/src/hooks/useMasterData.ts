@@ -9,7 +9,7 @@ interface Purity {
   active: boolean;
 }
 
-interface GoldBrand {
+export interface GoldBrand {
   id: string;
   brand: string;
   nonFungible: boolean;
@@ -79,6 +79,23 @@ export function useSuppliers() {
       const res = await client["master-data"].suppliers.$get();
       if (!res.ok) throw new Error("Failed to fetch suppliers");
       return (await res.json()) as { data: Supplier[] };
+    },
+  });
+}
+
+// The brands a supplier ships — the enterable lines of a brand split. A brandLock supplier
+// returns exactly one and the operator enters nothing; anyone else's registered brands become
+// the fields, with the fungible pool taking whatever is left over.
+export function useSupplierBrands(supplierId: string) {
+  return useQuery({
+    queryKey: ["master-data", "suppliers", supplierId, "brands"],
+    enabled: !!supplierId,
+    queryFn: async () => {
+      const res = await client["master-data"].suppliers[":id"].brands.$get({
+        param: { id: supplierId },
+      });
+      if (!res.ok) throw new Error("Failed to fetch brands for supplier");
+      return (await res.json()) as { data: GoldBrand[] };
     },
   });
 }
