@@ -202,7 +202,7 @@ export function InventoryMovementPage() {
   return (
     <Container sx={{ py: 4 }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 3, gap: 2, flexWrap: "wrap" }}>
-        <Typography variant="h2">Inventory Movement</Typography>
+        <Typography variant="h2">ความเคลื่อนไหวทองแท่ง</Typography>
         <Box sx={{ display: "flex", gap: 2 }}>
           {/* change inputLabel attr to slot props */}
           <TextField

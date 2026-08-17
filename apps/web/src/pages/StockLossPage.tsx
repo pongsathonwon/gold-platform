@@ -174,7 +174,7 @@ export function StockLossPage() {
   return (
     <Container maxWidth="sm" sx={{ py: 4 }}>
       <Typography variant="h2" sx={{ mb: 3 }}>
-        Stock Loss
+        ปรับลดทองคำแท่ง
       </Typography>
       <Card>
         <CardContent>

@@ -184,7 +184,7 @@ export function StockGainPage() {
   return (
     <Container maxWidth="sm" sx={{ py: 4 }}>
       <Typography variant="h2" sx={{ mb: 3 }}>
-        Stock Gain
+        ปรับเพิ่มทองคำแท่ง
       </Typography>
       <Card>
         <CardContent>

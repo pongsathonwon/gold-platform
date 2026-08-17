@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
 const navLinks = [
-  { to: "/inventory", label: "Inventory" },
+  { to: "/inventory", label: "คลังทองคำแท่ง" },
   { to: "/wholesale-buy", label: "ซื้อส่ง" },
   { to: "/wholesale-sell", label: "ขายส่ง" },
 ];

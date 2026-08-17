@@ -102,7 +102,7 @@ export function InventoryPage() {
   return (
     <Container sx={{ py: 4 }}>
       <Box sx={{ mb: 3 }}>
-        <Typography variant="h2">Inventory</Typography>
+        <Typography variant="h2">คลังทองคำแท่ง</Typography>
       </Box>
 
       {isPending && (
