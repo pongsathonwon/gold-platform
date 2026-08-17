@@ -205,7 +205,9 @@ and stock loss — opens with a **วันที่ทำรายการ** f
   is picked rather than a fixed bucket.
 - `formatBusinessDate()` in `utils/format.ts` renders a `YYYY-MM-DD` from its own parts. Passing it
   through `new Date()` would apply a timezone to a value that has no instant behind it.
-- The movements page sends plain `from`/`to` days and shows each row's `movementDate`.
+- The movements page sends plain `from`/`to` days and shows each row's `movementDate`. It opens
+  on yesterday–today, not today alone: an empty ledger first thing in the morning reads as a
+  broken page rather than a quiet one.
 
 ## 9b. Wholesale Buy UI
 

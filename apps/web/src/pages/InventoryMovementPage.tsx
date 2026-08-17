@@ -20,7 +20,7 @@ import { useInventoryMovements } from "../hooks/useInventory";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 import { withCumulative, type WithCumulative } from "../utils/inventoryVolume";
 import { formatBusinessDate } from "../utils/format";
-import { todayBusinessDate, TRANSACTION_TYPES } from "@gold-platform/types";
+import { shiftBusinessDate, todayBusinessDate, TRANSACTION_TYPES } from "@gold-platform/types";
 
 const REFERENCE_TYPE_LABEL: Record<string, string> = Object.fromEntries(
   TRANSACTION_TYPES.map((t) => [t.value, t.label]),
@@ -59,9 +59,12 @@ type MovementRow = {
 type CumulativeRow = WithCumulative<MovementRow>;
 
 export function InventoryMovementPage() {
-  // the shop's today, not the viewer's — the ledger is kept on the Bangkok calendar
-  const [fromDate, setFromDate] = useState(todayBusinessDate());
-  const [toDate, setToDate] = useState(todayBusinessDate());
+  // Opens on yesterday and today. Days on the shop's calendar, not the viewer's — the ledger is
+  // kept on Bangkok time. Today alone was empty every morning before the first movement was
+  // booked, which reads as a broken page rather than an empty day; carrying yesterday means the
+  // ledger always opens with the last thing that happened still on screen.
+  const [fromDate, setFromDate] = useState(() => shiftBusinessDate(todayBusinessDate(), -1));
+  const [toDate, setToDate] = useState(() => todayBusinessDate());
 
   // Plain days, both ends inclusive. The window is matched against each movement's business date
   // server-side, so this no longer has to manufacture an end-of-day instant — and the last day of
