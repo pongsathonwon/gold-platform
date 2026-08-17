@@ -41,8 +41,15 @@ export class ReturnReasonRequiredError extends Data.TaggedError("WholeSellReturn
 
 // --- Repository port (outbound) ---
 
+// `from`/`to` window on transactionDate — business days, both ends inclusive. They are not
+// columns of the row, so they sit beside the picked fields rather than inside the Pick.
+//
+// settlementPeriod stays filterable even though no UI sends it: the period is the unit the
+// management net-position view compares sell against buy in. It is not the unit an operator
+// browses their own worklist in, which is what the date window is for.
 export type ListFilter = Partial<Pick<WholeSellTransactionShape,
     'currentStatus' | 'settlementPeriod' | 'supplierId'>>
+    & { from?: string; to?: string }
 
 // transactionDate and settlementPeriod move together — the period is derived from the date, so
 // neither is ever patched without the other

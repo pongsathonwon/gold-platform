@@ -57,6 +57,10 @@ export interface WholeBuyFilter {
   currentStatus?: string;
   settlementPeriod?: string;
   supplierId?: string;
+  // window over transactionDate, both ends inclusive — the operator's own view of their work,
+  // which is a span of days rather than a settlement period
+  from?: string;
+  to?: string;
 }
 
 async function unwrap<T>(res: Response, fallback: string): Promise<T> {

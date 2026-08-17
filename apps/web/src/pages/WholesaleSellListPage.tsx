@@ -4,7 +4,7 @@ import {
   Container, Typography, Table, TableBody, TableCell, TableContainer, TableFooter,
   TableHead, TableRow, Paper, Chip, Box, TextField, MenuItem, Button, Alert, CircularProgress,
 } from "@mui/material";
-import { WHOLE_SELL_STATUSES } from "@gold-platform/types";
+import { WHOLE_SELL_STATUSES, shiftBusinessDate, todayBusinessDate } from "@gold-platform/types";
 import { useWholesaleSellList, type WholeSellTransaction } from "../hooks/useWholesaleSell";
 import { useConfirmAllWholesaleSell } from "../hooks/useWholesaleSellMutations";
 import { useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterData";
@@ -30,13 +30,28 @@ const contestedWeight = (t: WholeSellTransaction, unit: Unit) =>
 
 const amountOf = (t: WholeSellTransaction) => t.totalAmount;
 
+// The list opens on the last seven days — six back plus today, inclusive. A week's worth of
+// trading is what the manager pictures and what the operator is still working through, so it
+// serves both without either having to touch the filter.
+//
+// It deliberately does *not* snap to the Fri–Thu settlement period. That period is a management
+// convention for comparing sell against buy, not a boundary an operator works inside: anchoring
+// the window to it would show almost nothing on a Friday morning.
+const DEFAULT_WINDOW_DAYS = 7;
+
 export function WholesaleSellListPage() {
   const [currentStatus, setCurrentStatus] = useState("");
   const [supplierId, setSupplierId] = useState("");
+  const [from, setFrom] = useState(() =>
+    shiftBusinessDate(todayBusinessDate(), -(DEFAULT_WINDOW_DAYS - 1)),
+  );
+  const [to, setTo] = useState(() => todayBusinessDate());
 
   const filter = {
     ...(currentStatus ? { currentStatus } : {}),
     ...(supplierId ? { supplierId } : {}),
+    ...(from ? { from } : {}),
+    ...(to ? { to } : {}),
   };
   const { data, isPending, isError, error } = useWholesaleSellList(filter);
   const confirmAll = useConfirmAllWholesaleSell();
@@ -58,6 +73,8 @@ export function WholesaleSellListPage() {
   // counts only what is on screen; with a status filter applied the button follows the filter,
   // but the endpoint always sweeps every CREATED transaction — so the count is a floor, not a cap
   const createdCount = (data ?? []).filter((t) => t.currentStatus === "CREATED").length;
+
+  const windowLabel = `${formatBusinessDate(from)} – ${formatBusinessDate(to)}`;
 
   function handleConfirmAll() {
     confirmAll.mutate(undefined, {
@@ -91,7 +108,6 @@ export function WholesaleSellListPage() {
                 <TableCell align="right">{weightHeader}</TableCell>
                 <TableCell align="right">ราคา/บาททอง</TableCell>
                 <TableCell align="right">ยอดรวม</TableCell>
-                <TableCell>งวด</TableCell>
                 <TableCell>สถานะ</TableCell>
                 <TableCell />
               </TableRow>
@@ -99,7 +115,7 @@ export function WholesaleSellListPage() {
             <TableBody>
               {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} align="center">
+                  <TableCell colSpan={8} align="center">
                     ไม่พบรายการ
                   </TableCell>
                 </TableRow>
@@ -129,7 +145,6 @@ export function WholesaleSellListPage() {
                       {formatNumber(unit === "kg" ? t.pricePerGb999 : t.pricePerGb965)}
                     </TableCell>
                     <TableCell align="right">{formatNumber(amountOf(t))}</TableCell>
-                    <TableCell>{t.settlementPeriod}</TableCell>
                     <TableCell>
                       <Chip size="small" label={statusLabel(t.currentStatus)} color={statusColor(t.currentStatus)} />
                     </TableCell>
@@ -150,6 +165,11 @@ export function WholesaleSellListPage() {
                 <TableRow>
                   <TableCell colSpan={3} sx={{ fontWeight: "bold", color: "text.primary" }}>
                     รวม
+                    {/* the window is part of what the number means — a total over a span the
+                        reader has to scroll up to find is not self-describing */}
+                    <Typography component="span" variant="caption" sx={{ ml: 1, fontWeight: 400 }}>
+                      ({windowLabel})
+                    </Typography>
                     {excluded > 0 && (
                       <Typography component="span" variant="caption" sx={{ ml: 1, fontWeight: 400 }}>
                         (ไม่รวม {excluded} รายการที่ยกเลิก/ปฏิเสธ/ตีกลับ)
@@ -163,7 +183,7 @@ export function WholesaleSellListPage() {
                   <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
                     {formatNumber(totalAmount)}
                   </TableCell>
-                  <TableCell colSpan={3} />
+                  <TableCell colSpan={2} />
                 </TableRow>
               </TableFooter>
             )}
@@ -189,7 +209,26 @@ export function WholesaleSellListPage() {
         </Button>
       </Box>
 
-      <Box sx={{ display: "flex", gap: 2, mb: 3 }}>
+      <Box sx={{ display: "flex", gap: 2, mb: 3, flexWrap: "wrap" }}>
+        {/* a day window over วันที่ทำรายการ, both ends inclusive. Clearing a field drops that end
+            of the window rather than falling back to the default — an operator chasing an old
+            deal should be able to open the range up. */}
+        <TextField
+          type="date"
+          label="ตั้งแต่วันที่"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+          slotProps={{ inputLabel: { shrink: true } }}
+          sx={{ minWidth: 170 }}
+        />
+        <TextField
+          type="date"
+          label="ถึงวันที่"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          slotProps={{ inputLabel: { shrink: true } }}
+          sx={{ minWidth: 170 }}
+        />
         <TextField
           select
           label="สถานะ"

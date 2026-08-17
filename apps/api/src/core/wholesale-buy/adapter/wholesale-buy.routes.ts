@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import {
-    advanceWholeBuyStatusSchema, createWholeBuySchema,
+    advanceWholeBuyStatusSchema, businessDaySchema, createWholeBuySchema,
     receiveStockWholeBuySchema, updateWholeBuySchema, wholeBuyStatusSchema,
 } from "@gold-platform/types";
 import { runEffect } from "../../../infrastructure/runtime.js";
@@ -59,6 +59,11 @@ const listQuerySchema = z.object({
     currentStatus: wholeBuyStatusSchema.optional(),
     settlementPeriod: z.string().optional(),
     supplierId: z.string().uuid().optional(),
+    // Business days (`YYYY-MM-DD`), not instants: the window is over each deal's transactionDate
+    // and both ends are inclusive, so a caller never has to remember an end-of-day time on `to`.
+    // Shape-only, like the movements window — a report range may legitimately reach forward.
+    from: businessDaySchema.optional(),
+    to: businessDaySchema.optional(),
 })
 
 export const wholesaleBuyRoutes = new Hono()

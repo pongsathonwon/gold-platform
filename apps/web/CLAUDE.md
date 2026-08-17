@@ -193,6 +193,16 @@ and stock loss — opens with a **วันที่ทำรายการ** f
   agreeing is the ordinary case and deserves no chrome.
 - **The lists show and sort by `transactionDate`**, not `recordedAt` — a backdated entry reads
   where it belongs rather than jumping to the top.
+- **Both wholesale lists filter on a day window, not a settlement period**, and open on the last
+  seven days (`shiftBusinessDate(todayBusinessDate(), -6)` → today, inclusive). The `งวด` column
+  is gone from both. `YYYY-Www` is unreadable at a glance — W32 names no dates a reader can
+  recover, and because the period is shifted 4 days off the ISO week, anyone who *does* decode it
+  lands four days wrong. The bucket is a management convention for comparing buy against sell; it
+  is not something an operator acts on inside one domain's worklist, so it has no place on these
+  pages. When the net-position view is built it should render the period as its Fri–Thu span too,
+  never as the raw code.
+- The `รวม` footers carry the active window as a caption, since the totals now sum whatever range
+  is picked rather than a fixed bucket.
 - `formatBusinessDate()` in `utils/format.ts` renders a `YYYY-MM-DD` from its own parts. Passing it
   through `new Date()` would apply a timezone to a value that has no instant behind it.
 - The movements page sends plain `from`/`to` days and shows each row's `movementDate`.
@@ -203,7 +213,7 @@ Three pages plus one shared helper:
 
 | File | Role |
 | --- | --- |
-| `pages/WholesaleBuyListPage.tsx` | split into `ทอง 96.5%` (บาท) and `ทอง 99.9%` (กก.) sections like the inventory pages, each with its own `รวม` footer. Status/supplier filters. Shows the delivered weight, with the ordered one beside it when they differ |
+| `pages/WholesaleBuyListPage.tsx` | split into `ทอง 96.5%` (บาท) and `ทอง 99.9%` (กก.) sections like the inventory pages, each with its own `รวม` footer. Date-window/status/supplier filters. Shows the delivered weight, with the ordered one beside it when they differ |
 | `pages/WholesaleBuyCreatePage.tsx` | create form on the shared `useDynamicForm` / `DynamicFormField` pattern. **One price field only** — the 96.5% quote; `derivePricePerGb999()` previews the 99.9% figure in helper text, and the server does the real conversion. **No brand field** — see below |
 | `pages/WholesaleBuyDetailPage.tsx` | summary, status timeline, action buttons + confirm dialog |
 | `utils/wholeBuyStatus.ts` | chip colours, Thai labels, `nextStatuses()`, `requiresNote()` |
@@ -253,7 +263,7 @@ same purity sectioning, same one-extra-field-per-move dialog.
 
 | File | Role |
 | --- | --- |
-| `pages/WholesaleSellListPage.tsx` | purity-split table, status/supplier filters, bulk-confirm button |
+| `pages/WholesaleSellListPage.tsx` | purity-split table, date-window/status/supplier filters, bulk-confirm button |
 | `pages/WholesaleSellCreatePage.tsx` | create form; one price field (96.5%), 99.9% previewed in helper text |
 | `pages/WholesaleSellDetailPage.tsx` | summary, status timeline, action buttons + dialog |
 | `utils/wholeSellStatus.ts` | chip colours, Thai labels, `nextStatuses()`, `requiresNote()` |

@@ -83,6 +83,23 @@ export function businessDateOf(at: Date): string {
 /** Today on the shop's calendar — the default every picked date starts at. */
 export const todayBusinessDate = (at: Date = new Date()) => businessDateOf(at)
 
+/**
+ * The business day `delta` days from `day` — `shiftBusinessDate('2026-06-18', -6) === '2026-06-12'`.
+ *
+ * A business day is a calendar date with no instant behind it, so the arithmetic runs in UTC:
+ * midnight UTC never crosses a DST seam, and the result is formatted back off the same UTC
+ * accessors it was built from. Reading the day in Bangkok and then stepping it in local time
+ * would apply a timezone twice.
+ *
+ * This is how report windows are anchored — a list defaulting to "the last seven days" asks for
+ * `shiftBusinessDate(todayBusinessDate(), -6)`, six back plus today inclusive.
+ */
+export function shiftBusinessDate(day: string, delta: number): string {
+  const at = new Date(`${day}T00:00:00Z`)
+  at.setUTCDate(at.getUTCDate() + delta)
+  return at.toISOString().slice(0, 10)
+}
+
 // A floor no real record predates, so a mistyped year (0226, 1026) is rejected as input rather
 // than silently filed 1,800 years back. It cannot catch a plausible-looking wrong year, and is
 // not meant to — the not-future rule is the one that carries weight.

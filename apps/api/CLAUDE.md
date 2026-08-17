@@ -389,9 +389,16 @@ Outbound cost is derived from the current balance at decrement time — **no dai
 |--------|---------|
 | retail-buy | `currentStatus`, `settlementPeriod`, `branchCode` |
 | retail-sell | `currentStatus`, `settlementPeriod`, `branchCode` |
-| wholesale-buy | `currentStatus`, `settlementPeriod`, `supplierId` |
-| wholesale-sell | `currentStatus`, `settlementPeriod`, `supplierId` |
+| wholesale-buy | `currentStatus`, `settlementPeriod`, `supplierId`, `from`/`to` |
+| wholesale-sell | `currentStatus`, `settlementPeriod`, `supplierId`, `from`/`to` |
 | receive | `currentStatus`, `settlementPeriod`, `branchCode` |
+
+`from`/`to` on the wholesale lists window over `transactionDate` — business days, both ends
+inclusive, same shape as `GET /inventory/movements`. It exists because **the period is not the
+unit an operator browses in.** The Fri–Thu bucket is a management convention for comparing buy
+against sell in the net-position view; a worklist is a span of days. Both filters stay available
+and neither replaces the other — the web app sends only the date window, and `settlementPeriod`
+is what the (unbuilt) management view will use.
 
 ## Open Items
 

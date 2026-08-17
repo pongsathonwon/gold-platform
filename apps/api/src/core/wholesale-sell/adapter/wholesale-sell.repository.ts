@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
 import {
     CreateWholeSellStatus, CreateWholeSellTransaction,
@@ -38,6 +38,11 @@ class WholeSellRepositoryImpl implements ForWholeSellRepository {
             req.currentStatus ? eq(wholeSellTransactions.currentStatus, req.currentStatus) : undefined,
             req.settlementPeriod ? eq(wholeSellTransactions.settlementPeriod, req.settlementPeriod) : undefined,
             req.supplierId ? eq(wholeSellTransactions.supplierId, req.supplierId) : undefined,
+            // the window is over the business day the deal was struck, not the insert timestamp —
+            // a backdated entry answers for the day it happened. Both ends inclusive: `to` is a
+            // day, so excluding it would silently drop the last day the caller asked for.
+            req.from ? gte(wholeSellTransactions.transactionDate, req.from) : undefined,
+            req.to ? lte(wholeSellTransactions.transactionDate, req.to) : undefined,
         ].filter(Boolean) as ReturnType<typeof eq>[];
 
         return Effect.tryPromise({
