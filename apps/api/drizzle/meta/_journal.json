@@ -92,6 +92,13 @@
       "when": 1786852820557,
       "tag": "0012_business_transaction_date",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786855167651,
+      "tag": "0013_product_switch_destination_brand",
+      "breakpoints": true
     }
   ]
 }

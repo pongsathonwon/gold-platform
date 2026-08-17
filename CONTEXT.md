@@ -151,7 +151,7 @@ stamp on the floor is not work they can do, but adding one is a data row, not a 
 
 ### Product Switch
 
-Rare reclassification: decrement a **non-fungible** (96.5%, specific brand) pool and increment the **fungible** (`N/A`) pool at today's WAC. Same purity and product type only. Cross-purity or cross-type discrepancies are handled as a manual stock-loss + stock-gain pair (audited separately).
+Rare reclassification: decrement one brand pool and increment another at today's WAC. **Both ends are named and it runs in either direction** — a stamped bar reclassified into the fungible (`N/A`) pool, or fungible weight identified as a stamp. Same purity and product type only, and the two brands must differ. Cross-purity or cross-type discrepancies are handled as a manual stock-loss + stock-gain pair (audited separately).
 
 ### Bar Sizes
 

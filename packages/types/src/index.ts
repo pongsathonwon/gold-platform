@@ -172,13 +172,22 @@ export const stockLossSchema = z.object({
 
 export type StockLossReq = z.infer<typeof stockLossSchema>
 
-export const productSwitchSchema = z.object({
-  purityId: z.string(),
-  productTypeId: z.string(),
-  fromBrandId: z.string(),
-  weight: z.number().int().positive(),
-  notes: z.string().optional(),
-})
+// A switch moves weight between two brand pools of the same purity + product type. It runs in
+// either direction — a stamped bar reclassified into the fungible pool, or fungible weight
+// identified as a stamp — so both ends are named. Same-pool is not a move.
+export const productSwitchSchema = z
+  .object({
+    purityId: z.string(),
+    productTypeId: z.string(),
+    fromBrandId: z.string(),
+    toBrandId: z.string(),
+    weight: z.number().int().positive(),
+    notes: z.string().optional(),
+  })
+  .refine((v) => v.fromBrandId !== v.toBrandId, {
+    message: 'ยี่ห้อต้นทางและปลายทางต้องไม่ซ้ำกัน',
+    path: ['toBrandId'],
+  })
 
 export type ProductSwitchReq = z.infer<typeof productSwitchSchema>
 

@@ -95,12 +95,14 @@ export const stockLossAdjustments = pgTable('stock_loss_adjustments', {
 export type CreateStockLoss = typeof stockLossAdjustments.$inferInsert;
 export type StockLossShape = typeof stockLossAdjustments.$inferSelect;
 
-// product switch: moves weight from non-fungible brand pool to fungible ('NA') pool
+// product switch: moves weight between two brand pools of the same purity + product type, in
+// either direction — stamped into fungible ('NA'), or fungible identified as a stamp
 export const productSwitchAdjustments = pgTable('product_switch_adjustments', {
     id: uuid().primaryKey().defaultRandom(),
     purityId: varchar().notNull().references(() => purities.id),
     productTypeId: varchar().notNull().references(() => productTypes.id),
     fromBrandId: varchar().notNull().references(() => brands.id),
+    toBrandId: varchar().notNull().references(() => brands.id),
     weightGb: decimal({ mode: 'number' }).notNull(),
     weightGm: decimal({ mode: 'number' }).notNull(),
     fromCostDelta: decimal({ mode: 'number' }).notNull(),

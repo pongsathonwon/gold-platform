@@ -174,18 +174,18 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
         const movementDate = todayBusinessDate();
         const { weightGb, weightGm } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
-        // decrement non-fungible pool at its live WAC (returns the cost removed); the reclassification
-        // conserves cost value, so the fungible pool is credited with the same amount
+        // decrement the source pool at its live WAC (returns the cost removed); the reclassification
+        // conserves cost value, so the destination pool is credited with the same amount
         const fromCostDelta = yield* repo.decrementBalance(
             { purityId: req.purityId, brandId: req.fromBrandId, origin, productTypeId: req.productTypeId },
             weightGb, weightGm,
         );
         const toCostDelta = fromCostDelta;
 
-        // increment fungible (NA) pool
+        // increment the destination pool
         yield* repo.upsertBalance({
             purityId: req.purityId,
-            brandId: 'NA',
+            brandId: req.toBrandId,
             origin,
             productTypeId: req.productTypeId,
             totalWeightGb: weightGb,
@@ -197,6 +197,7 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
             purityId: req.purityId,
             productTypeId: req.productTypeId,
             fromBrandId: req.fromBrandId,
+            toBrandId: req.toBrandId,
             weightGb,
             weightGm,
             fromCostDelta,
@@ -228,7 +229,7 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
         yield* repo.createMovement({
             id: randomUUID(),
             purityId: req.purityId,
-            brandId: 'NA',
+            brandId: req.toBrandId,
             origin,
             productTypeId: req.productTypeId,
             referenceType: 'PRODUCT_SWITCH',
