@@ -43,6 +43,17 @@ export const productTypePurities = pgTable('product_type_purities', {
     inputUnit: weightInputUnitEnum().notNull(),
     minQuantity: integer().notNull(),
     allowedValues: integer().array(), // null = free integer >= minQuantity; set = closed list (e.g. kg bar sizes)
+    /**
+     * The increment an orderable quantity must land on, when the valid weights are a regular
+     * series rather than a short list. Null means any whole number at or above `minQuantity`.
+     *
+     * 96.5% gold bar is the case this exists for: bars come in 5, 10, 20 and 50 GB, so any real
+     * quantity is a sum of those and therefore a multiple of 5. `allowedValues` cannot express
+     * that — the series does not end — and hard-coding "96.5 means multiples of five" in the
+     * validator would put a fact about bar stock into code, where the other two quantity rules
+     * are already data.
+     */
+    stepQuantity: integer(),
     active: boolean().default(true).notNull(),
 }, (table) => [
     primaryKey({ columns: [table.productTypeId, table.purityId] })

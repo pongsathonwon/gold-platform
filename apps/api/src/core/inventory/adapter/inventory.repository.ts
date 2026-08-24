@@ -26,6 +26,79 @@ function nonDateConditions(filter: MovementFilter) {
 
 const INSUFFICIENT = Symbol('InsufficientStockError')
 
+// Any Drizzle handle that can run statements — the real client or a transaction scope. The
+// balance helpers below are written against this so one implementation serves both the
+// standalone calls and the multi-statement operations that compose them.
+type Executor = Parameters<Parameters<Database['transaction']>[0]>[0] | Database
+
+const balanceWhere = (key: BalanceKey) => and(
+    eq(inventoryBalance.purityId, key.purityId),
+    eq(inventoryBalance.brandId, key.brandId),
+    eq(inventoryBalance.origin, key.origin),
+    eq(inventoryBalance.productTypeId, key.productTypeId),
+)
+
+const isInsufficient = (e: unknown): e is { available: number; requested: number } =>
+    !!e && typeof e === 'object' && INSUFFICIENT in (e as object)
+
+/**
+ * Locks a pool, checks it covers the weight, and removes it at the pool's own live WAC.
+ * Returns the cost taken out.
+ *
+ * Written against an `Executor` rather than the client so the standalone `decrementBalance` and
+ * the composite operations below share one implementation — the lock, the sufficiency check and
+ * the rate must not drift between the paths that use them.
+ */
+async function decrementWithin(tx: Executor, key: BalanceKey, weightGb: number, weightGm: number) {
+    const rows = await tx.select().from(inventoryBalance).where(balanceWhere(key)).for('update').execute()
+
+    const balance = rows[0]
+    const available = balance?.totalWeightGb ?? 0
+    if (!balance || available < weightGb) {
+        throw { [INSUFFICIENT]: true, available, requested: weightGb }
+    }
+
+    // live WAC — safe from divide-by-zero: available >= weightGb > 0 here
+    const rate = balance.totalWeightGb > 0 ? balance.totalCost / balance.totalWeightGb : 0
+    const costDelta = weightGb * rate
+
+    // A pool drained to nothing must not keep a fraction of a satang of cost behind: the next
+    // increment would average against a rate built from weight that is no longer there. Zero is
+    // the honest value for an empty pool, so the residue is cleared rather than carried.
+    const emptied = balance.totalWeightGb - weightGb <= 0
+
+    await tx.update(inventoryBalance)
+        .set({
+            totalWeightGb: sql`${inventoryBalance.totalWeightGb} - ${weightGb}`,
+            totalWeightGm: sql`${inventoryBalance.totalWeightGm} - ${weightGm}`,
+            totalCost: emptied ? 0 : sql`${inventoryBalance.totalCost} - ${costDelta}`,
+        })
+        .where(balanceWhere(key))
+        .execute()
+
+    return costDelta
+}
+
+/** Adds weight and cost to a pool, creating the row when the pool is new. */
+async function upsertWithin(tx: Executor, req: UpsertBalance) {
+    await tx.insert(inventoryBalance)
+        .values(req)
+        .onConflictDoUpdate({
+            target: [
+                inventoryBalance.purityId,
+                inventoryBalance.brandId,
+                inventoryBalance.origin,
+                inventoryBalance.productTypeId,
+            ],
+            set: {
+                totalWeightGb: sql`inventory_balance.total_weight_gb + EXCLUDED.total_weight_gb`,
+                totalWeightGm: sql`inventory_balance.total_weight_gm + EXCLUDED.total_weight_gm`,
+                totalCost: sql`inventory_balance.total_cost + EXCLUDED.total_cost`,
+            },
+        })
+        .execute()
+}
+
 class InventoryRepository implements ForInventoriesRepository {
     constructor(private readonly db: Database) {}
 
@@ -36,98 +109,99 @@ class InventoryRepository implements ForInventoriesRepository {
         });
     }
 
-    getBalance(key: BalanceKey) {
+    /**
+     * A manual gain, applied whole: the adjustment record, the balance, and the ledger entry.
+     *
+     * All three in one transaction because they are three descriptions of one event. Written as
+     * separate statements they could land apart — a balance that grew with no adjustment saying
+     * why, or an audited gain the ledger never recorded — and an inventory system whose balances
+     * and ledger disagree cannot be reconciled back to truth by anything except a physical count.
+     */
+    applyStockGain(req: { adjustment: CreateStockGain; balance: UpsertBalance; movement: CreateMovement }) {
         return Effect.tryPromise({
-            try: () => this.db.select().from(inventoryBalance).where(and(
-                eq(inventoryBalance.purityId, key.purityId),
-                eq(inventoryBalance.brandId, key.brandId),
-                eq(inventoryBalance.origin, key.origin),
-                eq(inventoryBalance.productTypeId, key.productTypeId),
-            )).execute(),
-            catch: () => new RepositoryError({ message: "cannot get balance" }),
-        }).pipe(Effect.map((rows) => rows[0] ?? null));
-    }
-
-    upsertBalance(req: UpsertBalance) {
-        return Effect.tryPromise({
-            try: () => this.db.insert(inventoryBalance)
-                .values(req)
-                .onConflictDoUpdate({
-                    target: [
-                        inventoryBalance.purityId,
-                        inventoryBalance.brandId,
-                        inventoryBalance.origin,
-                        inventoryBalance.productTypeId,
-                    ],
-                    set: {
-                        totalWeightGb: sql`inventory_balance.total_weight_gb + EXCLUDED.total_weight_gb`,
-                        totalWeightGm: sql`inventory_balance.total_weight_gm + EXCLUDED.total_weight_gm`,
-                        totalCost: sql`inventory_balance.total_cost + EXCLUDED.total_cost`,
-                    },
-                })
-                .execute(),
-            catch: () => new RepositoryError({ message: "cannot upsert balance" }),
+            try: () => this.db.transaction(async (tx) => {
+                await tx.insert(stockGainAdjustments).values(req.adjustment).execute()
+                await upsertWithin(tx, req.balance)
+                await tx.insert(inventoryMovements).values(req.movement).execute()
+            }),
+            catch: () => new RepositoryError({ message: "cannot apply stock gain" }),
         }).pipe(Effect.map(() => undefined as void));
     }
 
-    // Cost is derived from the current balance's live weighted-average cost (WAC) inside the same
-    // locked transaction that reads it — so a pool refilled after hitting zero always decrements at
-    // the correct rate, with no dependency on a daily snapshot. Returns the cost removed.
-    decrementBalance(key: BalanceKey, weightGb: number, weightGm: number) {
+    /**
+     * A manual loss, applied whole. The decrement runs first inside the transaction so a short
+     * pool aborts before anything is written, and the cost it removes — decided by the pool's live
+     * WAC under the lock — is what the ledger entry carries.
+     */
+    applyStockLoss(req: {
+        key: BalanceKey
+        weightGb: number
+        weightGm: number
+        adjustment: CreateStockLoss
+        // the cost is not known until the locked decrement computes it
+        movement: Omit<CreateMovement, 'costDelta'>
+    }) {
         return Effect.tryPromise({
-            try: async () => {
-                return await this.db.transaction(async (tx) => {
-                    const rows = await tx.select().from(inventoryBalance)
-                        .where(and(
-                            eq(inventoryBalance.purityId, key.purityId),
-                            eq(inventoryBalance.brandId, key.brandId),
-                            eq(inventoryBalance.origin, key.origin),
-                            eq(inventoryBalance.productTypeId, key.productTypeId),
-                        ))
-                        .for('update')
-                        .execute();
-
-                    const balance = rows[0];
-                    const available = balance?.totalWeightGb ?? 0;
-                    if (!balance || available < weightGb) {
-                        throw { [INSUFFICIENT]: true, available }
-                    }
-
-                    // live WAC — safe from divide-by-zero: available >= weightGb > 0 here
-                    const rate = balance.totalWeightGb > 0 ? balance.totalCost / balance.totalWeightGb : 0;
-                    const costDelta = weightGb * rate;
-
-                    await tx.update(inventoryBalance)
-                        .set({
-                            totalWeightGb: sql`${inventoryBalance.totalWeightGb} - ${weightGb}`,
-                            totalWeightGm: sql`${inventoryBalance.totalWeightGm} - ${weightGm}`,
-                            totalCost: sql`${inventoryBalance.totalCost} - ${costDelta}`,
-                        })
-                        .where(and(
-                            eq(inventoryBalance.purityId, key.purityId),
-                            eq(inventoryBalance.brandId, key.brandId),
-                            eq(inventoryBalance.origin, key.origin),
-                            eq(inventoryBalance.productTypeId, key.productTypeId),
-                        ))
-                        .execute();
-
-                    return costDelta;
-                });
-            },
-            catch: (e) => {
-                if (e && typeof e === 'object' && INSUFFICIENT in (e as object)) {
-                    return new InsufficientStockError({ requested: weightGb, available: (e as unknown as { available: number }).available });
-                }
-                return new RepositoryError({ message: "cannot decrement balance" });
-            },
+            try: () => this.db.transaction(async (tx) => {
+                const costDelta = await decrementWithin(tx, req.key, req.weightGb, req.weightGm)
+                await tx.insert(stockLossAdjustments).values(req.adjustment).execute()
+                await tx.insert(inventoryMovements).values({ ...req.movement, costDelta: -costDelta }).execute()
+                return costDelta
+            }),
+            catch: (e) => isInsufficient(e)
+                ? new InsufficientStockError({ requested: e.requested, available: e.available })
+                : new RepositoryError({ message: "cannot apply stock loss" }),
         });
     }
 
-    createMovement(req: CreateMovement) {
+    /**
+     * A reclassification, applied whole: source pool down, destination pool up, adjustment record,
+     * and both halves of the ledger pair.
+     *
+     * This is the operation that most needs the transaction. Split across five autocommits, a
+     * failure after the first leaves gold decremented out of one pool and credited to nothing —
+     * weight destroyed on the books with no record explaining where it went.
+     */
+    applyProductSwitch(req: {
+        from: BalanceKey
+        to: BalanceKey
+        weightGb: number
+        weightGm: number
+        // the costs are decided by the source pool's live WAC under the lock, and conserved
+        adjustment: Omit<CreateProductSwitch, 'fromCostDelta' | 'toCostDelta'>
+        fromMovement: Omit<CreateMovement, 'costDelta'>
+        toMovement: Omit<CreateMovement, 'costDelta'>
+    }) {
         return Effect.tryPromise({
-            try: () => this.db.insert(inventoryMovements).values(req).execute(),
-            catch: () => new RepositoryError({ message: "cannot create movement" }),
-        }).pipe(Effect.map(() => undefined as void));
+            try: () => this.db.transaction(async (tx) => {
+                const costDelta = await decrementWithin(tx, req.from, req.weightGb, req.weightGm)
+
+                // the switch conserves value: what leaves the source pool is exactly what the
+                // destination is credited with
+                await upsertWithin(tx, {
+                    ...req.to,
+                    totalWeightGb: req.weightGb,
+                    totalWeightGm: req.weightGm,
+                    totalCost: costDelta,
+                })
+
+                const inserted = await tx.insert(productSwitchAdjustments)
+                    .values({ ...req.adjustment, fromCostDelta: costDelta, toCostDelta: costDelta })
+                    .returning()
+                    .execute()
+                const adjustment = inserted[0]
+
+                await tx.insert(inventoryMovements).values([
+                    { ...req.fromMovement, referenceId: adjustment.id, costDelta: -costDelta },
+                    { ...req.toMovement, referenceId: adjustment.id, costDelta },
+                ]).execute()
+
+                return adjustment
+            }),
+            catch: (e) => isInsufficient(e)
+                ? new InsufficientStockError({ requested: e.requested, available: e.available })
+                : new RepositoryError({ message: "cannot apply product switch" }),
+        });
     }
 
     // Every pool of a split lands in one transaction. A delivery stamped 8 GB HUA + 4 GB NA is one
@@ -139,30 +213,15 @@ class InventoryRepository implements ForInventoriesRepository {
         return Effect.tryPromise({
             try: () => this.db.transaction(async (tx) => {
                 for (const entry of entries) {
-                    await tx.insert(inventoryBalance)
-                        .values({
-                            purityId: entry.purityId,
-                            brandId: entry.brandId,
-                            origin: entry.origin,
-                            productTypeId: entry.productTypeId,
-                            totalWeightGb: entry.weightGb,
-                            totalWeightGm: entry.weightGm,
-                            totalCost: entry.totalCost,
-                        })
-                        .onConflictDoUpdate({
-                            target: [
-                                inventoryBalance.purityId,
-                                inventoryBalance.brandId,
-                                inventoryBalance.origin,
-                                inventoryBalance.productTypeId,
-                            ],
-                            set: {
-                                totalWeightGb: sql`inventory_balance.total_weight_gb + EXCLUDED.total_weight_gb`,
-                                totalWeightGm: sql`inventory_balance.total_weight_gm + EXCLUDED.total_weight_gm`,
-                                totalCost: sql`inventory_balance.total_cost + EXCLUDED.total_cost`,
-                            },
-                        })
-                        .execute();
+                    await upsertWithin(tx, {
+                        purityId: entry.purityId,
+                        brandId: entry.brandId,
+                        origin: entry.origin,
+                        productTypeId: entry.productTypeId,
+                        totalWeightGb: entry.weightGb,
+                        totalWeightGm: entry.weightGm,
+                        totalCost: entry.totalCost,
+                    });
 
                     await tx.insert(inventoryMovements).values({
                         id: randomUUID(),
@@ -198,32 +257,7 @@ class InventoryRepository implements ForInventoriesRepository {
         return Effect.tryPromise({
             try: () => this.db.transaction(async (tx) => {
                 for (const entry of entries) {
-                    const where = and(
-                        eq(inventoryBalance.purityId, entry.purityId),
-                        eq(inventoryBalance.brandId, entry.brandId),
-                        eq(inventoryBalance.origin, entry.origin),
-                        eq(inventoryBalance.productTypeId, entry.productTypeId),
-                    );
-
-                    const rows = await tx.select().from(inventoryBalance).where(where).for('update').execute();
-                    const balance = rows[0];
-                    const available = balance?.totalWeightGb ?? 0;
-                    if (!balance || available < entry.weightGb) {
-                        throw { [INSUFFICIENT]: true, available, requested: entry.weightGb }
-                    }
-
-                    // live WAC — safe from divide-by-zero: available >= weightGb > 0 here
-                    const rate = balance.totalWeightGb > 0 ? balance.totalCost / balance.totalWeightGb : 0;
-                    const costDelta = entry.weightGb * rate;
-
-                    await tx.update(inventoryBalance)
-                        .set({
-                            totalWeightGb: sql`${inventoryBalance.totalWeightGb} - ${entry.weightGb}`,
-                            totalWeightGm: sql`${inventoryBalance.totalWeightGm} - ${entry.weightGm}`,
-                            totalCost: sql`${inventoryBalance.totalCost} - ${costDelta}`,
-                        })
-                        .where(where)
-                        .execute();
+                    const costDelta = await decrementWithin(tx, entry, entry.weightGb, entry.weightGm);
 
                     await tx.insert(inventoryMovements).values({
                         id: randomUUID(),
@@ -244,35 +278,27 @@ class InventoryRepository implements ForInventoriesRepository {
                     }).execute();
                 }
             }),
-            catch: (e) => {
-                if (e && typeof e === 'object' && INSUFFICIENT in (e as object)) {
-                    const short = e as unknown as { available: number; requested: number };
-                    return new InsufficientStockError({ requested: short.requested, available: short.available });
-                }
-                return new RepositoryError({ message: "cannot decrement balances" });
-            },
+            catch: (e) => isInsufficient(e)
+                ? new InsufficientStockError({ requested: e.requested, available: e.available })
+                : new RepositoryError({ message: "cannot decrement balances" }),
         }).pipe(Effect.map(() => undefined as void));
     }
 
-    createStockGainAdjustment(req: CreateStockGain) {
-        return Effect.tryPromise({
-            try: () => this.db.insert(stockGainAdjustments).values(req).execute(),
-            catch: () => new RepositoryError({ message: "cannot create stock gain adjustment" }),
-        }).pipe(Effect.map(() => undefined as void));
-    }
+    /**
+     * Restores every pool a reference drew from, and books the opposite movements — in one
+     * transaction, for the same reason the outbound move was one: a mixed shipment coming home
+     * half-restored leaves the balances claiming gold that is physically on the shelf is not.
+     */
+    applyReversal(req: { restore: UpsertBalance[]; movements: CreateMovement[] }) {
+        if (req.restore.length === 0) return Effect.succeed(undefined as void);
 
-    createStockLossAdjustment(req: CreateStockLoss) {
         return Effect.tryPromise({
-            try: () => this.db.insert(stockLossAdjustments).values(req).execute(),
-            catch: () => new RepositoryError({ message: "cannot create stock loss adjustment" }),
+            try: () => this.db.transaction(async (tx) => {
+                for (const balance of req.restore) await upsertWithin(tx, balance)
+                await tx.insert(inventoryMovements).values(req.movements).execute()
+            }),
+            catch: () => new RepositoryError({ message: "cannot apply reversal" }),
         }).pipe(Effect.map(() => undefined as void));
-    }
-
-    createProductSwitchAdjustment(req: CreateProductSwitch) {
-        return Effect.tryPromise({
-            try: () => this.db.insert(productSwitchAdjustments).values(req).returning().execute(),
-            catch: () => new RepositoryError({ message: "cannot create product switch adjustment" }),
-        }).pipe(Effect.map((rows) => rows[0]));
     }
 
     findMovementsByReference(referenceType: string, referenceId: string) {

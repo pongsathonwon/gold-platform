@@ -3,12 +3,25 @@ import { randomUUID } from "crypto";
 import { StockGainReq, StockLossReq, todayBusinessDate } from "@gold-platform/types";
 import {
     DecrementReq, IncrementReq, InventoriesRepository, InventoryVolume, MovementEntry,
-    MovementFilter, ProductSwitchReq, ReverseDecrementReq, SplitMovementReq,
+    MovementFilter, ProductSwitchReq, ProtectedOriginError, ReverseDecrementReq, SplitMovementReq,
 } from "../port/inventories.port.js";
 import { makeInventoryRepository } from "../adapter/inventory.repository.js";
 import { resolveQuantity } from "../../../infrastructure/quantity.js";
 
 const inventoryLive = Layer.effect(InventoriesRepository, makeInventoryRepository);
+
+/**
+ * Manual adjustments may only ever touch the foreign pool.
+ *
+ * Domestic stock is what the shop smelted itself — `smelting` creates it, `convert_out` consumes
+ * it, and nothing else may write to it, or the pool stops meaning what it says. The gain and loss
+ * forms used to offer the choice for 99.9%, so a stock count could silently drain gold the
+ * business never smelted.
+ */
+const assertNotProtectedOrigin = (origin: 'domestic' | 'foreign') =>
+    origin === 'domestic'
+        ? Effect.fail(new ProtectedOriginError({ origin }))
+        : Effect.void;
 
 // --- Public usecases (HTTP) ---
 
@@ -42,6 +55,7 @@ export const getInventoryVolume = () =>
 export const stockGain = (req: StockGainReq, auditedBy: string) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
+        yield* assertNotProtectedOrigin(req.origin);
         const adjustmentId = randomUUID();
         const brandId = req.brandId ?? 'NA';
         const transactionDate = req.transactionDate ?? todayBusinessDate();
@@ -49,52 +63,54 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
         // operator enters price per gold baht (บาททอง); total cost is derived from the resolved GB weight
         const totalCost = req.pricePerGb * weightGb;
 
-        yield* repo.createStockGainAdjustment({
-            id: adjustmentId,
-            purityId: req.purityId,
-            brandId: req.brandId ?? null,
-            origin: req.origin,
-            productTypeId: req.productTypeId,
-            weightGb,
-            weightGm,
-            conversionFactor,
-            pricePerGb: req.pricePerGb,
-            totalCost,
-            referenceType: req.referenceType,
-            notes: req.notes ?? null,
-            transactionDate,
-            auditedBy,
-            // the insert instant, always the server's own clock — never the picked date
-            auditedAt: new Date(),
-        });
-
-        yield* repo.upsertBalance({
-            purityId: req.purityId,
-            brandId,
-            origin: req.origin,
-            productTypeId: req.productTypeId,
-            totalWeightGb: weightGb,
-            totalWeightGm: weightGm,
-            totalCost,
-        });
-
-        yield* repo.createMovement({
-            id: randomUUID(),
-            purityId: req.purityId,
-            brandId,
-            origin: req.origin,
-            productTypeId: req.productTypeId,
-            referenceType: req.referenceType,
-            referenceId: adjustmentId,
-            weightGbDelta: weightGb,
-            weightGmDelta: weightGm,
-            costDelta: totalCost,
-            notes: req.notes ?? null,
-            // the ledger carries the same business day as the adjustment, so the movement report
-            // shows it under the day it happened rather than the day it was typed
-            movementDate: transactionDate,
-            movedAt: new Date(),
-            movedBy: auditedBy,
+        // record, balance and ledger entry are three descriptions of one event, so they are
+        // applied as one transaction — see `applyStockGain` in the repository
+        yield* repo.applyStockGain({
+            adjustment: {
+                id: adjustmentId,
+                purityId: req.purityId,
+                brandId: req.brandId ?? null,
+                origin: req.origin,
+                productTypeId: req.productTypeId,
+                weightGb,
+                weightGm,
+                conversionFactor,
+                pricePerGb: req.pricePerGb,
+                totalCost,
+                referenceType: req.referenceType,
+                notes: req.notes ?? null,
+                transactionDate,
+                auditedBy,
+                // the insert instant, always the server's own clock — never the picked date
+                auditedAt: new Date(),
+            },
+            balance: {
+                purityId: req.purityId,
+                brandId,
+                origin: req.origin,
+                productTypeId: req.productTypeId,
+                totalWeightGb: weightGb,
+                totalWeightGm: weightGm,
+                totalCost,
+            },
+            movement: {
+                id: randomUUID(),
+                purityId: req.purityId,
+                brandId,
+                origin: req.origin,
+                productTypeId: req.productTypeId,
+                referenceType: req.referenceType,
+                referenceId: adjustmentId,
+                weightGbDelta: weightGb,
+                weightGmDelta: weightGm,
+                costDelta: totalCost,
+                notes: req.notes ?? null,
+                // the ledger carries the same business day as the adjustment, so the movement
+                // report shows it under the day it happened rather than the day it was typed
+                movementDate: transactionDate,
+                movedAt: new Date(),
+                movedBy: auditedBy,
+            },
         });
 
         return { id: adjustmentId };
@@ -108,48 +124,48 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
 export const stockLoss = (req: StockLossReq, auditedBy: string) =>
     Effect.gen(function* () {
         const repo = yield* InventoriesRepository;
+        yield* assertNotProtectedOrigin(req.origin);
         const adjustmentId = randomUUID();
         const brandId = req.brandId ?? 'NA';
         const transactionDate = req.transactionDate ?? todayBusinessDate();
         const { weightGb, weightGm } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
-        // decrement first so an insufficient-stock failure leaves no adjustment record;
-        // cost removed is derived from the pool's live WAC inside the locked transaction
-        const costDelta = yield* repo.decrementBalance(
-            { purityId: req.purityId, brandId, origin: req.origin, productTypeId: req.productTypeId },
-            weightGb, weightGm,
-        );
-
-        yield* repo.createStockLossAdjustment({
-            id: adjustmentId,
-            purityId: req.purityId,
-            brandId: req.brandId ?? null,
-            origin: req.origin,
-            productTypeId: req.productTypeId,
+        // The decrement runs first inside the transaction, so an insufficient-stock failure
+        // aborts before any record is written. The cost removed comes from the pool's live WAC
+        // under the lock, and is what the ledger entry carries.
+        yield* repo.applyStockLoss({
+            key: { purityId: req.purityId, brandId, origin: req.origin, productTypeId: req.productTypeId },
             weightGb,
             weightGm,
-            referenceType: req.referenceType,
-            notes: req.notes ?? null,
-            transactionDate,
-            auditedBy,
-            auditedAt: new Date(),
-        });
-
-        yield* repo.createMovement({
-            id: randomUUID(),
-            purityId: req.purityId,
-            brandId,
-            origin: req.origin,
-            productTypeId: req.productTypeId,
-            referenceType: req.referenceType,
-            referenceId: adjustmentId,
-            weightGbDelta: -weightGb,
-            weightGmDelta: -weightGm,
-            costDelta: -costDelta,
-            notes: req.notes ?? null,
-            movementDate: transactionDate,
-            movedAt: new Date(),
-            movedBy: auditedBy,
+            adjustment: {
+                id: adjustmentId,
+                purityId: req.purityId,
+                brandId: req.brandId ?? null,
+                origin: req.origin,
+                productTypeId: req.productTypeId,
+                weightGb,
+                weightGm,
+                referenceType: req.referenceType,
+                notes: req.notes ?? null,
+                transactionDate,
+                auditedBy,
+                auditedAt: new Date(),
+            },
+            movement: {
+                id: randomUUID(),
+                purityId: req.purityId,
+                brandId,
+                origin: req.origin,
+                productTypeId: req.productTypeId,
+                referenceType: req.referenceType,
+                referenceId: adjustmentId,
+                weightGbDelta: -weightGb,
+                weightGmDelta: -weightGm,
+                notes: req.notes ?? null,
+                movementDate: transactionDate,
+                movedAt: new Date(),
+                movedBy: auditedBy,
+            },
         });
 
         return { id: adjustmentId };
@@ -174,76 +190,48 @@ export const productSwitch = (req: ProductSwitchReq, switchedBy: string) =>
         const movementDate = todayBusinessDate();
         const { weightGb, weightGm } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
-        // decrement the source pool at its live WAC (returns the cost removed); the reclassification
-        // conserves cost value, so the destination pool is credited with the same amount
-        const fromCostDelta = yield* repo.decrementBalance(
-            { purityId: req.purityId, brandId: req.fromBrandId, origin, productTypeId: req.productTypeId },
-            weightGb, weightGm,
-        );
-        const toCostDelta = fromCostDelta;
-
-        // increment the destination pool
-        yield* repo.upsertBalance({
+        const movedAt = new Date();
+        // A shared movement shape — the two legs differ only in brand, sign, and the cost the
+        // locked decrement decides. `referenceId` is filled in by the repository once the
+        // adjustment row exists, since the pair is keyed to it.
+        const leg = (brandId: string, sign: 1 | -1) => ({
+            id: randomUUID(),
             purityId: req.purityId,
-            brandId: req.toBrandId,
+            brandId,
             origin,
             productTypeId: req.productTypeId,
-            totalWeightGb: weightGb,
-            totalWeightGm: weightGm,
-            totalCost: toCostDelta,
+            referenceType: 'PRODUCT_SWITCH',
+            referenceId: '',
+            weightGbDelta: sign * weightGb,
+            weightGmDelta: sign * weightGm,
+            notes: req.notes ?? null,
+            movementDate,
+            movedAt,
+            movedBy: switchedBy,
         });
 
-        const adjustment = yield* repo.createProductSwitchAdjustment({
-            purityId: req.purityId,
-            productTypeId: req.productTypeId,
-            fromBrandId: req.fromBrandId,
-            toBrandId: req.toBrandId,
+        // Source down, destination up, adjustment record and both ledger legs in one transaction.
+        // The switch conserves value: what the source pool gives up at its live WAC is exactly
+        // what the destination is credited with, so the repository derives both from one figure.
+        return yield* repo.applyProductSwitch({
+            from: { purityId: req.purityId, brandId: req.fromBrandId, origin, productTypeId: req.productTypeId },
+            to: { purityId: req.purityId, brandId: req.toBrandId, origin, productTypeId: req.productTypeId },
             weightGb,
             weightGm,
-            fromCostDelta,
-            toCostDelta,
-            notes: req.notes ?? null,
-            switchedBy,
-            switchedAt: new Date(),
+            adjustment: {
+                purityId: req.purityId,
+                productTypeId: req.productTypeId,
+                fromBrandId: req.fromBrandId,
+                toBrandId: req.toBrandId,
+                weightGb,
+                weightGm,
+                notes: req.notes ?? null,
+                switchedBy,
+                switchedAt: movedAt,
+            },
+            fromMovement: leg(req.fromBrandId, -1),
+            toMovement: leg(req.toBrandId, 1),
         });
-
-        const adjustmentId = adjustment.id;
-
-        yield* repo.createMovement({
-            id: randomUUID(),
-            purityId: req.purityId,
-            brandId: req.fromBrandId,
-            origin,
-            productTypeId: req.productTypeId,
-            referenceType: 'PRODUCT_SWITCH',
-            referenceId: adjustmentId,
-            weightGbDelta: -weightGb,
-            weightGmDelta: -weightGm,
-            costDelta: -fromCostDelta,
-            notes: req.notes ?? null,
-            movementDate,
-            movedAt: new Date(),
-            movedBy: switchedBy,
-        });
-
-        yield* repo.createMovement({
-            id: randomUUID(),
-            purityId: req.purityId,
-            brandId: req.toBrandId,
-            origin,
-            productTypeId: req.productTypeId,
-            referenceType: 'PRODUCT_SWITCH',
-            referenceId: adjustmentId,
-            weightGbDelta: weightGb,
-            weightGmDelta: weightGm,
-            costDelta: toCostDelta,
-            notes: req.notes ?? null,
-            movementDate,
-            movedAt: new Date(),
-            movedBy: switchedBy,
-        });
-
-        return adjustment;
     }).pipe(Effect.provide(inventoryLive))
 
 // --- Internal cross-domain commands ---
@@ -337,8 +325,16 @@ export const reverseDecrement = (req: ReverseDecrementReq) =>
         const repo = yield* InventoriesRepository;
         const movements = yield* repo.findMovementsByReference(req.originalReferenceType, req.originalReferenceId);
 
-        for (const movement of movements) {
-            yield* repo.upsertBalance({
+        // the reversal happens today; it does not inherit the original's day, because the gold
+        // coming back is its own event on its own date
+        const movementDate = todayBusinessDate();
+        const movedAt = new Date();
+
+        // Every pool the original drew from is restored in one transaction, for the same reason
+        // the outbound move was one: a mixed shipment coming home half-restored leaves the
+        // balances claiming gold that is physically back on the shelf is not.
+        yield* repo.applyReversal({
+            restore: movements.map((movement) => ({
                 purityId: movement.purityId,
                 brandId: movement.brandId,
                 origin: movement.origin,
@@ -346,9 +342,8 @@ export const reverseDecrement = (req: ReverseDecrementReq) =>
                 totalWeightGb: Math.abs(movement.weightGbDelta),
                 totalWeightGm: Math.abs(movement.weightGmDelta),
                 totalCost: Math.abs(movement.costDelta),
-            });
-
-            yield* repo.createMovement({
+            })),
+            movements: movements.map((movement) => ({
                 id: randomUUID(),
                 purityId: movement.purityId,
                 brandId: movement.brandId,
@@ -360,11 +355,9 @@ export const reverseDecrement = (req: ReverseDecrementReq) =>
                 weightGmDelta: Math.abs(movement.weightGmDelta),
                 costDelta: Math.abs(movement.costDelta),
                 notes: null,
-                // the reversal happens today; it does not inherit the original's day, because
-                // the gold coming back is its own event on its own date
-                movementDate: todayBusinessDate(),
-                movedAt: new Date(),
+                movementDate,
+                movedAt,
                 movedBy: req.movedBy,
-            });
-        }
+            })),
+        });
     }).pipe(Effect.provide(inventoryLive))

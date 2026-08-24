@@ -11,6 +11,8 @@ export interface ProductTypePurityRow {
     inputUnit: "kg" | "gb"
     minQuantity: number
     allowedValues: number[] | null
+    // the increment valid weights land on; null means any whole number at or above minQuantity
+    stepQuantity: number | null
 }
 
 export interface ForViewProductType {

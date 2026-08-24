@@ -1,0 +1,1 @@
+ALTER TABLE "product_type_purities" ADD COLUMN "step_quantity" integer;

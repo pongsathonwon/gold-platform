@@ -13,8 +13,57 @@ export class InvalidQuantityError extends Data.TaggedError("InvalidQuantityError
     weight: number
     minQuantity: number
     allowedValues: number[] | null
+    // the increment the weight had to land on, when the pairing defines one
+    stepQuantity: number | null
     inputUnit: "kg" | "gb"
 }> {}
+
+/** The orderable-quantity rule for a pairing — the part of the row that decides validity. */
+export interface QuantityRule {
+    minQuantity: number
+    allowedValues: number[] | null
+    stepQuantity: number | null
+}
+
+/**
+ * Whether a weight satisfies a pairing's quantity rule — the whole rule as a pure function.
+ *
+ * Lifted out of `resolveQuantity` for the same reason `divideWeight` is lifted out of
+ * `resolveBrandSplit`: the rule is the part worth testing, and it should not need a database to
+ * assert. `resolveQuantity` keeps the lookup and the failure construction.
+ *
+ * Three rules, in the order they narrow:
+ *  - `allowedValues`, when set, is the whole answer — a closed list of the only weights accepted.
+ *  - otherwise the weight must reach `minQuantity`,
+ *  - and land on `stepQuantity` if the pairing defines one. 96.5% gold bar steps by 5 because
+ *    bars come in 5/10/20/50 GB, so 7 GB is a quantity no combination of stock could satisfy.
+ *
+ * Fractions are never valid: every unit here is counted, not measured.
+ */
+export function isValidQuantity(rule: QuantityRule, weight: number): boolean {
+    if (!Number.isInteger(weight)) return false
+    if (rule.allowedValues) return rule.allowedValues.includes(weight)
+    if (weight < rule.minQuantity) return false
+    return !rule.stepQuantity || weight % rule.stepQuantity === 0
+}
+
+/**
+ * One wording for the quantity rules, shared by every router that resolves a weight.
+ *
+ * It was duplicated in three `toHttpError` functions, none of which mentioned the step — so a
+ * rejected 7 GB order would have been explained as "at least 5 GB", which it already was.
+ */
+export function quantityErrorMessage(error: InvalidQuantityError): string {
+    const unit = error.inputUnit === "kg" ? "กก." : "บาททอง"
+
+    if (error.allowedValues) {
+        return `น้ำหนักต้องเป็น ${error.allowedValues.join(", ")} ${unit} เท่านั้น`
+    }
+    if (error.stepQuantity) {
+        return `น้ำหนักต้องเป็นจำนวนเท่าของ ${error.stepQuantity} ${unit} และไม่น้อยกว่า ${error.minQuantity} ${unit}`
+    }
+    return `น้ำหนักต้องเป็นจำนวนเต็ม และไม่น้อยกว่า ${error.minQuantity} ${unit}`
+}
 
 // the active product_type_purities row for a pairing — carries the weight input unit (kg or gb)
 // and the orderable-quantity rule for it
@@ -47,12 +96,13 @@ export const resolveQuantity = (productTypeId: string, purityId: string, weight:
     Effect.gen(function* () {
         const rule = yield* findQuantityRule(productTypeId, purityId)
 
-        const withinAllowedValues = rule.allowedValues
-            ? rule.allowedValues.includes(weight)
-            : weight >= rule.minQuantity
-        if (!Number.isInteger(weight) || !withinAllowedValues) {
+        if (!isValidQuantity(rule, weight)) {
             return yield* Effect.fail(new InvalidQuantityError({
-                weight, minQuantity: rule.minQuantity, allowedValues: rule.allowedValues, inputUnit: rule.inputUnit,
+                weight,
+                minQuantity: rule.minQuantity,
+                allowedValues: rule.allowedValues,
+                stepQuantity: rule.stepQuantity,
+                inputUnit: rule.inputUnit,
             }))
         }
 

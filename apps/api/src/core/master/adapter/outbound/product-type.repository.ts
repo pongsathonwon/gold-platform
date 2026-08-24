@@ -37,6 +37,7 @@ class ProductTypeRepository implements ForViewProductType {
                         inputUnit: productTypePurities.inputUnit,
                         minQuantity: productTypePurities.minQuantity,
                         allowedValues: productTypePurities.allowedValues,
+                        stepQuantity: productTypePurities.stepQuantity,
                     })
                     .from(productTypePurities)
                     .innerJoin(purities, eq(productTypePurities.purityId, purities.id))
