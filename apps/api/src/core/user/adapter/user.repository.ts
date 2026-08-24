@@ -3,7 +3,7 @@ import { UserNotFoundError } from "../domain/user.error.js";
 import { Context, Effect, Option } from "effect";
 import { DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
 import { users } from "../../../infrastructure/db/schema/user.schema.js";
-import { ForUserRepository } from "../port/user.port.js";
+import { CreateUserReq, ForUserRepository } from "../port/user.port.js";
 
 
 const mapRepositoryError = (error: unknown): RepositoryError => {
@@ -48,7 +48,7 @@ export const makeUserRepository = Effect.gen(function* () {
       catch: mapRepositoryError,
     });
 
-  const createUser = (data: { name: string; username: string; passwordHash: string }) =>
+  const createUser = (data: CreateUserReq) =>
     Effect.tryPromise({
       try: async () => {
         const result = await db.insert(users).values(data).returning();
