@@ -13,12 +13,18 @@ import {
   Box,
   CircularProgress,
   Alert,
+  Button,
   Chip,
   TextField,
 } from "@mui/material";
 import { useInventoryMovements } from "../hooks/useInventory";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 import { withCumulative, type WithCumulative } from "../utils/inventoryVolume";
+import {
+  buildMovementWorkbook, downloadWorkbook, movementFileName, sectionOpening,
+} from "../utils/inventoryExport";
+import { useAuth } from "../auth/AuthContext";
+import { useToast } from "../components/ToastContext";
 import { formatBusinessDate, formatNumber, formatWeight } from "../utils/format";
 import { originLabel, shiftBusinessDate, todayBusinessDate, TRANSACTION_TYPES } from "@gold-platform/types";
 
@@ -74,9 +80,21 @@ export function InventoryMovementPage() {
   const { data: brandsRes } = useBrands();
   const { data: productTypesRes } = useProductTypes();
 
-  const purityById = new Map((puritiesRes?.data ?? []).map((p) => [p.id, p]));
-  const brandById = new Map((brandsRes?.data ?? []).map((b) => [b.id, b]));
-  const productTypeById = new Map((productTypesRes?.data ?? []).map((pt) => [pt.id, pt]));
+  const { user } = useAuth();
+  const { showToast } = useToast();
+  const [isExporting, setIsExporting] = useState(false);
+
+  // Memoised because the purity map is read once per row by the section split below, and all
+  // three were being rebuilt from scratch on every render.
+  const purityById = useMemo(
+    () => new Map((puritiesRes?.data ?? []).map((p) => [p.id, p])),
+    [puritiesRes],
+  );
+  const brandById = useMemo(() => new Map((brandsRes?.data ?? []).map((b) => [b.id, b])), [brandsRes]);
+  const productTypeById = useMemo(
+    () => new Map((productTypesRes?.data ?? []).map((pt) => [pt.id, pt])),
+    [productTypesRes],
+  );
 
   // Movements arrive ascending by (movementDate, movedAt, id). The running balance is seeded from
   // the opening — the deltas before `from` — and the rows stay in that ascending order, so each
@@ -87,9 +105,47 @@ export function InventoryMovementPage() {
     return withCumulative(movements, opening);
   }, [movementsRes]);
 
-  const isNineNineNine = (row: MovementRow) => purityById.get(row.purityId)?.percent === 99.9;
+  const isNineNineNinePurity = (purityId: string) => purityById.get(purityId)?.percent === 99.9;
+  const isNineNineNine = (row: MovementRow) => isNineNineNinePurity(row.purityId);
   const nineSixFive = rows.filter((r) => !isNineNineNine(r));
   const nineNineNine = rows.filter(isNineNineNine);
+
+  // The same lookups the table performs, so the file and the screen name a pool identically.
+  const exportLabels = {
+    pool: (row: { brandId: string; origin: string }, unit: "gb" | "kg") =>
+      unit === "kg" ? originLabel(row.origin) : brandById.get(row.brandId)?.brand ?? row.brandId,
+    productType: (id: string) => {
+      const productType = productTypeById.get(id)?.productType;
+      return PRODUCT_TYPE_LABEL[productType ?? ""] ?? productType ?? id;
+    },
+    referenceType: (type: string) => REFERENCE_TYPE_LABEL[type] ?? type,
+  };
+
+  async function handleExport() {
+    setIsExporting(true);
+    try {
+      const opening = movementsRes?.opening ?? [];
+      await downloadWorkbook(
+        buildMovementWorkbook({
+          nineSixFive,
+          nineNineNine,
+          // each section's carried-in balance, in that section's own unit
+          openingGb: sectionOpening(opening, (id) => !isNineNineNinePurity(id), "gb"),
+          openingKg: sectionOpening(opening, isNineNineNinePurity, "kg"),
+          labels: exportLabels,
+          from: fromDate,
+          to: toDate,
+          generatedAt: new Date(),
+          generatedBy: user?.name ?? user?.username ?? "",
+        }),
+        movementFileName(fromDate, toDate),
+      );
+    } catch {
+      showToast("ส่งออกไฟล์ไม่สำเร็จ", "error");
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
   // 96.5% deltas are in gold baht (บาท); 99.9% in kilograms (กก. = grams / 1000)
   function renderSection(title: string, sectionRows: CumulativeRow[], unit: "gb" | "kg") {
@@ -222,6 +278,16 @@ export function InventoryMovementPage() {
             onChange={(e) => setToDate(e.target.value)}
             slotProps={{inputLabel: {shrink: true}}}
           />
+          {/* Waits for the window's data — a file written from a half-loaded ledger would carry a
+              cumulative column that does not add up. */}
+          <Button
+            variant="outlined"
+            onClick={handleExport}
+            disabled={isPending || isError || isExporting}
+            startIcon={isExporting ? <CircularProgress size={16} /> : undefined}
+          >
+            ส่งออก Excel
+          </Button>
         </Box>
       </Box>
 

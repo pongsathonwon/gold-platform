@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import {
   Container,
   Typography,
@@ -10,13 +11,17 @@ import {
   TableContainer,
   Paper,
   Box,
+  Button,
   CircularProgress,
   Alert,
 } from "@mui/material";
-import { originLabel } from "@gold-platform/types";
+import { originLabel, todayBusinessDate } from "@gold-platform/types";
 import { useInventoryVolume } from "../hooks/useInventory";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 import { type VolumeRow, poolKey, weightOf, splitByPurity, wacRate } from "../utils/inventoryVolume";
+import { balanceFileName, buildBalanceWorkbook, downloadWorkbook } from "../utils/inventoryExport";
+import { useAuth } from "../auth/AuthContext";
+import { useToast } from "../components/ToastContext";
 import { formatNumber, formatWeight } from "../utils/format";
 
 export function InventoryPage() {
@@ -24,16 +29,58 @@ export function InventoryPage() {
   const { data: puritiesRes } = usePurities();
   const { data: brandsRes } = useBrands();
   const { data: productTypesRes } = useProductTypes();
+  const { user } = useAuth();
+  const { showToast } = useToast();
+  const [isExporting, setIsExporting] = useState(false);
 
-  const purityById = new Map((puritiesRes?.data ?? []).map((p) => [p.id, p]));
-  const brandById = new Map((brandsRes?.data ?? []).map((b) => [b.id, b]));
-  const productTypeById = new Map((productTypesRes?.data ?? []).map((pt) => [pt.id, pt]));
+  // Rebuilt on every render before this was memoised — three Maps over the whole master data set,
+  // for lookups the table performs once per row.
+  const purityById = useMemo(
+    () => new Map((puritiesRes?.data ?? []).map((p) => [p.id, p])),
+    [puritiesRes],
+  );
+  const brandById = useMemo(() => new Map((brandsRes?.data ?? []).map((b) => [b.id, b])), [brandsRes]);
+  const productTypeById = useMemo(
+    () => new Map((productTypesRes?.data ?? []).map((pt) => [pt.id, pt])),
+    [productTypesRes],
+  );
 
   const rows: VolumeRow[] = volumeRes?.data ?? [];
   const { nineSixFive, nineNineNine } = splitByPurity(
     rows,
     (row) => purityById.get(row.purityId)?.percent === 99.9,
   );
+
+  // The same resolution the table below does, handed to the workbook builder so the file and the
+  // screen cannot disagree about what a pool is called.
+  const exportLabels = {
+    pool: (row: { brandId: string; origin: string }, unit: "gb" | "kg") =>
+      unit === "kg" ? originLabel(row.origin) : brandById.get(row.brandId)?.brand ?? row.brandId,
+    productType: (id: string) => productTypeById.get(id)?.productType ?? id,
+    referenceType: (type: string) => type,
+  };
+
+  async function handleExport() {
+    setIsExporting(true);
+    try {
+      const asOf = todayBusinessDate();
+      await downloadWorkbook(
+        buildBalanceWorkbook({
+          nineSixFive,
+          nineNineNine,
+          labels: exportLabels,
+          asOf,
+          generatedAt: new Date(),
+          generatedBy: user?.name ?? user?.username ?? "",
+        }),
+        balanceFileName(asOf),
+      );
+    } catch {
+      showToast("ส่งออกไฟล์ไม่สำเร็จ", "error");
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
   function renderSection(title: string, sectionRows: VolumeRow[], unit: "gb" | "kg") {
     const weightHeader = unit === "gb" ? "น้ำหนัก (บาท)" : "น้ำหนัก (กก.)";
@@ -111,8 +158,20 @@ export function InventoryPage() {
 
   return (
     <Container sx={{ py: 4 }}>
-      <Box sx={{ mb: 3 }}>
+      <Box
+        sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 3, gap: 2, flexWrap: "wrap" }}
+      >
         <Typography variant="h2">คลังทองคำแท่ง</Typography>
+        {/* Exporting a half-loaded table is worse than offering no button, so the control waits
+            for the data it is going to write. */}
+        <Button
+          variant="outlined"
+          onClick={handleExport}
+          disabled={isPending || isError || isExporting}
+          startIcon={isExporting ? <CircularProgress size={16} /> : undefined}
+        >
+          ส่งออก Excel
+        </Button>
       </Box>
 
       {isPending && (

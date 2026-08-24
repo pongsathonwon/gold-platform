@@ -313,6 +313,46 @@ which the API derives from the inventory movements booked under the transaction 
 any column. Before the stock-moving transition it reads `— (บันทึกเมื่อเข้าสต๊อก)`, because there
 genuinely is no answer yet. Neither list page shows brand, so neither needed changing.
 
+## 9e. Excel export — `utils/inventoryExport.ts`
+
+Both inventory pages export to `.xlsx`. **One workbook per page, two sheets per workbook** —
+`ทอง 96.5%` and `ทอง 99.9%`, the same split the pages render. The balance file is `คลังทองคำแท่ง_<วันที่>.xlsx`;
+the movement file carries its window, `ความเคลื่อนไหวทองแท่ง_<from>_ถึง_<to>.xlsx`.
+
+**Generated in the browser from the data already loaded.** No export endpoint, no second request:
+the builders take the rows the table is rendering, so the file cannot disagree with the screen, and
+`splitByPurity()` / `withCumulative()` stay the single implementation of the purity split and the
+running balance. `write-excel-file` is pulled in with a dynamic `import()` inside the click handler,
+so its ~50 KB lands in its own chunk and only someone who exports pays for it.
+
+- **A figure goes into a cell as a number, never as a formatted string.** `formatNumber()` and
+  `formatWeight()` are for the screen; their output is text to Excel and a column of it cannot be
+  summed, which is the first thing anyone does with an exported ledger. Presentation is a cell
+  *format* — `#,##0.00` for money, `#,##0.####` for weight, and `+#,##0.00;-#,##0.00` for deltas,
+  which is how the ledger keeps the explicit sign the screen shows.
+- **Dates are Thai พ.ศ. text**, exactly as `formatBusinessDate()` renders them. Excel cannot put a
+  Buddhist-era year on a real date value, so this is the deliberate trade: text that reads right
+  and does not sort. Rows therefore stay in the API's ascending `(movementDate, movedAt, id)`
+  order — chronology comes from the row order, and sorting that column would order it lexically.
+- **Every sheet opens with a title block** (rows 1–3: report, window, generated-at + by) and freezes
+  through the header. A file outlives the screen it came from and the date range is not recoverable
+  from the rows. Nothing is merged — merged cells break sorting and filtering below them.
+- **The movement sheets carry a `ยอดยกมา` row** holding `sectionOpening()` — the window's carried-in
+  balance, per section, in that section's unit. Without it the `คงเหลือสะสม` column starts at a
+  number the reader cannot derive from anything else in the file. It is emitted even when the
+  window is empty: "nothing moved, and here is what you were holding" is a complete answer.
+- **Both sheets are always written, empty or not.** A workbook missing `ทอง 99.9%` reads as a broken
+  export rather than as a purity nobody holds today.
+- The builders are pure — rows in, cell arrays out — and tested in `inventoryExport.test.ts` with no
+  master data and no library. `downloadWorkbook()` is the only part that touches `write-excel-file`.
+- Export is offered to any authenticated operator, matching `GET /inventory/volume|movements`. Cost
+  and WAC are already on screen, so the file exposes nothing the page does not.
+
+**No range cap.** The window operators actually use is a week to a month, rarely three, which is a
+few thousand rows — well inside what the browser serializes in under a second, and the unvirtualized
+`TableRow` rendering is the real ceiling long before the export is. Serialization is synchronous,
+so the button disables itself and shows a spinner while it runs.
+
 ## 10. Current State
 
 The web app is a **scaffold**. Only one component exists (`UserList.tsx` — a user CRUD demo).
