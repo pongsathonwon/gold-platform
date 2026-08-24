@@ -18,6 +18,48 @@ const { brands, purities, productTypes, unitConversions, productTypePurities, su
 );
 const { users } = await import("../infrastructure/db/schema/user.schema.js");
 
+const MIN_SEED_PASSWORD_LENGTH = 12;
+
+interface SeedUserReq {
+    role: "ADMIN" | "OPERATOR";
+    name: string;
+    username: string;
+    password: string | undefined;
+    /** the environment variable the password came from, so a refusal names what to set */
+    passwordVar: string;
+    /** when false the account is skipped if no password was supplied, rather than failing */
+    required: boolean;
+}
+
+/**
+ * Creates one seeded login, or explains why it did not.
+ *
+ * `onConflictDoNothing` means re-running the seed never changes an existing account — in
+ * particular it will not reset a password that has since been changed.
+ */
+async function seedUser(req: SeedUserReq) {
+    if (!req.password) {
+        if (req.required) {
+            throw new Error(
+                `${req.passwordVar} is not set. Set it to a generated value before seeding — ` +
+                `this account can adjust inventory and create users.`,
+            );
+        }
+        console.log(`  – ${req.role.toLowerCase()} user skipped (${req.passwordVar} not set)`);
+        return;
+    }
+    if (req.password.length < MIN_SEED_PASSWORD_LENGTH) {
+        throw new Error(`${req.passwordVar} must be at least ${MIN_SEED_PASSWORD_LENGTH} characters.`);
+    }
+
+    const passwordHash = await bcrypt.hash(req.password, 10);
+    await db
+        .insert(users)
+        .values({ name: req.name, username: req.username, passwordHash, role: req.role })
+        .onConflictDoNothing();
+    console.log(`  ✓ ${req.role.toLowerCase()} user (username: ${req.username}, role: ${req.role})`);
+}
+
 async function seed() {
     console.log("Seeding Sprint 1 data...");
 
@@ -64,9 +106,13 @@ async function seed() {
     await db
         .insert(productTypePurities)
         .values([
-            { productTypeId: "BAR", purityId: "999", inputUnit: "kg", minQuantity: 1, allowedValues: [1, 2, 3, 4, 5], active: true },
-            { productTypeId: "BAR", purityId: "965", inputUnit: "gb", minQuantity: 10, allowedValues: null, active: true },
-            { productTypeId: "PLATE", purityId: "965", inputUnit: "gb", minQuantity: 1, allowedValues: null, active: true },
+            { productTypeId: "BAR", purityId: "999", inputUnit: "kg", minQuantity: 1, allowedValues: [1, 2, 3, 4, 5], stepQuantity: null, active: true },
+            // 96.5% gold bar steps by 5: bars are 5/10/20/50 GB, so every real quantity is a sum
+            // of those. Valid weights are 5, 10, 15, 20, …
+            { productTypeId: "BAR", purityId: "965", inputUnit: "gb", minQuantity: 5, allowedValues: null, stepQuantity: 5, active: true },
+            // ทองแผ่น is a sub-5-GB product by definition, so it takes no step — a step of 5 would
+            // leave it with no enterable weight below its own maximum
+            { productTypeId: "PLATE", purityId: "965", inputUnit: "gb", minQuantity: 1, allowedValues: null, stepQuantity: null, active: true },
         ])
         .onConflictDoNothing();
     console.log("  ✓ product type × purity rules");
@@ -99,18 +145,40 @@ async function seed() {
         .onConflictDoNothing();
     console.log("  ✓ supplier brands");
 
-    // --- Admin user ---
-    const username = process.env.SEED_USERNAME ?? "admin";
-    const password = process.env.SEED_PASSWORD ?? "admin";
-    const passwordHash = await bcrypt.hash(password, 10);
+    // --- Users ---
+    //
+    // Neither password has a default. `SEED_PASSWORD` used to fall back to "admin", which meant an
+    // unset environment variable produced a production administrator with a five-character
+    // password — on a system where that account can write off stock and issue further logins.
+    // Someone who has to supply a password cannot forget to.
+    await seedUser({
+        role: "ADMIN",
+        name: "Admin",
+        username: process.env.SEED_USERNAME ?? "admin",
+        password: process.env.SEED_PASSWORD,
+        passwordVar: "SEED_PASSWORD",
+        required: true,
+    });
 
-    await db
-        .insert(users)
-        .values({ name: "Admin", username, passwordHash })
-        .onConflictDoNothing();
-    console.log(`  ✓ admin user (username: ${username})`);
+    /**
+     * A second login for trying the app as an ordinary operator — the role that runs the trading
+     * day but cannot adjust stock or confirm the book.
+     *
+     * Optional on purpose. It is created only when `SEED_OPERATOR_PASSWORD` is set, so a local or
+     * demo environment gets both roles from one command while a production seed does not quietly
+     * gain a shared operator account nobody is named on. Real staff logins are issued individually
+     * through `POST /auth/users`.
+     */
+    await seedUser({
+        role: "OPERATOR",
+        name: "Operator",
+        username: process.env.SEED_OPERATOR_USERNAME ?? "operator",
+        password: process.env.SEED_OPERATOR_PASSWORD,
+        passwordVar: "SEED_OPERATOR_PASSWORD",
+        required: false,
+    });
 
-    console.log("\nDone. You can now run POST /auth/login with the admin credentials.");
+    console.log("\nDone. You can now run POST /auth/login with the seeded credentials.");
 }
 
 await seed().finally(() => client.end());

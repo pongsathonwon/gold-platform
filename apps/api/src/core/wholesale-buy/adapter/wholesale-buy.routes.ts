@@ -1,4 +1,4 @@
-import { Hono, type Context } from "hono";
+import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import {
@@ -6,7 +6,9 @@ import {
     receiveStockWholeBuySchema, updateWholeBuySchema, wholeBuyStatusSchema,
 } from "@gold-platform/types";
 import { runEffect } from "../../../infrastructure/runtime.js";
-import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
+import {
+    authMiddleware, currentUsername, requireRole,
+} from "../../../infrastructure/http/middleware/auth.middleware.js";
 import {
     advanceStatus, confirmAllCreated, createTransaction, getTransaction,
     listTransactions, receiveAndStock, updateTransaction,
@@ -15,7 +17,7 @@ import {
     InvalidTransitionError, NotEditableError, NoteRequiredError,
     ReturnReasonRequiredError, type ReturnReason, TransactionNotFoundError,
 } from "../port/wholesale-buy.port.js";
-import { InvalidQuantityError, ProductTypePurityNotFoundError } from "../../../infrastructure/quantity.js";
+import { InvalidQuantityError, ProductTypePurityNotFoundError, quantityErrorMessage } from "../../../infrastructure/quantity.js";
 import { brandSplitHttpError } from "../../../infrastructure/brand-split.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
 import { InsufficientStockError } from "../../inventory/port/inventories.port.js";
@@ -36,11 +38,7 @@ function toHttpError(error: unknown): [string, number] {
         return [`purity ${error.purityId} is not valid for product type ${error.productTypeId}`, 422]
     }
     if (error instanceof InvalidQuantityError) {
-        const unit = error.inputUnit === "kg" ? "kg" : "GB"
-        const msg = error.allowedValues
-            ? `weight must be one of ${error.allowedValues.join(", ")} ${unit}`
-            : `weight must be a whole number of at least ${error.minQuantity} ${unit}`
-        return [msg, 422]
+        return [quantityErrorMessage(error), 422]
     }
     if (error instanceof InsufficientStockError) {
         return [`insufficient stock — requested ${error.requested} GB, available ${error.available} GB`, 422]
@@ -48,11 +46,6 @@ function toHttpError(error: unknown): [string, number] {
     if (error instanceof PurityNotFoundError) return [`purity ${error.purityId} not found`, 422]
     if (error instanceof NoConversionRateError) return [`no conversion rate available`, 503]
     return [JSON.stringify(error), 500]
-}
-
-function currentUsername(c: Context): string {
-    const payload = c.get("jwtPayload") as { username: string }
-    return payload.username
 }
 
 const listQuerySchema = z.object({
@@ -84,7 +77,11 @@ export const wholesaleBuyRoutes = new Hono()
     // a transaction id.
     //   ?manual=true  operator-triggered mid-day run, logged under their username
     //   (default)     the nightly scheduled run, logged as BOT-CONFIRM
-    .post("/confirm-all", zValidator("query", z.object({ manual: z.enum(["true", "false"]).optional() })), async (c) => {
+    //
+    // Admin-only: this is the sweep that ends the edit window for *every* open order at once, not
+    // just the ones the caller can see. Confirmation is the lock on the whole day's book, so it
+    // belongs with the role accountable for the book rather than with anyone holding a session.
+    .post("/confirm-all", requireRole("ADMIN"), zValidator("query", z.object({ manual: z.enum(["true", "false"]).optional() })), async (c) => {
         const manual = c.req.valid("query").manual === "true"
         const result = await runEffect(confirmAllCreated(manual ? currentUsername(c) : undefined))
         if (result.result === "success") return c.json({ data: result.data }, 200)

@@ -4,7 +4,7 @@ import { makeUserRepository } from "../../user/adapter/user.repository.js";
 import { UserRepository } from "../../user/port/user.port.js";
 import { InvalidCredentialsError, DuplicateEmailError } from "../domain/auth.error.js";
 import { HashService, makeBcryptHashService } from "../../../infrastructure/utils/hasher.js";
-import { PublicUser, User } from "../../user/domain/user.entity.js";
+import { PublicUser, User, toPublicUser } from "../../user/domain/user.entity.js";
 import { JWTService, makeJwtServie } from "../../../infrastructure/utils/jwt.js";
 import { TApp } from "../../../infrastructure/runtime.js";
 
@@ -15,19 +15,26 @@ const findUserByUsername = ({ username, password }: LoginInput) => Effect.gen(fu
     return { ...user.value, password }
 })
 
-const comparePassword = ({ passwordHash, password, username, name, id }: User & { password: string }) => Effect.gen(function* () {
+const comparePassword = ({ passwordHash, password, username, name, id, role }: User & { password: string }) => Effect.gen(function* () {
     const hasher = yield* HashService
     const isMatch = yield* hasher.compare(password, passwordHash)
     if (!isMatch) return yield* Effect.fail(new InvalidCredentialsError({ message: "Invalid username or password" }))
-    return { id, name, username }
+    return { id, name, username, role }
 })
 
-const createJwtPayload = ({ id, name, username }: PublicUser) => Effect.gen(function* () {
+/**
+ * The token carries the role, so authorisation costs no database round trip per request.
+ *
+ * The trade is that a role change does not take effect until the holder's current token expires —
+ * acceptable at a one-hour lifetime, and the alternative (a user lookup on every request) buys
+ * revocation speed nobody has asked for at a cost paid on every call.
+ */
+const createJwtPayload = ({ id, name, username, role }: PublicUser) => Effect.gen(function* () {
     const jwtService = yield* JWTService
     const exp = Math.floor(Date.now() / 1000) + 60 * 60;
-    const token = yield* jwtService.sign({ sub: id, username, exp })
+    const token = yield* jwtService.sign({ sub: id, username, role, exp })
     return {
-        user: { id, name, username }, token
+        user: { id, name, username, role }, token
     } satisfies { token: string, user: PublicUser }
 })
 
@@ -38,10 +45,11 @@ const validateExistingUsername = (req: RegisterInput) => Effect.gen(function* ()
     return req
 });
 
-const hashPassword = ({ name, username, password }: RegisterInput) => Effect.gen(function* () {
+const hashPassword = ({ name, username, password, role }: RegisterInput) => Effect.gen(function* () {
     const hasher = yield* HashService
     const passwordHash = yield* hasher.hash(password)
-    return { name, username, passwordHash }
+    // role omitted falls through to the column default, OPERATOR — the least privileged value
+    return { name, username, passwordHash, role }
 });
 
 const saveUser = (req: Omit<RegisterInput, 'password'> & { passwordHash: string }) => Effect.gen(function* () {
@@ -49,16 +57,21 @@ const saveUser = (req: Omit<RegisterInput, 'password'> & { passwordHash: string 
     return yield* repo.createUser(req)
 });
 
+/**
+ * Creating a login for someone else. Unlike `login`, this returns no token: the admin doing the
+ * creating must not walk away holding a session as the account they just made.
+ */
+const makeCreateUserCase = (req: RegisterInput) => validateExistingUsername(req).pipe(
+    Effect.flatMap(hashPassword),
+    Effect.flatMap(saveUser),
+    Effect.map(toPublicUser),
+)
+
 const makeLoginCase = (req: LoginInput) => findUserByUsername(req).pipe(
     Effect.flatMap(comparePassword),
     Effect.flatMap(createJwtPayload),
 )
 
-const makeRegisterUserCase = (req: RegisterInput) => validateExistingUsername(req).pipe(
-    Effect.flatMap(validReq => hashPassword(validReq)),
-    Effect.flatMap(entry => saveUser(entry)),
-    Effect.flatMap(user => createJwtPayload(user)),
-)
 
 
 export class AuthUseCase {
@@ -75,9 +88,10 @@ export class AuthUseCase {
         )
     }
 
-    register(req: RegisterInput) {
+    /** Admin-only: issues an account, not a session. See `makeCreateUserCase`. */
+    createUser(req: RegisterInput) {
         return this.runtime.runPromiseExit(
-            Effect.provide(makeRegisterUserCase(req), this.authDepLive)
+            Effect.provide(makeCreateUserCase(req), this.authDepLive)
         )
     }
 }

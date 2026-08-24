@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { runEffect } from "../../../infrastructure/runtime.js";
+import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
 import { createTransaction, advanceStatus, getTransaction, listTransactions } from "../application/retail-buy.usecase.js";
 import { TransactionNotFoundError, InvalidTransitionError } from "../port/retail-buy.port.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
@@ -45,7 +46,16 @@ const listQuerySchema = z.object({
     branchCode: z.string().optional(),
 })
 
+/**
+ * Every route here requires an authenticated caller.
+ *
+ * The router previously carried no middleware, so an anonymous request reached the Zod validator
+ * rather than a 401 — meaning a well-formed body would have created a real transaction. Reads
+ * were open too. Roles are deliberately not applied yet: this is ordinary trading-day work, and
+ * which of it (if any) should be admin-only is a business question nobody has answered.
+ */
 export const retailBuyRoutes = new Hono()
+    .use(authMiddleware)
     .post("/", zValidator("json", createTransactionSchema), async (c) => {
         const req = c.req.valid("json")
         const result = await runEffect(createTransaction(req))
