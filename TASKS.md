@@ -237,3 +237,43 @@ question the business asks: **was the price we dealt at a good one?** POS integr
   all domains rather than pinning it on the newest tables alone.
 - `G099-ทดสอบ` is seeded active and will appear in the create-form branch dropdown; setting
   `deleted_at` hides it there while keeping it resolvable on historical rows.
+
+
+---
+
+# Trading Overview (2026-08-24)
+
+`/trading` — the four transaction domains read over one window. Three layouts were built rather than
+one, because BU has not chosen how they want to read it; they sit as sibling routes under a shared
+layout so they can be compared on identical data.
+
+- [x] **1. `utils/trading.ts`** — `TradingRow` plus per-domain normalisers that reuse each domain's
+  own weight/amount/`countsTowardTotal` rules, so the views cannot disagree with the per-domain list
+  pages or the exports. Pure helpers: `summarise`, `spread`, `netPosition`, `byPeriod`, `splitPurity`.
+- [x] **2. `hooks/useTrading.ts`** — the four list endpoints in parallel over one window, normalised
+  into one array. Pending until every domain has answered: a partial window would report a spread
+  against a side whose rows had not arrived.
+- [x] **3. `TradingLayout` + three children** — the layout owns the window and the data and passes
+  rows down, so switching tabs changes the presentation and nothing else.
+  - **ส่วนต่างราคา** — the 2×2 (customer/supplier × buy/sell) with the two diagonal spreads and net
+    position, per purity. The recommended reading: the diagonals are the profit engines.
+  - **สรุปรายงวด** — net gold per purity and one net cash figure per Fri–Thu งวด. Rows never sum.
+  - **รายการทั้งหมด** — all four domains interleaved, newest business day first, footer per domain
+    *and* purity.
+- [x] **4. Verification** — hand-computed the expected figures from the database and matched all
+  three views against them: ซื้อปลีก 69,500 / ขายปลีก 69,000 / ซื้อส่ง 71,000 / ขายส่ง 71,428.57,
+  spreads +1,928.57 and −2,000.00, net +25 บาททอง and −1 กก., net cash +2,514,872.71. The 99.9%
+  section exercises the null-spread path. 196 web tests pass; all packages type-check.
+
+**Bug found and fixed during verification:** the period table summed gold baht across both purities
+(45 baht of 96.5% + 65.6 baht of 99.9% rendered as `110.599580163`) and the ledger footer averaged a
+96.5% quote with a 99.9% one. Both violate the rule every other view here enforces. The gross
+in/out columns were dropped from สรุปรายงวด — the per-purity nets are the actual spec — and the
+ledger footer now splits on both axes. Pinned by `trading.test.ts` → *"the two pools are never mixed"*.
+
+## Follow-ups not done
+
+- **BU has not picked a layout.** All three ship; whichever loses should be deleted rather than left
+  as a second way to read the same week.
+- No export on this page. Each of the four list pages still exports its own workbook.
+- No settlement summary endpoint; everything is computed client-side from the four list endpoints.

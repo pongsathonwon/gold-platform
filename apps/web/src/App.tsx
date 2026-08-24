@@ -23,6 +23,10 @@ import { WholesaleSellDetailPage } from "./pages/WholesaleSellDetailPage";
 import { RetailBuyListPage, RetailSellListPage } from "./pages/retail/RetailListPage";
 import { RetailBuyCreatePage, RetailSellCreatePage } from "./pages/retail/RetailCreatePage";
 import { RetailBuyDetailPage, RetailSellDetailPage } from "./pages/retail/RetailDetailPage";
+import { TradingLayout } from "./pages/trading/TradingLayout";
+import { TradingSpreadPage } from "./pages/trading/TradingSpreadPage";
+import { TradingPeriodPage } from "./pages/trading/TradingPeriodPage";
+import { TradingLedgerPage } from "./pages/trading/TradingLedgerPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -87,6 +91,14 @@ export function App() {
                 <Route path="/retail-sell" element={<RetailSellListPage />} />
                 <Route path="/retail-sell/new" element={<RetailSellCreatePage />} />
                 <Route path="/retail-sell/:id" element={<RetailSellDetailPage />} />
+                {/* Three readings of one window, offered side by side because BU has not chosen
+                    between them. The layout owns the window and the data so the tabs cannot
+                    disagree — which is the whole point of showing all three. */}
+                <Route path="/trading" element={<TradingLayout />}>
+                  <Route index element={<TradingSpreadPage />} />
+                  <Route path="periods" element={<TradingPeriodPage />} />
+                  <Route path="ledger" element={<TradingLedgerPage />} />
+                </Route>
               </Route>
             </Routes>
           </ToastProvider>

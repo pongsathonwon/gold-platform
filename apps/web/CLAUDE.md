@@ -132,6 +132,9 @@ Routes are declared in `App.tsx`. React Router v7 with `<Routes>` / `<Route>`.
 /retail-sell              — retail sell list (protected)
 /retail-sell/new          — create form (protected)
 /retail-sell/:id          — detail (protected)
+/trading                  — all four domains over one window: ส่วนต่างราคา (protected)
+/trading/periods          — net per Fri–Thu งวด (protected)
+/trading/ledger           — combined chronological ledger (protected)
 ```
 
 Retail sits behind `AuthGuard` only, matching wholesale: recording the day's counter trades is
@@ -468,6 +471,49 @@ typed twice, and two status utils would be one file typed twice.
   vault. A retail write-up has no later milestone to save it for.
 - The void dialog requires a reason and disables its confirm button until one is typed — the API
   rejects a blank note, so this saves the round trip and says why beforehand.
+
+## 9h. `/trading` — the four domains in one window
+
+Three renderings of one window, offered side by side because BU has not chosen between them.
+
+| File | Role |
+| --- | --- |
+| `utils/trading.ts` | `TradingRow` + per-domain normalisers, `summarise`, `spread`, `netPosition`, `byPeriod`, `splitPurity` |
+| `hooks/useTrading.ts` | the four list queries in parallel, normalised into one array |
+| `pages/trading/TradingLayout.tsx` | owns the window and the data; tab nav; passes rows down via `Outlet` context |
+| `pages/trading/TradingSpreadPage.tsx` | **ส่วนต่างราคา** — the 2×2 (approach A) |
+| `pages/trading/TradingPeriodPage.tsx` | **สรุปรายงวด** — net per Fri–Thu งวด (approach B) |
+| `pages/trading/TradingLedgerPage.tsx` | **รายการทั้งหมด** — combined chronological (approach C) |
+
+**The layout owns the window and the data, not the children.** Three views only tell you anything if
+they cannot disagree, so they read one normalised array. It also means the window survives a tab
+change — someone who has framed an interesting week should not lose it by looking at it a second way.
+
+- **`utils/trading.ts` is where every domain rule lands.** Which weight counts, which amount counts
+  and whether a row counts at all differ per domain — a wholesale buy reports what was delivered
+  (`actualX ?? x`), a wholesale sell what was agreed, retail what was measured. The rules come from
+  each domain's own `countsTowardTotal` and weight choice, so the trading views cannot disagree with
+  that domain's list page or export either.
+- **The four domains are a 2×2, not four peers**, and the money is on the diagonals: ซื้อปลีก → ขายส่ง
+  is one profit engine, ซื้อส่ง → ขายปลีก the other. A strip of four totals hides both, which is the
+  argument for approach A over C.
+- **A spread is null unless both its sides traded.** Not zero — zero reads as breaking even, which is
+  a claim about a week in which one side of the business did nothing.
+- **Gold splits by purity, cash does not.** Two figures on this page are legitimately cross-purity:
+  `netCash`, because money is money whatever grade it bought, and nothing else. Every weight and
+  every average is scoped to one pool first. This was got wrong during the build — the period table
+  summed gold baht across purities and the ledger footer averaged a 96.5% quote with a 99.9% one; the
+  regression is pinned in `trading.test.ts` under *"the two pools are never mixed"*.
+- **Net cash includes retail fees**, though the price averages exclude them. A fee is real money that
+  changed hands, and this is the one figure that wants the all-in number — which is exactly why the
+  fee is stored beside `totalAmount` rather than inside it.
+- **The ledger's footer is per domain *and* per purity**, so up to eight rows. That is the honest cost
+  of interleaving four domains in one table, and the clearest argument for the ส่วนต่างราคา view.
+- **สรุปรายงวด buckets whatever the window contains** rather than generating a calendar, so a week
+  nothing fell into does not appear, and a one-งวด window says so and suggests widening the range.
+  Rows never sum: there is no carryover between periods.
+- Everything is computed client-side from the four list endpoints. **No summary endpoint exists** —
+  see the note in `apps/api/CLAUDE.md`.
 
 ## 10. Current State
 
