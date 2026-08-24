@@ -384,11 +384,21 @@ is where the domain rules are applied** — so the file totals exactly what the 
 - **The summary sits above the table, not below it.** Rows 5–10 give count, total weight, total
   amount and the average — the figure the manager opens the file for, before the rows that support
   it. The footer still totals at the bottom, mirroring the screen; the tests assert the two agree.
-- **The average is weighted by weight, never a mean of the row prices.** A plain mean lets a 1-baht
-  order pull as hard as a 50-baht one. `summarise()` divides total money by total weight, and the
-  denominator is **gold baht on both sheets** — what the label says, what the `ราคา/บาททอง` column
-  shows, and what the inventory report already does. Guarded against `0/0`, which prints a literal
-  NaN into a cell.
+- **The average is the summary line divided** — total value (THB) over total volume (gold baht) for
+  the window — never a mean of the row prices, which would let a 1-baht order pull as hard as a
+  50-baht one.
+- **The denominator is gold baht on both sheets, and that is what makes it read correctly across
+  purities.** The business prices per gold baht, and one gold baht of 99.9% is worth more than one
+  of 96.5%. kg→GB is a *pure mass* conversion (1 GB ≈ 15.244 g at any purity), so the purity
+  difference arrives through the price: `pricePerGb999 = pricePerGb965 × 99.9/96.5`. Value over
+  mass-GB therefore returns each sheet's own quote, and the 99.9% average reads higher than the
+  96.5% one by exactly that ratio — asserted in `wholesaleExport.test.ts`. Dividing the kilogram
+  sheet by kilograms would print a THB/kg figure ~65× larger under a THB/บาททอง heading and destroy
+  the comparison.
+- **No volume means no average.** `summarise()` returns `null`, rendered as `—`, rather than `0`: a
+  0.00 in a price column claims the gold cost nothing, where an absent average is the truth. This is
+  reachable whenever every row in a window is cancelled, and `0/0` would print a literal NaN.
+  Note the inventory balance report still shows `0.00` in the same situation — worth aligning.
 - **There is no combined figure anywhere in the file.** 96.5% and 99.9% are separate pools in
   different grades of gold; an average spanning them would average two different things.
 - **Excluded rows stay in the body**, with a `นับในยอดรวม` column reading ใช่/ไม่. A summary that

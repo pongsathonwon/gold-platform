@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { derivePricePerGb999 } from "@gold-platform/types";
 import {
   buildWholesaleSheet, buildWholesaleWorkbook, summarise, windowLabel, wholesaleFileName,
   BUY_REPORT, SELL_REPORT, type WholesaleExportRow,
@@ -86,14 +87,85 @@ describe("summarise", () => {
     expect(summary.averagePricePerGb).toBeCloseTo(50_000, 6);
   });
 
-  it("is zero rather than NaN when every row is excluded", () => {
+  it("has no average — not zero, not NaN — when every row is excluded", () => {
+    // 0.00 in a price column would claim the gold cost nothing; there simply is no average
     const summary = summarise([row({ countsTowardTotal: false })], "gb");
-    expect(summary.averagePricePerGb).toBe(0);
+    expect(summary.averagePricePerGb).toBeNull();
     expect(summary.totalWeight).toBe(0);
   });
 
-  it("is zero on an empty section", () => {
-    expect(summarise([], "gb").averagePricePerGb).toBe(0);
+  it("has no average on an empty section", () => {
+    expect(summarise([], "gb").averagePricePerGb).toBeNull();
+  });
+
+  it("never divides by zero even when amounts are present", () => {
+    // a zero-weight row is not expected, but 0/0 printing NaN into a manager's report is the
+    // failure this guards, and it must hold whatever the numerator is
+    expect(summarise([row({ weightGb: 0, weightGm: 0, amount: 5000 })], "gb").averagePricePerGb)
+      .toBeNull();
+  });
+});
+
+/**
+ * The business prices gold per gold baht, and one gold baht of 99.9% is worth more than one gold
+ * baht of 96.5%. Because kg→GB is a pure mass conversion, that difference has to arrive through
+ * the price — so these pin the relationship the report is read for.
+ */
+describe("average across purities", () => {
+  const PRICE_965 = 62_750;
+  const PRICE_999 = derivePricePerGb999(PRICE_965);
+  const CONVERSION_FACTOR = 15.244;
+
+  // a 99.9% deal is placed in kilograms; the server resolves mass gold baht and prices per GB
+  const kilograms = (kg: number) => {
+    const weightGm = kg * 1000;
+    const weightGb = weightGm / CONVERSION_FACTOR;
+    return row({
+      weightGb,
+      weightGm,
+      comparisonWeightGb: weightGb,
+      comparisonWeightGm: weightGm,
+      pricePerGb: PRICE_999,
+      amount: PRICE_999 * weightGb,
+    });
+  };
+
+  const goldBaht = (gb: number) =>
+    row({
+      weightGb: gb,
+      weightGm: gb * CONVERSION_FACTOR,
+      comparisonWeightGb: gb,
+      comparisonWeightGm: gb * CONVERSION_FACTOR,
+      pricePerGb: PRICE_965,
+      amount: PRICE_965 * gb,
+    });
+
+  it("hands back the sheet's own quote — value over mass gold baht", () => {
+    expect(summarise([goldBaht(10)], "gb").averagePricePerGb).toBeCloseTo(PRICE_965, 6);
+    expect(summarise([kilograms(2)], "kg").averagePricePerGb).toBeCloseTo(PRICE_999, 6);
+  });
+
+  it("reads higher on the 99.9 sheet than on the 96.5 sheet", () => {
+    const sheets = buildWholesaleWorkbook({
+      nineSixFive: [goldBaht(10), goldBaht(5)],
+      nineNineNine: [kilograms(2), kilograms(1)],
+      ...base,
+    });
+    const average965 = cell(sheets[0].data, SUMMARY_AVERAGE_ROW, 1) as number;
+    const average999 = cell(sheets[1].data, SUMMARY_AVERAGE_ROW, 1) as number;
+
+    expect(average999).toBeGreaterThan(average965);
+    // and by exactly the purity ratio, since that is the only thing separating the two quotes
+    expect(average999 / average965).toBeCloseTo(99.9 / 96.5, 4);
+  });
+
+  it("does not let the kilogram sheet divide by kilograms", () => {
+    // 2 kg is 131.16 mass gold baht — dividing by 2 would give a THB/kg figure some 65× larger,
+    // printed under a THB/บาททอง heading
+    const average = summarise([kilograms(2)], "kg").averagePricePerGb as number;
+    const perKilogram = PRICE_999 * (2000 / CONVERSION_FACTOR) / 2;
+    expect(average).toBeCloseTo(PRICE_999, 6);
+    expect(average).toBeLessThan(perKilogram);
   });
 });
 

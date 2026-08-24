@@ -98,14 +98,19 @@ const comparisonIn = (row: WholesaleExportRow, unit: ExportUnit) => {
 /**
  * The report's summary figures, over the rows that count.
  *
- * **The average is weighted by weight, not a mean of the per-row prices.** A plain mean would let
- * a 1-baht order pull the figure as hard as a 50-baht one, which answers a question nobody asked;
- * what the manager wants is what the week's gold actually cost per baht, which is total money over
- * total weight.
+ * **The average is the summary line divided: total value (THB) over total volume (gold baht), for
+ * the selected window.** Not a mean of the per-row prices — that would let a 1-baht order pull the
+ * figure as hard as a 50-baht one, answering a question nobody asked. What the manager wants is
+ * what the window's gold actually cost, or fetched, per baht.
  *
- * The denominator is **gold baht in both sections**, including the kilogram one. That is what the
- * label says, what the `ราคา/บาททอง` column beside it shows, and what the inventory report already
- * does — dividing by the kilogram total would print a THB/kg figure under a THB/บาททอง heading.
+ * The denominator is **gold baht on both sheets**, including the kilogram one, and this is what
+ * makes the report read correctly across purities. The business prices gold per gold baht, and one
+ * gold baht of 99.9% is worth more than one gold baht of 96.5%. The kg→GB conversion is pure mass
+ * (1 GB ≈ 15.244 g at any purity, `conversionFactor`), so the purity difference lives in the
+ * *price*: `pricePerGb999 = pricePerGb965 × 99.9/96.5`. Dividing value by mass-GB therefore hands
+ * back each sheet's own quote, and the 99.9% sheet reads higher than the 96.5% one — as it should.
+ * Dividing the kilogram sheet by its kilogram total would instead print a THB/kg figure under a
+ * THB/บาททอง heading and destroy the comparison.
  */
 export function summarise(rows: WholesaleExportRow[], unit: ExportUnit) {
   const counted = rows.filter((r) => r.countsTowardTotal);
@@ -117,9 +122,12 @@ export function summarise(rows: WholesaleExportRow[], unit: ExportUnit) {
     excluded: rows.length - counted.length,
     totalWeight,
     totalAmount,
-    // Weight can legitimately be zero — every row in the window excluded, or a section holding
-    // only cancelled orders — and 0/0 would print a literal NaN into the cell.
-    averagePricePerGb: totalWeightGb > 0 ? totalAmount / totalWeightGb : 0,
+    /**
+     * Null when there is no volume to divide by — an empty window, or one where every row was
+     * cancelled. Not zero: a 0.00 in a price column reads as "the gold cost nothing", which is a
+     * claim, where an absent average is the truth. `0/0` would of course print a literal NaN.
+     */
+    averagePricePerGb: totalWeightGb > 0 ? totalAmount / totalWeightGb : null,
   };
 }
 
@@ -142,7 +150,14 @@ function summaryBlock(
     [text("จำนวนรายการ"), strong(count(summary.counted)), text(excludedNote)],
     [text(`${config.weightLabel}รวม ${unitSuffix(unit)}`), strong(weight(summary.totalWeight))],
     [text("ยอดรวม"), strong(money(summary.totalAmount))],
-    [text(config.averageLabel), strong(money(summary.averagePricePerGb))],
+    [
+      text(config.averageLabel),
+      // an em dash rather than a blank, so "there is no average" reads as an answer instead of a
+      // cell that failed to fill. Nothing sums this line, so text here costs no arithmetic.
+      summary.averagePricePerGb === null
+        ? bold("—")
+        : strong(money(summary.averagePricePerGb)),
+    ],
     [],
   ];
 }
