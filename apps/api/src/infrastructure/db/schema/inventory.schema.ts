@@ -1,4 +1,4 @@
-import { date, decimal, pgTable, primaryKey, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { date, decimal, index, pgTable, primaryKey, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { brands, originEnum, productTypes, purities } from "./master.schema.js";
 
 // aggregate balance — one row per pool (purityId, brandId, origin, productTypeId)
@@ -46,7 +46,21 @@ export const inventoryMovements = pgTable('inventory_movements', {
     // when the row was written — the bookkeeping instant, kept for ordering within a day
     movedAt: timestamp().notNull().defaultNow(),
     movedBy: varchar().notNull(),
-})
+}, (table) => [
+    /**
+     * The ledger's only access pattern, and the one the table had no index for at all.
+     *
+     * Its columns are exactly `listMovements`'s window and sort — `movementDate` bounded by
+     * from/to, then `(movedAt, id)` breaking ties inside a day — so the range scan and the
+     * ordering come from one index and neither needs a sort step.
+     *
+     * It also covers `sumMovementsBefore`, which is the half that actually needed help:
+     * everything strictly before the window start, aggregated. That scan grows with the age of
+     * the ledger rather than with what the caller asked for, so an operator opening the page on
+     * yesterday–today reads more rows every month the shop stays in business.
+     */
+    index('inventory_movements_movement_date_idx').on(table.movementDate, table.movedAt, table.id),
+])
 
 export type CreateMovement = typeof inventoryMovements.$inferInsert;
 export type MovementShape = typeof inventoryMovements.$inferSelect;

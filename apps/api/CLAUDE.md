@@ -404,6 +404,22 @@ Outbound cost is derived from the current balance at decrement time — **no dai
 - Because every `increment` updates `totalCost`/`totalWeightGb`, a pool refilled after hitting zero always decrements at the up-to-date average — this is what fixed the 99.9% zero-inventory cost bug.
 - The daily-snapshot machinery (`inventory_daily_snapshots` table, `computeSnapshots`, `GET/POST /inventory/snapshots*`, the "Compute Today's Rate" button) was **removed** — nothing consumed it after the switch to live WAC. Past balances are reconstructable from the `inventory_movements` ledger if a point-in-time valuation is ever needed.
 
+### Movement ledger indexing
+
+`inventory_movements` carries one index, `(movement_date, moved_at, id)` — the window and the sort
+of `listMovements` in that order, so the range scan and the ordering come from it with no sort step
+left. Until migration 0016 the table had none at all beyond its primary key.
+
+The query that needed it is `sumMovementsBefore`, the opening balance: it aggregates *everything*
+strictly before the window's first day, so its cost tracks the age of the ledger rather than the
+size of the request. An operator opening the movements page on yesterday–today reads more rows
+every month the shop trades. Both halves of `GET /inventory/movements` are covered by the one index.
+
+There is deliberately **no `LIMIT` and no pagination** — the endpoint returns the whole window, and
+the web app renders and exports all of it. If volume ever outgrows that, the answer is a daily
+read-model rather than a page size, since the report is an aggregate over a window and not a list
+anyone scrolls.
+
 `referenceType` on `inventory_movements` is a **free-text varchar** (not an enum). The gain/loss forms now set it from the shared `TRANSACTION_TYPES` list in `@gold-platform/types` (`WHOLESALE_BUY`, `WHOLESALE_SELL`, `RETAIL_BUY`, `RETAIL_SELL`, `RECEIVED`, `SMELTING`, `CONVERT_OUT`, `PRODUCT_SWITCH`, `STOCK_COUNT`, `DAMAGE`, `LOST`, `MANUAL_CORRECTION`) so all movement types can be recorded through core inventory until each gets its own module. Cross-domain callers still register their own string.
 
 ## Schema Files
