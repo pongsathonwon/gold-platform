@@ -313,7 +313,18 @@ which the API derives from the inventory movements booked under the transaction 
 any column. Before the stock-moving transition it reads `— (บันทึกเมื่อเข้าสต๊อก)`, because there
 genuinely is no answer yet. Neither list page shows brand, so neither needed changing.
 
-## 9e. Excel export — `utils/inventoryExport.ts`
+## 9e. Excel export — `utils/excel.ts` + the per-domain builders
+
+Four pages export to `.xlsx`: both inventory pages and both wholesale lists. **One workbook per
+page, two sheets per workbook** — `ทอง 96.5%` and `ทอง 99.9%`, the same split every page renders.
+
+| File | Role |
+| --- | --- |
+| `utils/excel.ts` | shared primitives — number formats, cell helpers, the title block, `ExportSheet`, `downloadWorkbook()`. The numbers-as-numbers rule lives here so it cannot be half-applied |
+| `utils/inventoryExport.ts` | balance and movement workbooks |
+| `utils/wholesaleExport.ts` | buy and sell workbooks — **one builder, config per domain** |
+
+Below is the inventory export; §9f covers wholesale.
 
 Both inventory pages export to `.xlsx`. **One workbook per page, two sheets per workbook** —
 `ทอง 96.5%` and `ทอง 99.9%`, the same split the pages render. The balance file is `คลังทองคำแท่ง_<วันที่>.xlsx`;
@@ -352,6 +363,45 @@ so its ~50 KB lands in its own chunk and only someone who exports pays for it.
 few thousand rows — well inside what the browser serializes in under a second, and the unvirtualized
 `TableRow` rendering is the real ceiling long before the export is. Serialization is synchronous,
 so the button disables itself and shows a spinner while it runs.
+
+## 9f. Wholesale reports — `utils/wholesaleExport.ts`
+
+`/wholesale-buy` and `/wholesale-sell` each export a two-sheet workbook, split by purity like
+everything else. **One builder serves both domains**; what differs is a `WholesaleReportConfig`
+(`BUY_REPORT` / `SELL_REPORT`) carrying the title, the counterparty header, the two weight labels
+and the average's label. Two near-copies of a report this similar would drift.
+
+Each page maps its own transactions into `WholesaleExportRow` before calling in, and **that mapping
+is where the domain rules are applied** — so the file totals exactly what the screen totals:
+
+| | buy | sell |
+| --- | --- | --- |
+| the weight that counts | delivered (`actualWeightGb ?? weightGb`) | agreed (`weightGb`) — the API refuses to pack anything else |
+| the weight beside it | ordered, always known | the buyer's contested figure, null unless `DISPUTED` |
+| the amount | `actualAmount ?? totalAmount` | `totalAmount` |
+| what counts toward totals | `countsTowardTotal()` from `wholeBuyStatus` | the same from `wholeSellStatus` — the rule reads inverted, see §9c |
+
+- **The summary sits above the table, not below it.** Rows 5–10 give count, total weight, total
+  amount and the average — the figure the manager opens the file for, before the rows that support
+  it. The footer still totals at the bottom, mirroring the screen; the tests assert the two agree.
+- **The average is weighted by weight, never a mean of the row prices.** A plain mean lets a 1-baht
+  order pull as hard as a 50-baht one. `summarise()` divides total money by total weight, and the
+  denominator is **gold baht on both sheets** — what the label says, what the `ราคา/บาททอง` column
+  shows, and what the inventory report already does. Guarded against `0/0`, which prints a literal
+  NaN into a cell.
+- **There is no combined figure anywhere in the file.** 96.5% and 99.9% are separate pools in
+  different grades of gold; an average spanning them would average two different things.
+- **Excluded rows stay in the body**, with a `นับในยอดรวม` column reading ใช่/ไม่. A summary that
+  says "excluding 2" with no way to see which two is not auditable.
+- **The comparison weight is its own column**, not the screen's parenthetical. `"12 (สั่ง 15)"` in a
+  numeric cell would make the cell text and cost the column its arithmetic.
+- **Either date filter can be cleared**, which both list pages document as a way to open the range
+  up. `windowLabel()` and `wholesaleFileName()` handle a missing bound — `formatBusinessDate("")`
+  returns empty, which would leave the file claiming a window it does not have.
+
+Open question for BU: both pages ignore `settledAmount` — what was *actually* paid when it differed
+from the agreed total — so "average cost" is currently the agreed price, not the settled one. The
+export mirrors the pages deliberately rather than quietly answering a different question.
 
 ## 10. Current State
 

@@ -12,6 +12,10 @@ import { useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterDa
 import { useToast } from "../components/ToastContext";
 import { useAuth } from "../auth/AuthContext";
 import { splitByPurity } from "../utils/inventoryVolume";
+import { downloadWorkbook } from "../utils/excel";
+import {
+  buildWholesaleWorkbook, wholesaleFileName, SELL_REPORT, type WholesaleExportRow,
+} from "../utils/wholesaleExport";
 import { countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeSellStatus";
 
 // 96.5% is dealt in gold baht, 99.9% in kilograms — the same split the inventory pages use.
@@ -56,10 +60,12 @@ export function WholesaleSellListPage() {
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
   };
+  const [isExporting, setIsExporting] = useState(false);
+
   const { data, isPending, isError, error } = useWholesaleSellList(filter);
   const confirmAll = useConfirmAllWholesaleSell();
   const { showToast } = useToast();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const { data: suppliersRes } = useSuppliers();
   const { data: productTypesRes } = useProductTypes();
   const { data: puritiesRes } = usePurities();
@@ -86,6 +92,47 @@ export function WholesaleSellListPage() {
    * the edit window. An irreversible action with a wider reach than the page implies has to be
    * confirmed, and the dialog is where the real scope gets stated.
    */
+  /**
+   * A deal as the report shows it. The weight that counts is the agreed one — the API refuses to
+   * pack anything else, so that is what left the vault — and the buyer's contested figure sits
+   * beside it, null unless somebody is arguing.
+   */
+  const toExportRow = (t: WholeSellTransaction, unit: Unit): WholesaleExportRow => ({
+    transactionDate: t.transactionDate,
+    counterparty: supplierName(t.supplierId),
+    productType: productTypeName(t.productTypeId),
+    weightGb: t.weightGb,
+    weightGm: t.weightGm,
+    comparisonWeightGb: t.actualWeightGb,
+    comparisonWeightGm: t.actualWeightGm,
+    pricePerGb: unit === "kg" ? t.pricePerGb999 : t.pricePerGb965,
+    amount: amountOf(t),
+    status: statusLabel(t.currentStatus),
+    countsTowardTotal: countsTowardTotal(t.currentStatus),
+  });
+
+  async function handleExport() {
+    setIsExporting(true);
+    try {
+      await downloadWorkbook(
+        buildWholesaleWorkbook({
+          nineSixFive: nineSixFive.map((t) => toExportRow(t, "gb")),
+          nineNineNine: nineNineNine.map((t) => toExportRow(t, "kg")),
+          config: SELL_REPORT,
+          from,
+          to,
+          generatedAt: new Date(),
+          generatedBy: user?.name ?? user?.username ?? "",
+        }),
+        wholesaleFileName(SELL_REPORT, from, to),
+      );
+    } catch {
+      showToast("ส่งออกไฟล์ไม่สำเร็จ", "error");
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
   function handleConfirmAll() {
     setConfirmOpen(false);
     confirmAll.mutate(undefined, {
@@ -210,6 +257,16 @@ export function WholesaleSellListPage() {
         <Typography variant="h2" sx={{ flexGrow: 1 }}>
           ขายส่ง
         </Typography>
+        {/* waits for the window's data — a report written from a half-loaded list would carry a
+            summary that averages only part of it */}
+        <Button
+          variant="outlined"
+          onClick={handleExport}
+          disabled={isPending || isError || isExporting}
+          startIcon={isExporting ? <CircularProgress size={16} /> : undefined}
+        >
+          ส่งออก Excel
+        </Button>
         {/* the nightly job does this automatically; the button is the mid-day run for when the
             day's deals need locking before then */}
         {isAdmin && (

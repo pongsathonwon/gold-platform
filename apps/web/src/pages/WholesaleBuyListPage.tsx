@@ -12,6 +12,10 @@ import { useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterDa
 import { useToast } from "../components/ToastContext";
 import { useAuth } from "../auth/AuthContext";
 import { splitByPurity } from "../utils/inventoryVolume";
+import { downloadWorkbook } from "../utils/excel";
+import {
+  buildWholesaleWorkbook, wholesaleFileName, BUY_REPORT, type WholesaleExportRow,
+} from "../utils/wholesaleExport";
 import { countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeBuyStatus";
 
 // 96.5% is ordered in gold baht, 99.9% in kilograms — the same split the inventory pages use.
@@ -52,10 +56,12 @@ export function WholesaleBuyListPage() {
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
   };
+  const [isExporting, setIsExporting] = useState(false);
+
   const { data, isPending, isError, error } = useWholesaleBuyList(filter);
   const confirmAll = useConfirmAllWholesaleBuy();
   const { showToast } = useToast();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const { data: suppliersRes } = useSuppliers();
   const { data: productTypesRes } = useProductTypes();
   const { data: puritiesRes } = usePurities();
@@ -82,6 +88,49 @@ export function WholesaleBuyListPage() {
    * the edit window. An irreversible action with a wider reach than the page implies has to be
    * confirmed, and the dialog is where the real scope gets stated.
    */
+  /**
+   * A transaction as the report shows it. Every figure is the one the table beside it renders —
+   * the delivered weight against the ordered one, `amountOf`'s choice of amount, and the same
+   * `countsTowardTotal` test the footer applies — so the file cannot total something the screen
+   * does not.
+   */
+  const toExportRow = (t: WholeBuyTransaction, unit: Unit): WholesaleExportRow => ({
+    transactionDate: t.transactionDate,
+    counterparty: supplierName(t.supplierId),
+    productType: productTypeName(t.productTypeId),
+    weightGb: t.actualWeightGb ?? t.weightGb,
+    weightGm: t.actualWeightGm ?? t.weightGm,
+    // always known on a buy: what the order said, whether or not the delivery matched it
+    comparisonWeightGb: t.weightGb,
+    comparisonWeightGm: t.weightGm,
+    pricePerGb: unit === "kg" ? t.pricePerGb999 : t.pricePerGb965,
+    amount: amountOf(t),
+    status: statusLabel(t.currentStatus),
+    countsTowardTotal: countsTowardTotal(t.currentStatus),
+  });
+
+  async function handleExport() {
+    setIsExporting(true);
+    try {
+      await downloadWorkbook(
+        buildWholesaleWorkbook({
+          nineSixFive: nineSixFive.map((t) => toExportRow(t, "gb")),
+          nineNineNine: nineNineNine.map((t) => toExportRow(t, "kg")),
+          config: BUY_REPORT,
+          from,
+          to,
+          generatedAt: new Date(),
+          generatedBy: user?.name ?? user?.username ?? "",
+        }),
+        wholesaleFileName(BUY_REPORT, from, to),
+      );
+    } catch {
+      showToast("ส่งออกไฟล์ไม่สำเร็จ", "error");
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
   function handleConfirmAll() {
     setConfirmOpen(false);
     confirmAll.mutate(undefined, {
@@ -205,6 +254,16 @@ export function WholesaleBuyListPage() {
         </Typography>
         {/* the nightly job does this automatically; the button is the mid-day run for when the
             day's orders need locking before then */}
+        {/* waits for the window's data — a report written from a half-loaded list would carry a
+            summary that averages only part of it */}
+        <Button
+          variant="outlined"
+          onClick={handleExport}
+          disabled={isPending || isError || isExporting}
+          startIcon={isExporting ? <CircularProgress size={16} /> : undefined}
+        >
+          ส่งออก Excel
+        </Button>
         {isAdmin && (
         <Button variant="outlined" onClick={() => setConfirmOpen(true)} disabled={confirmAll.isPending || createdCount === 0}>
           {confirmAll.isPending ? "กำลังยืนยัน…" : `ยืนยันทั้งหมด (${createdCount})`}

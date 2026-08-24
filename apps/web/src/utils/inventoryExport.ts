@@ -1,43 +1,24 @@
 import type { SheetData, Row } from "write-excel-file/browser";
 import { formatBusinessDate } from "./format";
 import { weightOf, wacRate, type VolumeRow, type MovementOpening, type WithCumulative } from "./inventoryVolume";
+import {
+  bold, emptyRow, headerCell, money, strong, text, titleBlock, weight,
+  SHEET_NAME, SIGNED_MONEY, SIGNED_WEIGHT, TITLE_BLOCK_ROWS,
+  type ExportSheet, type ExportUnit,
+} from "./excel";
 
 /**
- * Workbook builders for the two inventory reports.
+ * Workbook builders for the two inventory reports. Pure: rows in, cell arrays out.
  *
- * Everything here is pure: rows in, cell arrays out. The one rule worth stating is that **a
- * figure goes into a cell as a number, never as a formatted string**. `formatNumber()` and
- * `formatWeight()` exist for the screen, and their output ("1,234.00") is text as far as Excel is
- * concerned — a column of it cannot be summed, which is the first thing anyone does with an
- * exported ledger. Presentation is a cell *format* instead; the value stays a double.
+ * The cell conventions — numbers as numbers, formats for presentation — live in `excel.ts`.
  */
 
-// --- number formats ---
+export type { ExportUnit } from "./excel";
 
-const MONEY = "#,##0.00";
-const WEIGHT = "#,##0.####";
-// Deltas read as movement, so the sign is part of the presentation — the same reason the screen
-// prints "+1,200.00". Two-section formats apply the first section to zero, which matches the
-// page's `delta >= 0` test.
-const SIGNED_MONEY = "+#,##0.00;-#,##0.00";
-const SIGNED_WEIGHT = "+#,##0.####;-#,##0.####";
-
-const HEADER_FILL = "#F2F2F2";
-
-// 96.5% is measured in gold baht (บาท); 99.9% in kilograms
-export type ExportUnit = "gb" | "kg";
-
-/**
- * A sheet as `write-excel-file` wants it. Declared locally rather than imported because the
- * library's own `Sheet` type is generic over its file-content representation, which nothing here
- * needs to know about; this is structurally assignable to it.
- */
-export interface ExportSheet {
-  sheet: string;
-  data: SheetData;
-  columns: { width: number }[];
-  stickyRowsCount: number;
-}
+const poolHeader = (unit: ExportUnit) => (unit === "gb" ? "แบรน" : "ที่มา");
+const weightHeader = (unit: ExportUnit) => (unit === "gb" ? "น้ำหนัก (บาท)" : "น้ำหนัก (กก.)");
+const balanceHeader = (unit: ExportUnit) =>
+  unit === "gb" ? "คงเหลือสะสม (บาท)" : "คงเหลือสะสม (กก.)";
 
 /**
  * Master-data lookups, passed in as functions.
@@ -55,49 +36,8 @@ export interface ExportLabels {
   referenceType: (referenceType: string) => string;
 }
 
-const poolHeader = (unit: ExportUnit) => (unit === "gb" ? "แบรน" : "ที่มา");
-const weightHeader = (unit: ExportUnit) => (unit === "gb" ? "น้ำหนัก (บาท)" : "น้ำหนัก (กก.)");
-const balanceHeader = (unit: ExportUnit) =>
-  unit === "gb" ? "คงเหลือสะสม (บาท)" : "คงเหลือสะสม (กก.)";
-
-const SHEET_NAME: Record<ExportUnit, string> = { gb: "ทอง 96.5%", kg: "ทอง 99.9%" };
-
-// --- shared cell helpers ---
-
-const text = (value: string): Row[number] => ({ value, type: String });
-const money = (value: number, format = MONEY): Row[number] => ({ value, type: Number, format });
-const weight = (value: number, format = WEIGHT): Row[number] => ({ value, type: Number, format });
-const bold = (value: string): Row[number] => ({ value, type: String, fontWeight: "bold" });
-
-const headerCell = (value: string, align?: "left" | "right"): Row[number] => ({
-  value,
-  type: String,
-  fontWeight: "bold",
-  backgroundColor: HEADER_FILL,
-  align,
-});
-
-/**
- * Rows 1–4 of every sheet: what the report is, what window it covers, and who pulled it when.
- *
- * A spreadsheet outlives the screen it was taken from — once the file is on someone's desktop the
- * date range is not recoverable from the rows, so it has to be written down. Deliberately not
- * merged: merged cells break sorting and filtering for everything below them, and the title reads
- * fine sitting in column A.
- */
-function titleBlock(title: string, window: string, generatedAt: Date, generatedBy: string): SheetData {
-  return [
-    [{ value: title, type: String, fontWeight: "bold", fontSize: 14 }],
-    [text(window)],
-    [text(`ออกรายงาน ${generatedAt.toLocaleString("th-TH")} โดย ${generatedBy}`)],
-    [],
-  ];
-}
-
 /** Rows before the table header — the title block plus the header row itself. */
-const STICKY_ROWS = 5;
-
-const EMPTY_ROW = (columns: number): Row => [text("ไม่พบรายการ"), ...Array(columns - 1).fill(null)];
+const STICKY_ROWS = TITLE_BLOCK_ROWS + 1;
 
 // --- balance report ---
 
@@ -140,9 +80,9 @@ export function buildBalanceSheet(params: {
           [
             bold("รวม"),
             null,
-            { ...weight(rows.reduce((sum, r) => sum + weightOf(r, unit), 0)), fontWeight: "bold" },
-            { ...money(totalCost), fontWeight: "bold" },
-            { ...money(totalWeightGb > 0 ? totalCost / totalWeightGb : 0), fontWeight: "bold" },
+            strong(weight(rows.reduce((sum, r) => sum + weightOf(r, unit), 0))),
+            strong(money(totalCost)),
+            strong(money(totalWeightGb > 0 ? totalCost / totalWeightGb : 0)),
           ],
         ]
       : [];
@@ -155,7 +95,7 @@ export function buildBalanceSheet(params: {
       generatedBy,
     ),
     header,
-    ...(rows.length > 0 ? body : [EMPTY_ROW(header.length)]),
+    ...(rows.length > 0 ? body : [emptyRow(header.length)]),
     ...footer,
   ];
 }
@@ -260,7 +200,7 @@ export function buildMovementSheet(params: {
     null,
     null,
     null,
-    { ...weight(opening), fontWeight: "bold" },
+    strong(weight(opening)),
     null,
     null,
   ];
@@ -289,16 +229,10 @@ export function buildMovementSheet(params: {
             null,
             null,
             null,
-            {
-              ...weight(rows.reduce((sum, r) => sum + deltaOf(r), 0), SIGNED_WEIGHT),
-              fontWeight: "bold",
-            },
-            {
-              ...money(rows.reduce((sum, r) => sum + r.costDelta, 0), SIGNED_MONEY),
-              fontWeight: "bold",
-            },
+            strong(weight(rows.reduce((sum, r) => sum + deltaOf(r), 0), SIGNED_WEIGHT)),
+            strong(money(rows.reduce((sum, r) => sum + r.costDelta, 0), SIGNED_MONEY)),
             // rows are oldest-first, so the window's closing balance is the last row's cumulative
-            { ...weight(balanceOf(rows[rows.length - 1])), fontWeight: "bold" },
+            strong(weight(balanceOf(rows[rows.length - 1]))),
             null,
             null,
           ],
@@ -314,7 +248,7 @@ export function buildMovementSheet(params: {
     ),
     header,
     openingRow,
-    ...(rows.length > 0 ? body : [EMPTY_ROW(header.length)]),
+    ...(rows.length > 0 ? body : [emptyRow(header.length)]),
     ...footer,
   ];
 }
@@ -350,14 +284,4 @@ export const balanceFileName = (asOf: string) => `คลังทองคำแ
 export const movementFileName = (from: string, to: string) =>
   `ความเคลื่อนไหวทองแท่ง_${from}_ถึง_${to}.xlsx`;
 
-/**
- * Writes the workbook and hands it to the browser.
- *
- * The library is pulled in on the click rather than at module load — it is ~50 KB that only
- * matters to someone who actually exports, and the initial bundle is paid for by everyone.
- * Serialization is synchronous, so callers should disable the control while this runs.
- */
-export async function downloadWorkbook(sheets: ExportSheet[], fileName: string) {
-  const { default: writeXlsxFile } = await import("write-excel-file/browser");
-  await writeXlsxFile(sheets).toFile(fileName);
-}
+export { downloadWorkbook } from "./excel";
