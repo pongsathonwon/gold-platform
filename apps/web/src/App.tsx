@@ -20,6 +20,9 @@ import { WholesaleBuyDetailPage } from "./pages/WholesaleBuyDetailPage";
 import { WholesaleSellListPage } from "./pages/WholesaleSellListPage";
 import { WholesaleSellCreatePage } from "./pages/WholesaleSellCreatePage";
 import { WholesaleSellDetailPage } from "./pages/WholesaleSellDetailPage";
+import { RetailBuyListPage, RetailSellListPage } from "./pages/retail/RetailListPage";
+import { RetailBuyCreatePage, RetailSellCreatePage } from "./pages/retail/RetailCreatePage";
+import { RetailBuyDetailPage, RetailSellDetailPage } from "./pages/retail/RetailDetailPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -75,6 +78,15 @@ export function App() {
                 <Route path="/wholesale-sell" element={<WholesaleSellListPage />} />
                 <Route path="/wholesale-sell/new" element={<WholesaleSellCreatePage />} />
                 <Route path="/wholesale-sell/:id" element={<WholesaleSellDetailPage />} />
+                {/* Retail is open to any operator, like wholesale: recording the day's counter
+                    trades is ordinary work. The ADMIN gate is for the inventory adjustments, which
+                    move gold with nobody on the other side of the transaction. */}
+                <Route path="/retail-buy" element={<RetailBuyListPage />} />
+                <Route path="/retail-buy/new" element={<RetailBuyCreatePage />} />
+                <Route path="/retail-buy/:id" element={<RetailBuyDetailPage />} />
+                <Route path="/retail-sell" element={<RetailSellListPage />} />
+                <Route path="/retail-sell/new" element={<RetailSellCreatePage />} />
+                <Route path="/retail-sell/:id" element={<RetailSellDetailPage />} />
               </Route>
             </Routes>
           </ToastProvider>

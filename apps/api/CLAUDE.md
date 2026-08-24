@@ -130,8 +130,8 @@ All domains share the same status-log pattern: two tables (`*_transactions` + `*
 |--------|-------------|----------------|
 | wholesale-buy | `CREATED → CONFIRMED → PAID → RECEIVED → STOCKED`, plus the failure branches below | `increment` on entering `STOCKED` |
 | wholesale-sell | `CREATED → CONFIRMED → PACKED → SHIPPED → PAID`, plus the failure branches below | `decrement` on entering `PACKED`, reversed on `RETURNED` |
-| retail-buy | `DRAFT → CONFIRMED` \| `DRAFT/CONFIRMED → CANCELLED` | none |
-| retail-sell | `DRAFT → CONFIRMED → SHIPPED` \| `DRAFT/CONFIRMED → CANCELLED` | `decrement` at `CONFIRMED → SHIPPED` |
+| retail-buy | created at `CONFIRMED`; `CONFIRMED → CANCELLED` | **none** |
+| retail-sell | created at `CONFIRMED`; `CONFIRMED → CANCELLED` | **none** |
 | receive | `RECEIVED → CONFIRMED` \| `RECEIVED → CANCELLED` (grace period only) | `increment` at `RECEIVED → CONFIRMED` |
 | smelting | `DRAFT → CONFIRMED` \| `DRAFT → CANCELLED` (grace period only) | `increment` at `DRAFT → CONFIRMED` |
 | convert-out | `DRAFT → CONFIRMED` \| `DRAFT → CANCELLED` (grace period only) | `decrement` at `DRAFT → CONFIRMED` |
@@ -268,6 +268,43 @@ irreversible events happen in the opposite order**: we hand over gold first and 
 `WHOLE_SELL_TRANSITIONS` in `@gold-platform/types` is the shared map, re-typed against the DB enum
 in the port exactly as buy does it. `WHOLESALE_SELL_AUTO_CONFIRM_HOUR` is its own env var.
 
+### retail-buy / retail-sell — the thin pair
+
+Manual write-ups of counter trades, built to answer one question: *was the price we dealt at a good
+one?* Full detail in `core/retail-buy/retail-buy.md`; the sell side is its mirror and documents only
+what differs.
+
+They are near-identical rather than merely symmetric — same row shape, same two-status machine, same
+rules — so the web app renders both from one set of pages and one config, and `@gold-platform/types`
+carries one create shape for both.
+
+- **Neither moves inventory.** Stock is adjusted by hand through `/inventory/gain|loss`. The shop
+  cannot trace which physical gold came from which customer, so coupling a pool to a counter trade
+  would assert a link that does not exist. Retail-sell's old `CONFIRMED → SHIPPED` decrement was
+  **removed**: shipping is deferred, which had left live code moving gold down an unreachable path.
+  Both usecase suites assert no inventory usecase is called.
+- **Created at `CONFIRMED`, with one status row.** There was never a draft — the trade happened
+  before the form was opened — and logging one would record an event nobody performed. `DRAFT` (both)
+  and `SHIPPED` (sell) survive in the enums, unreachable, so a POS feed and shipping return without a
+  migration.
+- **Voiding requires a note**; there is no edit path. A confirmed write-up is cancelled and re-entered
+  rather than corrected, keeping the change in the log instead of overwriting a reported figure.
+- **`resolveMeasuredQuantity`, never `resolveQuantity`.** The `product_type_purities` min/step rules
+  describe what can be *ordered from a supplier*; a customer's gold weighs what it weighs, so 3.7 GB
+  is valid input. The pairing itself is still validated.
+- **One price at both purities.** Retail deals in gold baht either way, so there is no 96.5/99.9
+  derivation as on the wholesale side.
+- **`operationFee` sits beside `totalAmount`, never inside it.** `totalAmount` stays
+  `weightGb × pricePerGb` so it is comparable against the wholesale domains, which carry no fees, and
+  so the price-per-gold-baht average reads spread rather than fee. Blending them is unrecoverable
+  after the fact, which is why the column exists before anything reads it. Consumers needing all-in
+  cash sum the two.
+- **No brand.** `brandId` is nullable and unread: brand keys an inventory pool and there is none.
+- **`source`** marks how a row arrived (`MANUAL` today), so a later POS feed stays distinguishable.
+  Migration 0017 dropped the six sync-only columns — `buyNumb`/`saleNumb`, `custCode`, `emplCode`,
+  `brandText`, `sizeText`, `goldPriceSnapshot` — the tables being empty at the time.
+- **Scope is `BAR` and `PLATE` only.** Anything else lives in another system.
+
 ### Brand at inventory time — `infrastructure/brand-split.ts`
 
 **Neither wholesale table has a `brand_id` column.** Brand is not a property of an order, it is a
@@ -316,7 +353,7 @@ Recording an event and the event happening are different facts. On day one the s
 | `transactionDate` (`movementDate` on the ledger) | the business day the deal or adjustment happened — a `date` column, `YYYY-MM-DD` | operator picks it, optional on the wire, defaults to today |
 | `recordedAt` / `auditedAt` / `movedAt` | when the row reached the database | server clock, never accepted from a caller |
 
-- Carried by **wholesale-buy**, **wholesale-sell**, **stock gain** and **stock loss**. `inventory_movements.movementDate` is the trading day the metal moved: the picked date for a manual adjustment, the day of the transition for a buy reaching `STOCKED` or a sell reaching `PACKED` — the order's own date may be older, but the metal moved when it moved.
+- Carried by **wholesale-buy**, **wholesale-sell**, **retail-buy**, **retail-sell**, **stock gain** and **stock loss**. It matters most on the retail pair, which is written up after the fact — a whole week of counter trades can be entered on one afternoon, and each has to land in the period it happened in. `inventory_movements.movementDate` is the trading day the metal moved: the picked date for a manual adjustment, the day of the transition for a buy reaching `STOCKED` or a sell reaching `PACKED` — the order's own date may be older, but the metal moved when it moved.
 - **A day, not an instant.** All the picked date decides is which Fri–Thu period the record lands in, and that boundary falls on a day. A time would add no information and one more timezone to get wrong.
 - **"Today" is Bangkok's today.** `todayBusinessDate()` / `businessDateOf(date)` in `@gold-platform/types` format on `Asia/Bangkok`, not on the server's or browser's clock. Never compare `recordedAt.slice(0, 10)` against a picked date — that answers the question in UTC, a different calendar for seven hours a day.
 - **`businessDateSchema`** (also in types) validates a picked date: `YYYY-MM-DD`, not in the future, no floor on backdating. **`businessDaySchema`** is the shape-only form used for report windows, which may reach forward.
@@ -328,17 +365,19 @@ Recording an event and the event happening are different facts. On day one the s
 
 `settlementPeriod` is a reporting bucket — a week label (e.g. `"2026-W24"`) auto-computed from `transactionDate` using a fixed Fri–Thu boundary. Callers never supply it. Deriving it from the insert time instead would make backdating cosmetic: an order backdated to last Thursday has to land in last week's period.
 
-`infrastructure/settlement.ts` exports `resolveSettlementPeriodOn(businessDate)` — the form the domains call, since what they hold is a day — over `resolveSettlementPeriod(date)`. It shifts the date back 4 days before computing the ISO week, which maps each Fri–Thu span onto exactly one Mon–Sun ISO week so no two periods collide. **Both wholesale domains use it; retail and receive still take `settlementPeriod` from the caller and should be migrated onto it along with `transactionDate`.**
+`infrastructure/settlement.ts` exports `resolveSettlementPeriodOn(businessDate)` — the form the domains call, since what they hold is a day — over `resolveSettlementPeriod(date)`. It shifts the date back 4 days before computing the ISO week, which maps each Fri–Thu span onto exactly one Mon–Sun ISO week so no two periods collide. **Both wholesale domains and both retail domains use it. `receive` still takes `settlementPeriod` from the caller and should be migrated onto it along with `transactionDate`.**
 
 Correcting `transactionDate` re-derives the period, and `PATCH` accepts it only while the transaction is `CREATED` — the same lock that governs every other editable field. After confirmation the assignment is immutable.
 
-Each domain exposes a summary endpoint for net position reporting:
-- `GET /retail-buy/settlement/:period/summary`
-- `GET /retail-sell/settlement/:period/summary`
-- `GET /wholesale-buy/settlement/:period/summary`
-- `GET /wholesale-sell/settlement/:period/summary`
+**There are no settlement summary endpoints.** This section previously listed
+`GET /{domain}/settlement/:period/summary` for all four transaction domains as though they existed;
+none of them do, in any routes file. The plan of record still holds — split per domain rather than
+merged, so domains stay isolated, with the client calling them in parallel — but it belongs to the
+unbuilt Phase 4 position view.
 
-Endpoints are split per domain (not merged) to keep domains isolated. Client calls in parallel to build a combined dashboard view.
+What exists today for reading a period back is the four list endpoints' `from`/`to` window and the
+xlsx export each list page builds from it, which states the weighted average price per gold baht.
+Four files, read side by side, is the current answer to "did we buy and sell well".
 
 ## Product Type × Purity Constraint
 
@@ -426,7 +465,7 @@ anyone scrolls.
 
 | File | Tables |
 |------|--------|
-| `master.schema.ts` | `gold_product_type`, `gold_brands`, `purities`, `bar_sizes`, `suppliers`, `supplier_product_types`, `suppler_brands` (now read — drives the brand split), `unit_conversion`, `branches`, `product_type_purities` (planned) |
+| `master.schema.ts` | `gold_product_type`, `gold_brands`, `purities`, `bar_sizes`, `suppliers`, `supplier_product_types`, `suppler_brands` (now read — drives the brand split), `unit_conversion`, `branches` (now seeded — 47 rows, and required by both retail tables), `product_type_purities` |
 | `inventory.schema.ts` | `inventory_balance`, `inventory_movements`, `stock_gain_adjustments`, `stock_loss_adjustments`, `product_switch_adjustments` |
 | `wholesale-buy.schema.ts` | `whole_buy_transactions`, `whole_buy_statuses` |
 | `wholesale-sell.schema.ts` | `whole_sell_transactions`, `whole_sell_statuses` |
@@ -440,8 +479,8 @@ anyone scrolls.
 
 | Domain | Filters |
 |--------|---------|
-| retail-buy | `currentStatus`, `settlementPeriod`, `branchCode` |
-| retail-sell | `currentStatus`, `settlementPeriod`, `branchCode` |
+| retail-buy | `currentStatus`, `settlementPeriod`, `branchCode`, `from`/`to` |
+| retail-sell | `currentStatus`, `settlementPeriod`, `branchCode`, `from`/`to` |
 | wholesale-buy | `currentStatus`, `settlementPeriod`, `supplierId`, `from`/`to` |
 | wholesale-sell | `currentStatus`, `settlementPeriod`, `supplierId`, `from`/`to` |
 | receive | `currentStatus`, `settlementPeriod`, `branchCode` |
@@ -456,14 +495,37 @@ is what the (unbuilt) management view will use.
 ## Open Items
 
 1. **User FK** — `recordedBy / createdBy / movedBy / auditedBy` are plain `varchar`; blocked on employee/customer domain decision (see below)
-2. **`custCode` / `emplCode` FK** — retail domains use legacy codes; blocked on same decision
-3. **Employee vs user identity** — recommendation: separate `employees` table (carries `emplCode`) from `users` (login only); `customers` table for `custCode`. Defer until stakeholders decide legacy sync strategy
+2. ~~**`custCode` / `emplCode` FK**~~ — moot for now: migration 0017 **dropped** both columns from the retail tables rather than leaving them unfilled. A walk-in customer is not an entity here, and the trade's only nameable party is the branch. They return with the customer/employee domains, not before.
+3. **Employee vs user identity** — recommendation: separate `employees` table from `users` (login only), plus a `customers` table. Defer until stakeholders decide the legacy sync strategy. **Customer gold deposits need this**: gold left for safekeeping is custody, not a trade — title does not transfer — so it needs its own domain and must never be recorded as a retail-buy.
 4. **`users` table PK** — currently `serial` (integer); should migrate to `uuid` to match all other tables before adding any FKs
 5. ~~**DB migrations** — no migration files yet~~ — resolved: `drizzle/` holds 0000–0014. In production migrations run via `node dist/scripts/migrate.js` (`drizzle-orm`'s own migrator), because `drizzle-kit` is a devDependency and is not in the runtime image. Snapshots for 0007–0009 are missing from `drizzle/meta/`; `generate` is unaffected (it diffs only the latest) but the history cannot be replayed from snapshots.
 6. **Goldbar-to-goldbar conversion** — resolved: `smelting` increments domestic 99.9% pool; `convert_out` decrements domestic or foreign pool. No separate conversion domain needed.
 7. **Jewelry inventory** — deferred. Non-fungible tracking in Sprint 1 uses `productSwitch` to move weight between brand pools (either direction) when a legacy POS discrepancy occurs. True item-level non-fungible tracking is a future phase.
 8. ~~**`reverseDecrement()`** — not yet wired~~ — it is wired: wholesale-sell calls it on `RETURNED`.
 9. ~~**Daily snapshot as hard gate**~~ — resolved: outbound cost now uses live WAC from the balance at decrement time (`decrementWithin`). The daily-snapshot table and endpoints were removed entirely; no day-open compute is required before outbound transactions.
+10. **POS sync** — deferred; the sell-gold-bar document it depends on is unfinished. `source` on both retail tables is the seam (`MANUAL` today). A feed will also want a nullable document-number column to group multi-line receipts, since one row is one line today; that is an additive column, not a reshape.
+11. **Money precision** — every `decimal` column is declared without precision/scale and read in `mode: 'number'`, so amounts come back as JS floats and there is no decimal library anywhere. Retail multiplies its way into the same place wholesale already lives. Worth one pass across all domains rather than pinning `decimal(14,2)` on the newest tables and splitting the convention.
+12. **Retail is `BAR` + `PLATE` only** — matching the seeded `product_type_purities` pairings. Anything else lives in another system, so no jewellery product type was added.
+
+## Branches
+
+`branches` is the counterparty side of both retail tables and had **never held a row**, so no retail
+transaction could be inserted at all whatever the request body said. It is now seeded with the
+shop's 47 branches from their own export.
+
+- **`branchCode` is the legacy numeric id, not the G-number.** Branch `1` is G006 and branch `6` is
+  G001 — the two sequences diverged long ago. The numeric id is the primary key and is what lands on
+  every transaction; the G-number is display only.
+- **`deletedAt` (nullable) is the tombstone; `active` is the reversible "not trading right now".**
+  They mean different things and both are kept. `deletedAt` is also the only workable answer once
+  transactions reference a branch, because a hard delete becomes impossible at that point. This makes
+  `branches` the first soft-deleted table here — every other table uses `active` alone.
+- **`GET /master-data/branches` deliberately does not filter.** A closed branch still has to resolve
+  its name on every transaction it ever recorded, so filtering server-side would leave historical
+  rows showing a bare code. Choosing what to *offer* is a form's decision: `liveBranches()` on the web
+  side filters the create-form dropdown, while list filters and detail pages read the full set.
+- There is **no opening-date column**. The export carries one, but it is empty for the thirteen
+  oldest branches and nothing reads it.
 
 ## Tests
 

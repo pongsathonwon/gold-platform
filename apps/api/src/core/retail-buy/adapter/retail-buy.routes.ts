@@ -1,70 +1,58 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
+import {
+    advanceRetailBuyStatusSchema, businessDaySchema, createRetailBuySchema, retailBuyStatusSchema,
+} from "@gold-platform/types";
 import { runEffect } from "../../../infrastructure/runtime.js";
-import { authMiddleware } from "../../../infrastructure/http/middleware/auth.middleware.js";
+import { authMiddleware, currentUsername } from "../../../infrastructure/http/middleware/auth.middleware.js";
 import { createTransaction, advanceStatus, getTransaction, listTransactions } from "../application/retail-buy.usecase.js";
-import { TransactionNotFoundError, InvalidTransitionError } from "../port/retail-buy.port.js";
+import { InvalidTransitionError, NoteRequiredError, TransactionNotFoundError } from "../port/retail-buy.port.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
+import { InvalidQuantityError, ProductTypePurityNotFoundError, quantityErrorMessage } from "../../../infrastructure/quantity.js";
+import { RetailBuyStatus } from "../../../infrastructure/db/schema/retail-buy.schema.js";
 
 function toHttpError(error: unknown): [string, number] {
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
+    if (error instanceof NoteRequiredError) return [`a note is required when moving to ${error.status}`, 422]
+    if (error instanceof ProductTypePurityNotFoundError) return [`ไม่พบการจับคู่ประเภทสินค้ากับความบริสุทธิ์`, 422]
+    if (error instanceof InvalidQuantityError) return [quantityErrorMessage(error), 422]
     if (error instanceof PurityNotFoundError) return [`purity ${error.purityId} not found`, 422]
     if (error instanceof NoConversionRateError) return [`no conversion rate available`, 503]
     return [JSON.stringify(error), 500]
 }
 
-const retailBuyStatusValues = ['CONFIRMED', 'CANCELLED'] as const
-
-const createTransactionSchema = z.object({
-    buyNumb: z.string().min(1),
-    branchCode: z.string().min(1),
-    custCode: z.string().min(1),
-    emplCode: z.string().min(1),
-    purityId: z.string().min(1),
-    brandId: z.string().min(1),
-    productTypeId: z.string().min(1),
-    brandText: z.string().min(1),
-    sizeText: z.string().min(1),
-    weight: z.number().positive(),
-    pricePerGb: z.number().positive(),
-    goldPriceSnapshot: z.number().positive(),
-    settlementPeriod: z.string().min(1),
-    recordedBy: z.string().min(1),
-})
-
-const advanceStatusSchema = z.object({
-    toStatus: z.enum(retailBuyStatusValues),
-    note: z.string().optional(),
-    updatedBy: z.string().min(1),
-})
-
 const listQuerySchema = z.object({
-    currentStatus: z.enum(['DRAFT', ...retailBuyStatusValues]).optional(),
+    currentStatus: retailBuyStatusSchema.optional(),
     settlementPeriod: z.string().optional(),
     branchCode: z.string().optional(),
+    // business days, both ends inclusive — the window an operator actually browses in
+    from: businessDaySchema.optional(),
+    to: businessDaySchema.optional(),
 })
 
 /**
- * Every route here requires an authenticated caller.
+ * Every route requires an authenticated caller, and the actor is taken from the verified token.
  *
- * The router previously carried no middleware, so an anonymous request reached the Zod validator
- * rather than a 401 — meaning a well-formed body would have created a real transaction. Reads
- * were open too. Roles are deliberately not applied yet: this is ordinary trading-day work, and
- * which of it (if any) should be admin-only is a business question nobody has answered.
+ * `recordedBy` / `updatedBy` used to arrive in the request body, which meant any authenticated user
+ * could attribute a trade to a colleague. They are no longer part of the wire contract at all.
+ *
+ * No `requireRole`: recording the day's counter trades is ordinary operator work. The ADMIN gate
+ * exists for figures nobody else asked for — the manual inventory adjustments — and retail has a
+ * customer on the other side of it.
  */
 export const retailBuyRoutes = new Hono()
     .use(authMiddleware)
-    .post("/", zValidator("json", createTransactionSchema), async (c) => {
+    .post("/", zValidator("json", createRetailBuySchema), async (c) => {
         const req = c.req.valid("json")
-        const result = await runEffect(createTransaction(req))
+        const result = await runEffect(createTransaction({ ...req, recordedBy: currentUsername(c) }))
         if (result.result === "success") return c.json({ data: result.data }, 201)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
     .get("/", zValidator("query", listQuerySchema), async (c) => {
         const req = c.req.valid("query")
-        const result = await runEffect(listTransactions(req))
+        const result = await runEffect(listTransactions({ ...req, currentStatus: req.currentStatus as RetailBuyStatus | undefined }))
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
@@ -73,9 +61,15 @@ export const retailBuyRoutes = new Hono()
         if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })
-    .post("/:id/status", zValidator("json", advanceStatusSchema), async (c) => {
+    .post("/:id/status", zValidator("json", advanceRetailBuyStatusSchema), async (c) => {
         const req = c.req.valid("json")
-        const result = await runEffect(advanceStatus({ transactionId: c.req.param("id"), ...req }))
-        if (result.result === "success") return c.json({}, 200)
+        const result = await runEffect(advanceStatus({
+            transactionId: c.req.param("id"),
+            ...req,
+            toStatus: req.toStatus as RetailBuyStatus,
+            updatedBy: currentUsername(c),
+        }))
+        // returns the status actually reached, so the UI can say so rather than assume
+        if (result.result === "success") return c.json({ data: result.data }, 200)
         const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
     })

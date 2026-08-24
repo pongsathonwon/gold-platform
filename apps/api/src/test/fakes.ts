@@ -6,8 +6,16 @@ import type {
 import type {
     CreateWholeSellStatus, WholeSellStatus, WholeSellTransactionShape,
 } from "../infrastructure/db/schema/wholesale-sell.schema.js";
+import type {
+    CreateRetailBuyStatus, RetailBuyStatus, RetailBuyTransactionShape,
+} from "../infrastructure/db/schema/retail-buy.schema.js";
+import type {
+    CreateRetailSellStatus, RetailSellStatus, RetailSellTransactionShape,
+} from "../infrastructure/db/schema/retail-sell.schema.js";
 import { TransactionNotFoundError as BuyNotFound } from "../core/wholesale-buy/port/wholesale-buy.port.js";
 import { TransactionNotFoundError as SellNotFound } from "../core/wholesale-sell/port/wholesale-sell.port.js";
+import { TransactionNotFoundError as RetailBuyNotFound } from "../core/retail-buy/port/retail-buy.port.js";
+import { TransactionNotFoundError as RetailSellNotFound } from "../core/retail-sell/port/retail-sell.port.js";
 
 /**
  * In-memory stand-ins for the two wholesale repositories.
@@ -138,6 +146,100 @@ export function makeFakeSellRepo(transaction: WholeSellTransactionShape) {
         listCreated: () =>
             Effect.succeed(state.transaction.currentStatus === "CREATED" ? [state.transaction] : []),
         createStatus: (req: CreateWholeSellStatus) => {
+            state.statuses.push(req)
+            return Effect.void
+        },
+        listStatuses: () => Effect.succeed([]),
+    }
+
+    return { state, repo }
+}
+
+/**
+ * The retail pair. Far smaller than their wholesale counterparts, and the missing methods are the
+ * point: retail has no update, no contested weight, no settlement and no bulk-confirm sweep, so a
+ * test that reached for one would not compile.
+ */
+
+const retailBaseFields = {
+    branchCode: "HQ",
+    purityId: "965",
+    productTypeId: "BAR",
+    brandId: null,
+    // 5 gold baht at 49,000/GB — a counter-sized trade, unlike wholesale's 12 GB order
+    weightGb: 5,
+    weightGm: 76,
+    conversionFactor: 15.2,
+    pricePerGb: 49000,
+    totalAmount: 245000,
+    operationFee: null,
+    // Same consistent same-day case as the wholesale fixture: Friday 12 June opens 2026-W24.
+    transactionDate: "2026-06-12",
+    settlementPeriod: "2026-W24",
+    source: "MANUAL",
+    notes: null,
+    recordedBy: "tester",
+    recordedAt: new Date("2026-06-12T09:00:00Z"),
+}
+
+export function retailBuyTransaction(
+    overrides: Partial<RetailBuyTransactionShape> = {},
+): RetailBuyTransactionShape {
+    return { id: randomUUID(), ...retailBaseFields, currentStatus: "CONFIRMED", ...overrides }
+}
+
+export function retailSellTransaction(
+    overrides: Partial<RetailSellTransactionShape> = {},
+): RetailSellTransactionShape {
+    return { id: randomUUID(), ...retailBaseFields, currentStatus: "CONFIRMED", ...overrides }
+}
+
+export function makeFakeRetailBuyRepo(transaction: RetailBuyTransactionShape) {
+    const state = { transaction, statuses: [] as CreateRetailBuyStatus[] }
+
+    const repo = {
+        createTransaction: (req: RetailBuyTransactionShape) => {
+            state.transaction = req
+            return Effect.succeed(req)
+        },
+        findTransactionById: (id: string) =>
+            id === state.transaction.id
+                ? Effect.succeed(state.transaction)
+                : Effect.fail(new RetailBuyNotFound({ id })),
+        listTransactions: () => Effect.succeed([state.transaction]),
+        updateCurrentStatus: (_id: string, status: RetailBuyStatus) => {
+            state.transaction = { ...state.transaction, currentStatus: status }
+            return Effect.void
+        },
+        createStatus: (req: CreateRetailBuyStatus) => {
+            state.statuses.push(req)
+            return Effect.void
+        },
+        listStatuses: () => Effect.succeed([]),
+    }
+
+    return { state, repo }
+}
+
+/** The same, for retail-sell. */
+export function makeFakeRetailSellRepo(transaction: RetailSellTransactionShape) {
+    const state = { transaction, statuses: [] as CreateRetailSellStatus[] }
+
+    const repo = {
+        createTransaction: (req: RetailSellTransactionShape) => {
+            state.transaction = req
+            return Effect.succeed(req)
+        },
+        findTransactionById: (id: string) =>
+            id === state.transaction.id
+                ? Effect.succeed(state.transaction)
+                : Effect.fail(new RetailSellNotFound({ id })),
+        listTransactions: () => Effect.succeed([state.transaction]),
+        updateCurrentStatus: (_id: string, status: RetailSellStatus) => {
+            state.transaction = { ...state.transaction, currentStatus: status }
+            return Effect.void
+        },
+        createStatus: (req: CreateRetailSellStatus) => {
             state.statuses.push(req)
             return Effect.void
         },

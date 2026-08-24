@@ -1,6 +1,12 @@
-import { decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { date, decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { branches, brands, productTypes, purities } from "./master.schema.js";
 
+/**
+ * `DRAFT` and `SHIPPED` are retained as values but are unreachable through `RETAIL_SELL_TRANSITIONS`.
+ * A manual write-up lands on `CONFIRMED`, and shipping — along with the inventory decrement that
+ * used to hang off it — is deferred: retail moves no stock today. Both come back by adding the
+ * transition, with no migration.
+ */
 export const retailSellStatusEnum = pgEnum('retail_sell_status', [
     'DRAFT',
     'CONFIRMED',
@@ -11,34 +17,45 @@ export const retailSellStatusEnum = pgEnum('retail_sell_status', [
 export const retailSellTransactions = pgTable('retail_sell_transactions', {
     id: uuid().primaryKey().defaultRandom(),
 
-    saleNumb: varchar().unique().notNull(), // legacy system transaction number — used for sync
     branchCode: varchar().notNull().references(() => branches.branchCode),
-    custCode: varchar().notNull(), // legacy customer ID — no FK until customer domain exists
-    emplCode: varchar().notNull(), // cashier employee ID — no FK until employee domain exists
 
     purityId: varchar().notNull().references(() => purities.id),
-    brandId: varchar().notNull().references(() => brands.id),
     productTypeId: varchar().notNull().references(() => productTypes.id),
-
-    // raw strings from legacy system — sync service owns the mapping to master data IDs
-    brandText: varchar().notNull(),
-    sizeText: varchar().notNull(),
+    /**
+     * Nullable, and unread. Retail moves no stock — inventory is adjusted manually — so there is no
+     * pool for a brand to key. It stays on the table because the metal does carry a stamp and a
+     * later inventory coupling would want it; nothing today may depend on it being present.
+     */
+    brandId: varchar().references(() => brands.id),
 
     weightGb: decimal({ mode: 'number' }).notNull(),
     weightGm: decimal({ mode: 'number' }).notNull(),
     conversionFactor: decimal({ mode: 'number' }).notNull(), // GB * factor = GM, snapshotted from unit_conversions
 
-    pricePerGb: decimal({ mode: 'number' }).notNull(),
-    goldPriceSnapshot: decimal({ mode: 'number' }).notNull(), // market gold price at transaction time
-    totalAmount: decimal({ mode: 'number' }).notNull(), // weightGb * pricePerGb, computed at creation
+    pricePerGb: decimal({ mode: 'number' }).notNull(), // what the customer was charged, per gold baht
+    totalAmount: decimal({ mode: 'number' }).notNull(), // weightGb * pricePerGb — gold value ONLY
+    /**
+     * ค่าบล็อค on ทองแผ่น, in THB. Deliberately **outside** `totalAmount`: keeping the total to gold
+     * value is what makes it comparable against the wholesale domains, which have no fees at all,
+     * and what keeps the price-per-gold-baht average from reading a fee as spread. Anything needing
+     * all-in cash adds the two.
+     */
+    operationFee: decimal({ mode: 'number' }),
 
-    settlementPeriod: varchar().notNull(), // week index Fri–Thu e.g. "2026-W24"
+    /** The business day the deal happened — picked by the operator, defaults to today, never future. */
+    transactionDate: date().notNull(),
+    /** Fri–Thu week label, e.g. "2026-W24". Derived server-side from `transactionDate`, never sent. */
+    settlementPeriod: varchar().notNull(),
 
-    // write-through cache — DRAFT | CONFIRMED | SHIPPED | CANCELLED
-    currentStatus: retailSellStatusEnum().notNull().default('DRAFT'),
+    // write-through cache of the latest status row — recomputable from retail_sell_statuses
+    currentStatus: retailSellStatusEnum().notNull().default('CONFIRMED'),
 
-    recordedBy: varchar().notNull(),
-    recordedAt: timestamp().defaultNow().notNull(),
+    /** How the row got here. `MANUAL` today; a POS feed will register its own value. */
+    source: varchar().notNull().default('MANUAL'),
+    notes: text(),
+
+    recordedBy: varchar().notNull(), // from the JWT, never the request body
+    recordedAt: timestamp().defaultNow().notNull(), // server clock
 })
 
 export type CreateRetailSellTransaction = typeof retailSellTransactions.$inferInsert;

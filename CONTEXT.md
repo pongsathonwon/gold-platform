@@ -77,7 +77,8 @@ pnpm docker:down    # docker compose down
 | ② | Manual adjustments (stock gain, stock loss, product switch) | In progress |
 | ③ | wholesale-buy | **Complete** — full status machine incl. failure branches, API + UI |
 | ③ | wholesale-sell | **Complete** — mirror of wholesale-buy, decrement at `DELIVERED`, API + UI |
-| ③ | retail-buy, retail-sell, receive | Deferred to Sprint 2 |
+| ③ | retail-buy, retail-sell | **Complete** — manual write-up layer, no inventory coupling, API + UI |
+| ③ | receive | Deferred to Sprint 2 |
 | ③ | smelting, convert-out | Deferred to Sprint 3 |
 | ④ | Position / Period Net | Deferred |
 | ⑤ | หลอมทอง | Deferred |
@@ -205,6 +206,7 @@ Net Gold 99.99% (g)   = Σ grams received − Σ grams given
 |---|---|
 | Customer sells gold TO company (retail-buy) | Net Customer Orders |
 | Customer buys gold FROM company (retail-sell) | Net Customer Orders |
+| Operating fees on retail (ค่าบล็อค) | Net Cash only — stored beside `totalAmount`, never inside it, so the gold-value figures stay comparable with wholesale |
 | Company buys FROM supplier (wholesale-buy) | Net Company Orders |
 | Company sells TO supplier (wholesale-sell) | Net Company Orders |
 | Branch ↔ HQ transfer (any direction) | **EXCLUDED — inventory only** |
@@ -230,7 +232,7 @@ One immutable row per Fri–Thu period. Rows never auto-sum. Each row shows Net 
 5. **Inventory cost is WAC via daily opening snapshot.** At day-open, `snapshotRate = totalCost / totalWeightGb` per pool is frozen. All outbound cost attribution uses `weight × snapshotRate`. No outbound movement is permitted before the snapshot is computed for today.
 6. **Domestic pool is protected.** Only `convert_out` can decrement domestic-origin stock. All other outbound domains are hardcoded to `foreign` and cannot touch the domestic pool.
 6. **Bar sizes are interchangeable within the same brand.** Two 5 GB = one 10 GB. Brand segregation still applies.
-7. **Inventory and position are decoupled.** A retail-buy feeds position (period net). It does not touch HQ inventory.
+7. **Inventory and position are decoupled.** Retail feeds position (period net) and touches no inventory *on either side* — a retail-sell no longer decrements. The shop cannot trace which physical gold came from which customer, so stock is corrected by hand through `/inventory/gain|loss`.
 8. **Period assignment is immutable.** Transactions cannot be reassigned after posting. It is derived from `transactionDate` — the picked business day — and correcting that date is accepted only while the transaction is still `CREATED`; confirmation is the lock.
 9. **Internal transfers are excluded from period net.** They are inventory-only events.
 10. **`conversionFactor` is snapshotted at creation.** Historical records stay accurate if the master rate changes.

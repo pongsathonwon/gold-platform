@@ -635,3 +635,157 @@ export const advanceWholeSellStatusSchema = z.object({
 })
 
 export type AdvanceWholeSellStatusReq = z.infer<typeof advanceWholeSellStatusSchema>
+
+// ---------------------------------------------------------------------------
+// retail — manual write-up of counter trades
+// ---------------------------------------------------------------------------
+//
+// Retail exists here to answer one question: was the price we dealt at a good one. It is a record
+// of a trade that already happened, not a counter system, and it is deliberately thin.
+//
+// Two things follow from that, and they are what make retail differ from wholesale:
+//
+//   1. **No status machine to speak of.** A write-up is a fact. `createTransaction` lands directly
+//      on CONFIRMED and the only move left is voiding it. Wholesale's states exist because a
+//      supplier order genuinely passes through them over days; a counter trade does not.
+//   2. **No inventory coupling on either side.** Stock is adjusted manually through
+//      /inventory/gain|loss. That is why neither domain carries a brand: brand keys a pool, and
+//      there is no pool to key.
+//
+// DRAFT (both) and SHIPPED (sell) survive as enum values so a later POS feed and a later shipping
+// flow re-enter without a migration. They are simply not reachable from CONFIRMED today.
+
+export const RETAIL_BUY_STATUSES = [
+  // Unreachable via createTransaction — kept for a POS feed, which does have a pending state.
+  { value: 'DRAFT', label: 'ร่าง', kind: 'happy', terminal: false },
+  { value: 'CONFIRMED', label: 'ยืนยันแล้ว', kind: 'happy', terminal: false },
+  // The void. A manual entry cannot be edited into shape — cancel it, with a reason, and re-enter.
+  { value: 'CANCELLED', label: 'ยกเลิก', kind: 'bad', terminal: true },
+] as const
+
+export const RETAIL_SELL_STATUSES = [
+  { value: 'DRAFT', label: 'ร่าง', kind: 'happy', terminal: false },
+  { value: 'CONFIRMED', label: 'ยืนยันแล้ว', kind: 'happy', terminal: false },
+  // Reachable from nothing and leading nowhere until shipping is built. It is listed so historical
+  // rows and dropdowns can still resolve a label for it.
+  { value: 'SHIPPED', label: 'ส่งมอบแล้ว', kind: 'happy', terminal: true },
+  { value: 'CANCELLED', label: 'ยกเลิก', kind: 'bad', terminal: true },
+] as const
+
+export const retailBuyStatusSchema = z.enum(
+  RETAIL_BUY_STATUSES.map((s) => s.value) as [string, ...string[]]
+)
+
+export const retailSellStatusSchema = z.enum(
+  RETAIL_SELL_STATUSES.map((s) => s.value) as [string, ...string[]]
+)
+
+export type RetailBuyStatusValue = (typeof RETAIL_BUY_STATUSES)[number]['value']
+export type RetailSellStatusValue = (typeof RETAIL_SELL_STATUSES)[number]['value']
+
+export const retailBuyStatusLabel = (value: string) =>
+  RETAIL_BUY_STATUSES.find((s) => s.value === value)?.label ?? value
+
+export const retailSellStatusLabel = (value: string) =>
+  RETAIL_SELL_STATUSES.find((s) => s.value === value)?.label ?? value
+
+// Voiding a record that already counted toward a week's figures has to say why. It is the only
+// transition either domain has, so it is also the only thing the status log ever explains.
+export const RETAIL_BUY_NOTE_REQUIRED: readonly string[] = RETAIL_BUY_STATUSES
+  .filter((s) => s.kind === 'bad')
+  .map((s) => s.value)
+
+export const RETAIL_SELL_NOTE_REQUIRED: readonly string[] = RETAIL_SELL_STATUSES
+  .filter((s) => s.kind === 'bad')
+  .map((s) => s.value)
+
+// The server re-validates every transition; this drives which buttons the UI offers.
+//
+// DRAFT keeps its outbound moves rather than being amputated: they are the right moves *if* a DRAFT
+// row ever exists. What guarantees no draft step today is that createTransaction lands on CONFIRMED,
+// not a hole in this map.
+export const RETAIL_BUY_TRANSITIONS: Record<RetailBuyStatusValue, RetailBuyStatusValue[]> = {
+  DRAFT: ['CONFIRMED', 'CANCELLED'],
+  CONFIRMED: ['CANCELLED'],
+  CANCELLED: [],
+}
+
+export const RETAIL_SELL_TRANSITIONS: Record<RetailSellStatusValue, RetailSellStatusValue[]> = {
+  DRAFT: ['CONFIRMED', 'CANCELLED'],
+  // No SHIPPED. Wiring it back means adding it here and restoring the decrement — nothing else.
+  CONFIRMED: ['CANCELLED'],
+  SHIPPED: [],
+  CANCELLED: [],
+}
+
+// A cancelled trade did not happen, so it cannot inform what gold cost or fetched. It still renders
+// in the body of a list and an export, with a นับในยอดรวม column — a total that says "excluding 2"
+// and gives no way to see which two is not auditable.
+export const RETAIL_BUY_EXCLUDED_FROM_TOTALS: readonly RetailBuyStatusValue[] = ['CANCELLED']
+export const RETAIL_SELL_EXCLUDED_FROM_TOTALS: readonly RetailSellStatusValue[] = ['CANCELLED']
+
+/**
+ * Create is field-identical on both sides — a buy and a sell differ in direction, not in shape.
+ *
+ * Note what is absent versus `createWholeBuySchema`: no counterparty (a walk-in customer is not an
+ * entity here), no brand, and no second price. Retail deals in gold baht at both purities, so the
+ * 96.5/99.9 derivation wholesale needs has nothing to do here.
+ */
+const retailCreateShape = {
+  branchCode: z.string().min(1),
+  purityId: z.string().min(1),
+  productTypeId: z.string().min(1),
+  /**
+   * In the unit product_type_purities defines for this pairing (kg or gold baht).
+   *
+   * Deliberately not `.int()`, which is what wholesale uses: an ordered weight is chosen off a
+   * price list, a counter weight is whatever the scale read. The pairing's min/step rules are
+   * skipped server-side for the same reason.
+   */
+  weight: z.number().positive(),
+  // What the trade was actually dealt at, per gold baht. Drives totalAmount.
+  pricePerGb: z.number().positive(),
+  /**
+   * ค่าบล็อค and the like, in THB — the whole fee for the row, not a rate.
+   *
+   * It is captured separately and stays *out* of totalAmount, so the price-per-gold-baht average
+   * reads spread rather than fee, and so the total stays comparable against wholesale, which has no
+   * fees at all. Whatever needs all-in cash adds the two. Blending them is unrecoverable after the
+   * fact, which is why the field exists before anything reads it.
+   */
+  operationFee: z.number().nonnegative().optional(),
+  // The business day the trade happened, defaulting to today. The settlement period is derived
+  // from it, so backdating a week of write-ups lands them in the weeks they belong to.
+  transactionDate: businessDateSchema.optional(),
+  notes: z.string().optional(),
+}
+
+export const createRetailBuySchema = z.object(retailCreateShape)
+export const createRetailSellSchema = z.object(retailCreateShape)
+
+export type CreateRetailBuyReq = z.infer<typeof createRetailBuySchema>
+export type CreateRetailSellReq = z.infer<typeof createRetailSellSchema>
+
+// Present for symmetry with wholesale and unused by any route today: a confirmed write-up is voided
+// and re-entered rather than edited, which keeps the correction in the status log where it is
+// auditable instead of overwriting the figure a week was already reported on.
+export const updateRetailBuySchema = createRetailBuySchema.partial()
+export const updateRetailSellSchema = createRetailSellSchema.partial()
+
+export type UpdateRetailBuyReq = z.infer<typeof updateRetailBuySchema>
+export type UpdateRetailSellReq = z.infer<typeof updateRetailSellSchema>
+
+// No actualWeight, settledAmount, returnReason or brandSplit: there is no second measurement, no
+// settlement, no counterparty to blame and no pool to draw from.
+export const advanceRetailBuyStatusSchema = z.object({
+  toStatus: retailBuyStatusSchema,
+  note: z.string().optional(),
+})
+
+export const advanceRetailSellStatusSchema = z.object({
+  toStatus: retailSellStatusSchema,
+  note: z.string().optional(),
+})
+
+export type AdvanceRetailBuyStatusReq = z.infer<typeof advanceRetailBuyStatusSchema>
+export type AdvanceRetailSellStatusReq = z.infer<typeof advanceRetailSellStatusSchema>

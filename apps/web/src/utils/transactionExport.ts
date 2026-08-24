@@ -7,14 +7,21 @@ import {
 } from "./excel";
 
 /**
- * The wholesale buy and sell reports.
+ * The four transaction reports: wholesale buy and sell, retail buy and sell.
  *
- * One builder serves both. The two domains differ in vocabulary and in which weight is the real
- * one — buy reports what was *delivered* against what was ordered, sell reports what was *agreed*
- * against what the buyer contests — but the shape of the report is identical, so the differences
- * are a config object rather than two near-copies that drift.
+ * One builder serves all of them. The domains differ in vocabulary and in which weight is the real
+ * one — a wholesale buy reports what was *delivered* against what was ordered, a wholesale sell what
+ * was *agreed* against what the buyer contests, and retail has one weight and nothing to compare it
+ * against — but the shape of the report is identical, so the differences are a config object rather
+ * than four near-copies that drift.
  *
- * Each page maps its own transactions into `WholesaleExportRow` before calling in. That mapping is
+ * **That sameness is the deliverable, not a convenience.** The question these files exist to answer
+ * is whether the shop bought well and sold well, and that is only readable if all four state their
+ * average the same way: value in THB over volume in gold baht, over the same kind of window, with
+ * the same rows excluded. A retail average computed even slightly differently could not be held
+ * against a wholesale one.
+ *
+ * Each page maps its own transactions into `TransactionExportRow` before calling in. That mapping is
  * where `countsTowardTotal()` and the page's own `amountOf` are applied, so the file totals exactly
  * what the screen totals.
  */
@@ -23,7 +30,7 @@ import {
  * A transaction flattened to what the report shows. The page has already resolved supplier and
  * product-type names and decided which weight and amount count.
  */
-export interface WholesaleExportRow {
+export interface TransactionExportRow {
   transactionDate: string;
   counterparty: string;
   productType: string;
@@ -51,7 +58,7 @@ export interface WholesaleExportRow {
 }
 
 /** What differs between the buy report and the sell report. */
-export interface WholesaleReportConfig {
+export interface TransactionReportConfig {
   /** Report title and file-name stem, e.g. "รายงานซื้อส่ง". */
   reportTitle: string;
   fileStem: string;
@@ -65,7 +72,7 @@ export interface WholesaleReportConfig {
   excludedNote: string;
 }
 
-export const BUY_REPORT: WholesaleReportConfig = {
+export const BUY_REPORT: TransactionReportConfig = {
   reportTitle: "รายงานซื้อส่ง",
   fileStem: "รายงานซื้อส่ง",
   counterpartyHeader: "ผู้ขายส่ง",
@@ -75,7 +82,7 @@ export const BUY_REPORT: WholesaleReportConfig = {
   excludedNote: "ไม่รวมรายการที่ยกเลิก/ปฏิเสธ/ตีกลับ/คืนเงิน/ตัดหนี้สูญ",
 };
 
-export const SELL_REPORT: WholesaleReportConfig = {
+export const SELL_REPORT: TransactionReportConfig = {
   reportTitle: "รายงานขายส่ง",
   fileStem: "รายงานขายส่ง",
   counterpartyHeader: "ผู้รับซื้อส่ง",
@@ -85,12 +92,43 @@ export const SELL_REPORT: WholesaleReportConfig = {
   excludedNote: "ไม่รวมรายการที่ยกเลิก/ปฏิเสธ/ตีกลับ",
 };
 
+/**
+ * The retail pair. The counterparty column carries the **branch**, not a customer: a walk-in is not
+ * an entity in this system, and the branch is the only party to the trade the shop can name. It is
+ * also the cut a manager would actually take — which shop is buying well — where a customer name
+ * would be a column of one-offs.
+ *
+ * `comparisonWeightLabel` is present but never populated. Retail passes `comparisonWeight*: null` on
+ * every row, so the builder emits an empty cell and the header stands over a blank column. It is
+ * kept rather than made optional because the column position is shared with wholesale, and the
+ * files are meant to be read side by side.
+ */
+export const RETAIL_BUY_REPORT: TransactionReportConfig = {
+  reportTitle: "รายงานซื้อปลีก",
+  fileStem: "รายงานซื้อปลีก",
+  counterpartyHeader: "สาขา",
+  weightLabel: "น้ำหนัก",
+  comparisonWeightLabel: "—",
+  averageLabel: "ราคาซื้อเฉลี่ย (บาท/บาททอง)",
+  excludedNote: "ไม่รวมรายการที่ยกเลิก",
+};
+
+export const RETAIL_SELL_REPORT: TransactionReportConfig = {
+  reportTitle: "รายงานขายปลีก",
+  fileStem: "รายงานขายปลีก",
+  counterpartyHeader: "สาขา",
+  weightLabel: "น้ำหนัก",
+  comparisonWeightLabel: "—",
+  averageLabel: "ราคาขายเฉลี่ย (บาท/บาททอง)",
+  excludedNote: "ไม่รวมรายการที่ยกเลิก",
+};
+
 const COLUMN_WIDTHS = [14, 24, 16, 18, 18, 18, 18, 18, 14].map((width) => ({ width }));
 
-const weightIn = (row: WholesaleExportRow, unit: ExportUnit) =>
+const weightIn = (row: TransactionExportRow, unit: ExportUnit) =>
   unit === "gb" ? row.weightGb : row.weightGm / 1000;
 
-const comparisonIn = (row: WholesaleExportRow, unit: ExportUnit) => {
+const comparisonIn = (row: TransactionExportRow, unit: ExportUnit) => {
   if (row.comparisonWeightGb === null) return null;
   return unit === "gb" ? row.comparisonWeightGb : (row.comparisonWeightGm ?? 0) / 1000;
 };
@@ -112,7 +150,7 @@ const comparisonIn = (row: WholesaleExportRow, unit: ExportUnit) => {
  * Dividing the kilogram sheet by its kilogram total would instead print a THB/kg figure under a
  * THB/บาททอง heading and destroy the comparison.
  */
-export function summarise(rows: WholesaleExportRow[], unit: ExportUnit) {
+export function summarise(rows: TransactionExportRow[], unit: ExportUnit) {
   const counted = rows.filter((r) => r.countsTowardTotal);
   const totalWeight = counted.reduce((sum, r) => sum + weightIn(r, unit), 0);
   const totalWeightGb = counted.reduce((sum, r) => sum + r.weightGb, 0);
@@ -139,7 +177,7 @@ export function summarise(rows: WholesaleExportRow[], unit: ExportUnit) {
  */
 function summaryBlock(
   summary: ReturnType<typeof summarise>,
-  config: WholesaleReportConfig,
+  config: TransactionReportConfig,
   unit: ExportUnit,
 ): SheetData {
   const excludedNote =
@@ -176,10 +214,10 @@ export function windowLabel(from: string, to: string) {
   return "ทุกช่วงเวลา";
 }
 
-export function buildWholesaleSheet(params: {
-  rows: WholesaleExportRow[];
+export function buildTransactionSheet(params: {
+  rows: TransactionExportRow[];
   unit: ExportUnit;
-  config: WholesaleReportConfig;
+  config: TransactionReportConfig;
   from: string;
   to: string;
   generatedAt: Date;
@@ -252,10 +290,10 @@ export function buildWholesaleSheet(params: {
 const SUMMARY_BLOCK_ROWS = 6;
 const STICKY_ROWS = TITLE_BLOCK_ROWS + SUMMARY_BLOCK_ROWS + 1;
 
-export function buildWholesaleWorkbook(params: {
-  nineSixFive: WholesaleExportRow[];
-  nineNineNine: WholesaleExportRow[];
-  config: WholesaleReportConfig;
+export function buildTransactionWorkbook(params: {
+  nineSixFive: TransactionExportRow[];
+  nineNineNine: TransactionExportRow[];
+  config: TransactionReportConfig;
   from: string;
   to: string;
   generatedAt: Date;
@@ -272,14 +310,14 @@ export function buildWholesaleWorkbook(params: {
     ] as const
   ).map(([unit, rows]) => ({
     sheet: SHEET_NAME[unit],
-    data: buildWholesaleSheet({ rows, unit, ...rest }),
+    data: buildTransactionSheet({ rows, unit, ...rest }),
     columns: COLUMN_WIDTHS,
     stickyRowsCount: STICKY_ROWS,
   }));
 }
 
 /** Names the file after whichever bounds the operator actually set — see `windowLabel`. */
-export function wholesaleFileName(config: WholesaleReportConfig, from: string, to: string) {
+export function transactionFileName(config: TransactionReportConfig, from: string, to: string) {
   if (from && to) return `${config.fileStem}_${from}_ถึง_${to}.xlsx`;
   if (from) return `${config.fileStem}_ตั้งแต่_${from}.xlsx`;
   if (to) return `${config.fileStem}_ถึง_${to}.xlsx`;

@@ -176,3 +176,64 @@ Running balance per purity (all brands mixed) on `/inventory/movements`, over a 
 - [x] **3. InventoryMovementPage** — from/to `type="date"` inputs (default today, MUI v9 `slotProps`), `คงเหลือสะสม` balance column per section (gb for 96.5, gm/1000 for 99.9), closing-balance footer. _Done: rows render ascending (oldest→newest) per operator preference; closing balance = last row._
 - [~] **4. Type-check both apps** + run the Verification flow. _Type-check PASSES for `apps/api` and `apps/web`; 18 web unit tests pass. **Live run blocked — Docker daemon down, Postgres 5432 closed.** Remaining: `docker compose up -d` + `pnpm dev`, then cross-check each section's closing balance (with `to = today`) against `SELECT purity_id, sum(total_weight_gb) FROM inventory_balance GROUP BY purity_id`._
 
+
+---
+
+# Retail Manual Entry (2026-08-24)
+
+Manual write-up of retail buy and sell, so all four transaction domains can be compared on the one
+question the business asks: **was the price we dealt at a good one?** POS integration stays deferred
+— its sell-gold-bar document is unfinished — so this is how retail figures reach the system.
+
+**Decisions taken with the operator:**
+- **No inventory coupling on either side.** Stock stays manual via `/inventory/gain|loss`.
+  Retail-sell's `SHIPPED` decrement was *removed*, not merely bypassed.
+- **Operating fee lives beside `totalAmount`, added only when a consumer needs it.** `totalAmount`
+  stays gold value alone so it is comparable against wholesale, which has no fees.
+- **Operator picks the date, the server timestamps, and the period follows the picked date.**
+- **`BAR` and `PLATE` only** — anything else lives in another system, so no jewellery product type.
+- **Branch metadata**: `insertedAt` + `deletedAt`; the opening date was dropped as unused and
+  unknown for the oldest thirteen branches.
+
+- [x] **1. Migration `0017_retail_manual_entry`** — dropped the six POS-sync columns from both retail
+  tables (they held zero rows), added `transaction_date` / `operation_fee` / `notes` / `source`, made
+  `brand_id` nullable, moved the status default to `CONFIRMED`; `branches` gained `inserted_at` +
+  `deleted_at`. Hand-authored following the 0016 precedent, journal entry added. **Applied.**
+- [x] **2. packages/types** — `RETAIL_BUY/SELL_STATUSES`, `..._TRANSITIONS`, `..._NOTE_REQUIRED`,
+  `..._EXCLUDED_FROM_TOTALS`, create/update/advance schemas. Both ports re-type the transition maps
+  against the DB enum, so divergence is a compile error.
+- [x] **3. API** — both domains rewritten: create lands on `CONFIRMED` with one status row,
+  `transactionDate` defaults and drives `resolveSettlementPeriodOn`, weights via
+  `resolveMeasuredQuantity` (not `resolveQuantity` — a counter weight is measured, so 3.7 GB is
+  valid), actor from the JWT, note required on void, `from`/`to` list window sorted
+  `(transactionDate DESC, recordedAt DESC)`. The retail-sell `decrement` import is gone.
+- [x] **4. Seed** — 47 real branches from the shop's export, verified field-by-field. `branchCode` is
+  the legacy numeric id and is **not** the G-number (branch 1 is G006, branch 6 is G001).
+- [x] **5. Web** — `pages/retail/` (three shared components + a per-domain config, two exported
+  component types per page so React remounts rather than reconciling), `utils/retailStatus.ts`,
+  `hooks/useRetail*.ts`, `useBranches` + `liveBranches`, routes and two navbar links.
+- [x] **6. Export** — `utils/wholesaleExport.ts` renamed to `transactionExport.ts`; one builder now
+  serves all four domains via `RETAIL_BUY_REPORT` / `RETAIL_SELL_REPORT`. Retail passes
+  `comparisonWeight*: null` and its fee never reaches the file.
+- [x] **7. Tests** — 34 new API (create-on-`CONFIRMED`, period derivation, note enforcement, and that
+  **no inventory usecase is called**), 21 new web. 96 API + 177 web pass; all packages type-check.
+- [x] **8. Verification** — drove the live API and the running app. Backdated to Thu 20 Aug → period
+  W33 while today → W34; weight 3.7 accepted; `totalAmount` 177,600 with the 500 fee outside it;
+  `recordedBy` taken from the token despite a conflicting body field; `CONFIRMED → SHIPPED` 422; void
+  without a note 422, with one 200; **`inventory_movements` unchanged at 3 throughout**. The
+  retail-sell report over live data averaged 69,000 (1 GB @60k + 9 GB @70k) — weighted by weight,
+  not the 65,000 mean of the prices — with the footer agreeing with the summary block.
+
+## Follow-ups not done
+
+- **POS sync.** `source` is the seam. A feed will also want a nullable document-number column to
+  group multi-line receipts; one row is one line today.
+- **Customer deposits** — custody, not a trade. Needs its own domain; must never be a retail-buy.
+- **Shipping** on retail-sell, and the inventory decrement that would come back with it.
+- **The combined four-domain position view** (Phase 4). The four per-domain xlsx exports are the
+  interim answer. Note that no `settlement/:period/summary` endpoint exists on any domain, despite
+  what the docs claimed before this change.
+- **Money precision** — every `decimal` is unbounded and read as a JS float. Worth one pass across
+  all domains rather than pinning it on the newest tables alone.
+- `G099-ทดสอบ` is seeded active and will appear in the create-form branch dropdown; setting
+  `deleted_at` hides it there while keeping it resolvable on historical rows.

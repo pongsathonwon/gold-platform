@@ -57,27 +57,33 @@ Shop selling gold back to a supplier. Inventory decrements when gold physically 
 
 ### Retail Buy (`/retail-buy`)
 
-Customer selling gold to the shop at the counter. No inventory coupling.
+Customer selling gold to the shop at the counter — a manual write-up of a trade that already
+happened, recorded to answer whether the price was a good one. **No inventory coupling.**
 
-**Status flow:** `DRAFT → CONFIRMED` | `DRAFT/CONFIRMED → CANCELLED`
+**Status flow:** created at `CONFIRMED`; `CONFIRMED → CANCELLED` (note required)
 
-**List filters:** `currentStatus`, `settlementPeriod`, `branchCode`
+**List filters:** `currentStatus`, `settlementPeriod`, `branchCode`, `from`/`to`
 
-**Legacy sync fields:** `buyNumb`, `custCode`, `emplCode`, `brandText`, `sizeText`, `goldPriceSnapshot`
+**Legacy sync fields:** none — migration 0017 dropped all six (`buyNumb`, `custCode`, `emplCode`,
+`brandText`, `sizeText`, `goldPriceSnapshot`). `source` marks how a row arrived instead.
+
+See `core/retail-buy/retail-buy.md` — it is the fuller of the two and the sell side refers to it.
 
 ---
 
 ### Retail Sell (`/retail-sell`)
 
-Shop selling gold to a customer at the counter. Inventory decrements when gold ships out.
+Shop selling gold to a customer at the counter. The mirror of retail-buy, and near-identical to it.
 
-**Status flow:** `DRAFT → CONFIRMED → SHIPPED` | `DRAFT/CONFIRMED → CANCELLED`
+**Status flow:** created at `CONFIRMED`; `CONFIRMED → CANCELLED` (note required)
 
-**Inventory:** `decrement` fires at `CONFIRMED → SHIPPED`
+**Inventory: none.** The old `CONFIRMED → SHIPPED` decrement was **removed** — shipping is deferred,
+which had left live code moving gold down an unreachable path. `SHIPPED` survives in the enum,
+reachable from nothing, so restoring it needs no migration.
 
-**List filters:** `currentStatus`, `settlementPeriod`, `branchCode`
+**List filters:** `currentStatus`, `settlementPeriod`, `branchCode`, `from`/`to`
 
-**Legacy sync fields:** `saleNumb`, `custCode`, `emplCode`, `brandText`, `sizeText`, `goldPriceSnapshot`
+**Legacy sync fields:** none — see retail-buy above.
 
 ---
 
@@ -165,17 +171,18 @@ core/<domain>/
 
 ## Settlement Period Rules
 
-`settlementPeriod` is a reporting bucket — a week label (e.g. `"2026-W24"`) auto-computed from `recordedAt`. Callers never supply it.
+`settlementPeriod` is a reporting bucket — a week label (e.g. `"2026-W24"`) auto-computed from `transactionDate` — the business day the operator picked, not the insert timestamp. Callers never supply it.
 
 - Boundary: **Friday to Thursday** (fixed)
 - Format: ISO week string e.g. `"2026-W24"`
 - Purpose: net buy/sell reporting per week — no locking or period management in current scope
 
-Each domain exposes a split summary endpoint (not merged — keeps domains isolated):
-- `GET /retail-buy/settlement/:period/summary`
-- `GET /retail-sell/settlement/:period/summary`
-- `GET /wholesale-buy/settlement/:period/summary`
-- `GET /wholesale-sell/settlement/:period/summary`
+**No summary endpoint exists on any domain.** This section used to list one per domain as though
+they were built; none are, in any routes file. The intent still stands — split per domain rather
+than merged, so domains stay isolated — but it belongs to the unbuilt Phase 4 position view.
+
+Reading a period back today means the four list endpoints' `from`/`to` window and the xlsx each list
+page builds from it, which states the weighted average price per gold baht.
 
 ---
 
@@ -215,8 +222,8 @@ Admin configures valid combinations at go-live via `product_type_purities` join 
 ## Open Items
 
 1. **User FK** — `recordedBy / createdBy / movedBy / auditedBy` are plain `varchar`; blocked on employee/customer domain decision
-2. **`custCode` / `emplCode` FK** — retail domains use legacy system codes; blocked on same decision
-3. **Employee vs user identity** — recommendation: separate `employees` table (carries `emplCode`) from `users` (login only); `customers` table for `custCode`. Defer until legacy sync strategy is decided with stakeholders
+2. ~~**`custCode` / `emplCode` FK**~~ — moot for now: migration 0017 **dropped** both from the retail tables rather than leave them unfilled. A walk-in customer is not an entity here; the trade's only nameable party is the branch.
+3. **Employee vs user identity** — recommendation: separate `employees` table from `users` (login only), plus a `customers` table. Defer until the legacy sync strategy is decided with stakeholders. **Customer gold deposits need this**: gold left for safekeeping is custody, not a trade — title does not transfer — so it needs its own domain and must never be recorded as a retail-buy.
 4. **`users` table PK** — currently `serial` (integer); migrate to `uuid` before adding any user FKs
 5. **DB migrations** — no migration files yet; run `drizzle-kit generate` then `drizzle-kit migrate` before any deployment
 6. **Goldbar-to-goldbar conversion** — unclear if this is a convert-out + smelting pair or needs its own domain

@@ -9,7 +9,7 @@ import type { SheetData, Row } from "write-excel-file/browser";
  * the first thing anyone does with an exported report. Presentation is a cell *format* instead;
  * the value stays a double.
  *
- * Domain-specific builders live beside their domain (`inventoryExport.ts`, `wholesaleExport.ts`)
+ * Domain-specific builders live beside their domain (`inventoryExport.ts`, `transactionExport.ts`)
  * and compose these.
  */
 

@@ -14,8 +14,8 @@ import { useAuth } from "../auth/AuthContext";
 import { splitByPurity } from "../utils/inventoryVolume";
 import { downloadWorkbook } from "../utils/excel";
 import {
-  buildWholesaleWorkbook, wholesaleFileName, BUY_REPORT, type WholesaleExportRow,
-} from "../utils/wholesaleExport";
+  buildTransactionWorkbook, transactionFileName, BUY_REPORT, type TransactionExportRow,
+} from "../utils/transactionExport";
 import { countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeBuyStatus";
 
 // 96.5% is ordered in gold baht, 99.9% in kilograms — the same split the inventory pages use.
@@ -94,7 +94,7 @@ export function WholesaleBuyListPage() {
    * `countsTowardTotal` test the footer applies — so the file cannot total something the screen
    * does not.
    */
-  const toExportRow = (t: WholeBuyTransaction, unit: Unit): WholesaleExportRow => ({
+  const toExportRow = (t: WholeBuyTransaction, unit: Unit): TransactionExportRow => ({
     transactionDate: t.transactionDate,
     counterparty: supplierName(t.supplierId),
     productType: productTypeName(t.productTypeId),
@@ -113,7 +113,7 @@ export function WholesaleBuyListPage() {
     setIsExporting(true);
     try {
       await downloadWorkbook(
-        buildWholesaleWorkbook({
+        buildTransactionWorkbook({
           nineSixFive: nineSixFive.map((t) => toExportRow(t, "gb")),
           nineNineNine: nineNineNine.map((t) => toExportRow(t, "kg")),
           config: BUY_REPORT,
@@ -122,7 +122,7 @@ export function WholesaleBuyListPage() {
           generatedAt: new Date(),
           generatedBy: user?.name ?? user?.username ?? "",
         }),
-        wholesaleFileName(BUY_REPORT, from, to),
+        transactionFileName(BUY_REPORT, from, to),
       );
     } catch {
       showToast("ส่งออกไฟล์ไม่สำเร็จ", "error");

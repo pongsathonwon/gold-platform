@@ -1,12 +1,12 @@
 import { Effect } from "effect";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
 import {
     CreateRetailSellStatus, CreateRetailSellTransaction,
-    RetailSellStatus, RetailSellTransactionShape,
+    RetailSellStatus,
     retailSellStatuses, retailSellTransactions,
 } from "../../../infrastructure/db/schema/retail-sell.schema.js";
-import { ForRetailSellRepository, TransactionNotFoundError } from "../port/retail-sell.port.js";
+import { ForRetailSellRepository, ListFilter, TransactionNotFoundError } from "../port/retail-sell.port.js";
 
 class RetailSellRepositoryImpl implements ForRetailSellRepository {
     constructor(private readonly db: Database) {}
@@ -31,16 +31,25 @@ class RetailSellRepositoryImpl implements ForRetailSellRepository {
         );
     }
 
-    listTransactions(req: Partial<Pick<RetailSellTransactionShape, 'currentStatus' | 'settlementPeriod' | 'branchCode'>>) {
+    listTransactions(req: ListFilter) {
         const conditions = [
             req.currentStatus ? eq(retailSellTransactions.currentStatus, req.currentStatus) : undefined,
             req.settlementPeriod ? eq(retailSellTransactions.settlementPeriod, req.settlementPeriod) : undefined,
             req.branchCode ? eq(retailSellTransactions.branchCode, req.branchCode) : undefined,
+            // the window is over the business day the trade happened, not the insert timestamp —
+            // a write-up entered a week late answers for the day it happened. Both ends inclusive:
+            // `to` is a day, so excluding it would silently drop the last day the caller asked for.
+            req.from ? gte(retailSellTransactions.transactionDate, req.from) : undefined,
+            req.to ? lte(retailSellTransactions.transactionDate, req.to) : undefined,
         ].filter(Boolean) as ReturnType<typeof eq>[];
 
         return Effect.tryPromise({
             try: () => this.db.select().from(retailSellTransactions)
                 .where(conditions.length > 0 ? and(...conditions) : undefined)
+                // newest business day first, with the insert order breaking ties inside a day.
+                // Ordering by recordedAt alone would file a backdated write-up at the top of the
+                // list, above trades that really did happen later.
+                .orderBy(desc(retailSellTransactions.transactionDate), desc(retailSellTransactions.recordedAt))
                 .execute(),
             catch: () => new RepositoryError({ message: "cannot list retail sell transactions" }),
         });
@@ -67,6 +76,7 @@ class RetailSellRepositoryImpl implements ForRetailSellRepository {
         return Effect.tryPromise({
             try: () => this.db.select().from(retailSellStatuses)
                 .where(eq(retailSellStatuses.transactionId, transactionId))
+                .orderBy(retailSellStatuses.createdAt)
                 .execute(),
             catch: () => new RepositoryError({ message: `cannot list statuses for transaction: ${transactionId}` }),
         });

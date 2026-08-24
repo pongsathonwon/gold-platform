@@ -126,16 +126,22 @@ Routes are declared in `App.tsx`. React Router v7 with `<Routes>` / `<Route>`.
 /wholesale-sell           — wholesale sell list, filterable by status + supplier (protected)
 /wholesale-sell/new       — create form (protected)
 /wholesale-sell/:id       — detail, status timeline, status actions (protected)
+/retail-buy               — retail buy list, day window + status + branch filters (protected)
+/retail-buy/new           — create form (protected)
+/retail-buy/:id           — detail, status history, void action (protected)
+/retail-sell              — retail sell list (protected)
+/retail-sell/new          — create form (protected)
+/retail-sell/:id          — detail (protected)
 ```
+
+Retail sits behind `AuthGuard` only, matching wholesale: recording the day's counter trades is
+ordinary operator work, and `AdminGuard` is for the inventory adjustments, which move gold with
+nobody on the other side of the transaction.
 
 **Deferred to Sprint 2+:**
 
 ```
 /                         — management dashboard (current period net)
-/retail-buy
-/retail-buy/:id
-/retail-sell
-/retail-sell/:id
 /receive
 /receive/:id
 /period-report            — historical period net report
@@ -315,16 +321,16 @@ genuinely is no answer yet. Neither list page shows brand, so neither needed cha
 
 ## 9e. Excel export — `utils/excel.ts` + the per-domain builders
 
-Four pages export to `.xlsx`: both inventory pages and both wholesale lists. **One workbook per
+Six pages export to `.xlsx`: both inventory pages and all four transaction lists. **One workbook per
 page, two sheets per workbook** — `ทอง 96.5%` and `ทอง 99.9%`, the same split every page renders.
 
 | File | Role |
 | --- | --- |
 | `utils/excel.ts` | shared primitives — number formats, cell helpers, the title block, `ExportSheet`, `downloadWorkbook()`. The numbers-as-numbers rule lives here so it cannot be half-applied |
 | `utils/inventoryExport.ts` | balance and movement workbooks |
-| `utils/wholesaleExport.ts` | buy and sell workbooks — **one builder, config per domain** |
+| `utils/transactionExport.ts` | all four transaction workbooks — **one builder, config per domain** |
 
-Below is the inventory export; §9f covers wholesale.
+Below is the inventory export; §9f covers the four transaction reports.
 
 Both inventory pages export to `.xlsx`. **One workbook per page, two sheets per workbook** —
 `ทอง 96.5%` and `ทอง 99.9%`, the same split the pages render. The balance file is `คลังทองคำแท่ง_<วันที่>.xlsx`;
@@ -364,22 +370,28 @@ few thousand rows — well inside what the browser serializes in under a second,
 `TableRow` rendering is the real ceiling long before the export is. Serialization is synchronous,
 so the button disables itself and shows a spinner while it runs.
 
-## 9f. Wholesale reports — `utils/wholesaleExport.ts`
+## 9f. Transaction reports — `utils/transactionExport.ts`
 
-`/wholesale-buy` and `/wholesale-sell` each export a two-sheet workbook, split by purity like
-everything else. **One builder serves both domains**; what differs is a `WholesaleReportConfig`
-(`BUY_REPORT` / `SELL_REPORT`) carrying the title, the counterparty header, the two weight labels
-and the average's label. Two near-copies of a report this similar would drift.
+`/wholesale-buy`, `/wholesale-sell`, `/retail-buy` and `/retail-sell` each export a two-sheet workbook, split by purity like
+everything else. **One builder serves all four**; what differs is a `TransactionReportConfig` (`BUY_REPORT` /
+`SELL_REPORT` / `RETAIL_BUY_REPORT` / `RETAIL_SELL_REPORT`) carrying the title, the counterparty
+header, the two weight labels and the average's label. Four near-copies of a report this similar
+would drift — and the drift would land in the arithmetic the whole feature exists to produce.
 
-Each page maps its own transactions into `WholesaleExportRow` before calling in, and **that mapping
+**That sameness is the deliverable, not a convenience.** "Did we buy well and sell well" is only
+readable if all four state their average the same way: value in THB over volume in gold baht, over
+the same kind of window, with the same rows excluded.
+
+Each page maps its own transactions into `TransactionExportRow` before calling in, and **that mapping
 is where the domain rules are applied** — so the file totals exactly what the screen totals:
 
-| | buy | sell |
-| --- | --- | --- |
-| the weight that counts | delivered (`actualWeightGb ?? weightGb`) | agreed (`weightGb`) — the API refuses to pack anything else |
-| the weight beside it | ordered, always known | the buyer's contested figure, null unless `DISPUTED` |
-| the amount | `actualAmount ?? totalAmount` | `totalAmount` |
-| what counts toward totals | `countsTowardTotal()` from `wholeBuyStatus` | the same from `wholeSellStatus` — the rule reads inverted, see §9c |
+| | wholesale buy | wholesale sell | retail (both) |
+| --- | --- | --- | --- |
+| the weight that counts | delivered (`actualWeightGb ?? weightGb`) | agreed (`weightGb`) — the API refuses to pack anything else | `weightGb`, as measured |
+| the weight beside it | ordered, always known | the buyer's contested figure, null unless `DISPUTED` | **always null** — one weight, nothing to compare it against |
+| the counterparty | supplier | supplier | **branch** — a walk-in is not an entity, and branch is the cut a manager would take |
+| the amount | `actualAmount ?? totalAmount` | `totalAmount` | `totalAmount` — gold value only; `operationFee` never reaches the file |
+| what counts toward totals | `countsTowardTotal()` from `wholeBuyStatus` | the same from `wholeSellStatus` — the rule reads inverted, see §9c | `buy/sellCountsTowardTotal()` from `retailStatus` — `CANCELLED` alone |
 
 - **The summary sits above the table, not below it.** Rows 5–10 give count, total weight, total
   amount and the average — the figure the manager opens the file for, before the rows that support
@@ -392,7 +404,7 @@ is where the domain rules are applied** — so the file totals exactly what the 
   of 96.5%. kg→GB is a *pure mass* conversion (1 GB ≈ 15.244 g at any purity), so the purity
   difference arrives through the price: `pricePerGb999 = pricePerGb965 × 99.9/96.5`. Value over
   mass-GB therefore returns each sheet's own quote, and the 99.9% average reads higher than the
-  96.5% one by exactly that ratio — asserted in `wholesaleExport.test.ts`. Dividing the kilogram
+  96.5% one by exactly that ratio — asserted in `transactionExport.test.ts`. Dividing the kilogram
   sheet by kilograms would print a THB/kg figure ~65× larger under a THB/บาททอง heading and destroy
   the comparison.
 - **No volume means no average.** `summarise()` returns `null`, rendered as `—`, rather than `0`: a
@@ -406,12 +418,56 @@ is where the domain rules are applied** — so the file totals exactly what the 
 - **The comparison weight is its own column**, not the screen's parenthetical. `"12 (สั่ง 15)"` in a
   numeric cell would make the cell text and cost the column its arithmetic.
 - **Either date filter can be cleared**, which both list pages document as a way to open the range
-  up. `windowLabel()` and `wholesaleFileName()` handle a missing bound — `formatBusinessDate("")`
+  up. `windowLabel()` and `transactionFileName()` handle a missing bound — `formatBusinessDate("")`
   returns empty, which would leave the file claiming a window it does not have.
 
 Open question for BU: both pages ignore `settledAmount` — what was *actually* paid when it differed
 from the agreed total — so "average cost" is currently the agreed price, not the settled one. The
 export mirrors the pages deliberately rather than quietly answering a different question.
+
+## 9g. Retail UI — `pages/retail/`
+
+Six routes, **three components**. Unlike wholesale, where buy and sell each get their own page file,
+the retail pair is written once and takes a config:
+
+| File | Role |
+| --- | --- |
+| `pages/retail/retailUi.ts` | `RETAIL_BUY_UI` / `RETAIL_SELL_UI` — labels, report config, status helpers and the four hooks |
+| `pages/retail/RetailListPage.tsx` | purity-split table, date-window/status/branch filters, export |
+| `pages/retail/RetailCreatePage.tsx` | `useDynamicForm` create form |
+| `pages/retail/RetailDetailPage.tsx` | summary, status history, void dialog |
+| `utils/retailStatus.ts` | both domains' chip colours, Thai labels, `nextStatuses()`, `requiresNote()`, `countsTowardTotal()` |
+| `hooks/useRetail.ts` / `useRetailMutations.ts` | both domains' queries and mutations |
+
+**The sharing goes further than wholesale's because the domains are more alike.** A retail buy and a
+retail sell are one record read in two directions — same columns, same two-status machine, same
+rules — so a `RetailBuyTransaction` and a `RetailSellTransaction` interface would be the same fields
+typed twice, and two status utils would be one file typed twice.
+
+- **Each page exports a distinct component per domain** (`RetailBuyListPage`, `RetailSellListPage`)
+  wrapping the shared implementation. This is load-bearing, not cosmetic: the hooks travel in the
+  config, so routing between two paths that rendered the *same* component type with a different
+  config would let React reconcile rather than remount, and the hook call order would swap
+  underneath. Two component types force the remount.
+- **The config's hooks are typed by what the pages read**, not as `typeof useRetailBuyList`.
+  Borrowing the buy hooks' exact types does not compile — the two status unions differ by `SHIPPED`,
+  so the sell hooks are not assignable to the buy ones.
+- **No brand field, and for a different reason than wholesale's.** There brand is unknowable until
+  the metal arrives; here it is simply not a dimension of anything, because retail touches no pool.
+- **Weight is always a free number.** The wholesale forms offer a select when the pairing has
+  `allowedValues` and show min/step helper text; retail shows neither, because those rules describe
+  what can be ordered and a counter weight is whatever the scale read.
+- **`operationFee` has its own column on the list and its own row on the detail page**, never folded
+  into the total beside it. The detail page adds them into a `รวมทั้งสิ้น` row — summing at the point
+  of consumption is the pattern, and it is why the stored total stays gold-only. An em dash rather
+  than `0.00` when none was charged: no fee is not a fee of nothing.
+- **The branch dropdown on the create form filters through `liveBranches()`**; the list's branch
+  *filter* does not. Filing a new record against a closed branch is wrong, but filtering history by
+  one is exactly when someone would want to.
+- **`CONFIRMED` is `success`-coloured**, where wholesale reserves green for gold that reached the
+  vault. A retail write-up has no later milestone to save it for.
+- The void dialog requires a reason and disables its confirm button until one is typed — the API
+  rejects a blank note, so this saves the round trip and says why beforehand.
 
 ## 10. Current State
 

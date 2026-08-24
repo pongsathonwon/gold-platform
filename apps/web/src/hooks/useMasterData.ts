@@ -30,6 +30,15 @@ export interface Supplier {
   active: boolean;
 }
 
+export interface Branch {
+  branchCode: string;
+  branchName: string;
+  branchShortName: string;
+  active: boolean;
+  /** Removed from the system. Null means live — see `liveBranches()`. */
+  deletedAt: string | null;
+}
+
 export interface ProductTypePurity {
   purityId: string;
   label: string;
@@ -116,3 +125,25 @@ export function useProductTypePurities(productTypeId: string) {
     },
   });
 }
+
+/**
+ * Every branch, retired ones included.
+ *
+ * The endpoint deliberately does not filter. A branch that closed still has to resolve its name on
+ * every transaction it ever recorded, so filtering server-side would leave historical rows showing
+ * a bare code. Choosing what to *offer* is a form's decision — see `liveBranches()`.
+ */
+export function useBranches() {
+  return useQuery({
+    queryKey: ["master-data", "branches"],
+    queryFn: async () => {
+      const res = await client["master-data"].branches.$get();
+      await assertOk(res, "Failed to fetch branches");
+      return (await res.json()) as { data: Branch[] };
+    },
+  });
+}
+
+/** The branches a new record may be filed against: not retired, and currently trading. */
+export const liveBranches = (branches: Branch[] = []) =>
+  branches.filter((b) => !b.deletedAt && b.active);

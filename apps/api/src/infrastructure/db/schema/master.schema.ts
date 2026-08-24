@@ -1,4 +1,4 @@
-import { boolean, date, decimal, integer, pgEnum, pgTable, primaryKey, uuid, varchar, } from "drizzle-orm/pg-core";
+import { boolean, date, decimal, integer, pgEnum, pgTable, primaryKey, timestamp, uuid, varchar, } from "drizzle-orm/pg-core";
 
 export const originEnum = pgEnum('origin', ['domestic', 'foreign'])
 
@@ -104,7 +104,16 @@ export const branches = pgTable("branches", {
     branchCode: varchar({ length: 3 }).primaryKey(),
     branchName: varchar().notNull(),
     branchShortName: varchar({ length: 10 }).notNull(),
-    active: boolean().default(true).notNull()
+    /**
+     * Operational, and reversible: a branch that is not trading right now. Distinct from
+     * `deletedAt`, which is removal from the system — a closed branch still has to resolve its
+     * name on every transaction it ever recorded.
+     */
+    active: boolean().default(true).notNull(),
+    /** When the row reached the database. Server clock, never caller-supplied. */
+    insertedAt: timestamp().defaultNow().notNull(),
+    /** Soft-delete tombstone; null = live. Hard deletion is impossible once transactions FK this. */
+    deletedAt: timestamp(),
 })
 
 export type Branch = typeof branches.$inferSelect

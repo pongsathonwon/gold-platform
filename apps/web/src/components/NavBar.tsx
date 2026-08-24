@@ -3,10 +3,14 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { userRoleLabel } from "@gold-platform/types";
 import { useAuth } from "../auth/AuthContext";
 
+// Buy beside buy and sell beside sell: the comparison the manager is here to make runs across the
+// wholesale/retail line, not along it.
 const navLinks = [
   { to: "/inventory", label: "คลังทองคำแท่ง" },
   { to: "/wholesale-buy", label: "ซื้อส่ง" },
   { to: "/wholesale-sell", label: "ขายส่ง" },
+  { to: "/retail-buy", label: "ซื้อปลีก" },
+  { to: "/retail-sell", label: "ขายปลีก" },
 ];
 
 export function NavBar() {

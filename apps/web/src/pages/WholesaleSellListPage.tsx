@@ -14,8 +14,8 @@ import { useAuth } from "../auth/AuthContext";
 import { splitByPurity } from "../utils/inventoryVolume";
 import { downloadWorkbook } from "../utils/excel";
 import {
-  buildWholesaleWorkbook, wholesaleFileName, SELL_REPORT, type WholesaleExportRow,
-} from "../utils/wholesaleExport";
+  buildTransactionWorkbook, transactionFileName, SELL_REPORT, type TransactionExportRow,
+} from "../utils/transactionExport";
 import { countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeSellStatus";
 
 // 96.5% is dealt in gold baht, 99.9% in kilograms — the same split the inventory pages use.
@@ -97,7 +97,7 @@ export function WholesaleSellListPage() {
    * pack anything else, so that is what left the vault — and the buyer's contested figure sits
    * beside it, null unless somebody is arguing.
    */
-  const toExportRow = (t: WholeSellTransaction, unit: Unit): WholesaleExportRow => ({
+  const toExportRow = (t: WholeSellTransaction, unit: Unit): TransactionExportRow => ({
     transactionDate: t.transactionDate,
     counterparty: supplierName(t.supplierId),
     productType: productTypeName(t.productTypeId),
@@ -115,7 +115,7 @@ export function WholesaleSellListPage() {
     setIsExporting(true);
     try {
       await downloadWorkbook(
-        buildWholesaleWorkbook({
+        buildTransactionWorkbook({
           nineSixFive: nineSixFive.map((t) => toExportRow(t, "gb")),
           nineNineNine: nineNineNine.map((t) => toExportRow(t, "kg")),
           config: SELL_REPORT,
@@ -124,7 +124,7 @@ export function WholesaleSellListPage() {
           generatedAt: new Date(),
           generatedBy: user?.name ?? user?.username ?? "",
         }),
-        wholesaleFileName(SELL_REPORT, from, to),
+        transactionFileName(SELL_REPORT, from, to),
       );
     } catch {
       showToast("ส่งออกไฟล์ไม่สำเร็จ", "error");

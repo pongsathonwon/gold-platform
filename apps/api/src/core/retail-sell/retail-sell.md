@@ -2,123 +2,116 @@
 
 ## Core Concept
 
-A retail sell is the shop **selling gold to a customer** at the counter. Inventory decrements **at shipping** — stock leaves when the order is physically dispatched, not at confirmation.
+A retail sell is the shop **selling gold to a customer** at the counter — written up after the fact,
+not captured live. Like retail-buy it exists to answer one question: **was the price we dealt at a
+good one?**
 
-Legacy sync fields (`saleNumb`, `custCode`, `emplCode`, `brandText`, `sizeText`) are stored as-is. The sync service handles mapping plain-text brand/size to master data IDs.
+It is the exact mirror of [retail-buy](../retail-buy/retail-buy.md), and unusually for this codebase
+the two are near-identical rather than merely symmetric: the same row shape, the same status
+machine, the same rules. A buy and a sell here differ in direction and in nothing else. That is why
+the web app renders both from one set of pages and one config, and why the shared types carry one
+create schema shape for both.
+
+**No inventory coupling.** This is a deliberate reversal — see below.
+
+---
+
+## The inventory decrement was removed
+
+The previous version decremented stock on `CONFIRMED → SHIPPED`, calling
+`decrement({ referenceType: 'RETAIL_SELL', ... })`.
+
+Shipping is deferred. That made the transition unreachable and the decrement with it, leaving live
+code that moved gold down a path nothing could take — a trap for the next reader, who would find a
+plausible-looking inventory hook and reasonably assume it fires.
+
+So both retail domains now move no stock at all, symmetrically, and the balance is maintained by
+hand through `POST /inventory/gain|loss`. `retail-sell.usecase.test.ts` asserts that **no inventory
+usecase is called** on either create or void, which is what keeps it that way.
+
+Restoring it later means adding `SHIPPED` back to `RETAIL_SELL_TRANSITIONS` and restoring the
+decrement — no migration, since the enum value was never removed. The test named *"refuses to ship,
+because shipping is not built"* is the one that will fail loudly if someone does the first without
+the second.
 
 ---
 
 ## Tables
 
-### `retail_sell_transactions`
+`retail_sell_transactions` and `retail_sell_statuses` are field-identical to their retail-buy
+counterparts — see [retail-buy.md](../retail-buy/retail-buy.md) for the column table, the note on
+why the six POS-sync columns were dropped in migration 0017, and the reasoning behind `operationFee`
+sitting outside `totalAmount`.
 
-One record per counter transaction. Created once, never deleted. Only `currentStatus` is mutated.
+The one difference is the status enum, which additionally carries `SHIPPED`.
 
-| Field                                | Description                                                                  |
-| ------------------------------------ | ---------------------------------------------------------------------------- |
-| `id`                                 | UUID primary key                                                             |
-| `saleNumb`                           | Legacy system transaction number — unique, used for sync                     |
-| `branchCode`                         | FK → `branches.branchCode` — where the transaction happened                 |
-| `custCode`                           | Customer ID from legacy system — plain varchar, no FK                        |
-| `emplCode`                           | Cashier employee ID from legacy system — plain varchar, no FK                |
-| `purityId / brandId / productTypeId` | Resolved master data IDs — required for inventory coupling                   |
-| `brandText`                          | Raw brand string from legacy system — sync service maps this to `brandId`    |
-| `sizeText`                           | Raw size string from legacy system — sync service maps this to bar size      |
-| `weightGb / weightGm`                | Weight at transaction time                                                   |
-| `conversionFactor`                   | GB-to-GM ratio snapshotted at creation time                                  |
-| `pricePerGb`                         | Price charged to customer per Gold Bath                                      |
-| `goldPriceSnapshot`                  | Market gold price at transaction time — for reporting and net position calc  |
-| `totalAmount`                        | `weightGb * pricePerGb` — computed and stored at creation                    |
-| `settlementPeriod`                   | Week index (Fri–Thu) — used for net buy/sell tracking per week               |
-| `currentStatus`                      | Write-through cache — `DRAFT \| CONFIRMED \| SHIPPED \| CANCELLED`           |
-| `recordedBy`                         | Cashier who recorded — plain varchar until auth domain is settled            |
-| `recordedAt`                         | Creation timestamp                                                           |
-
----
-
-### `retail_sell_statuses`
-
-Append-only status log. Never updated or deleted.
-
-| Field           | Description                                              |
-| --------------- | -------------------------------------------------------- |
-| `id`            | UUID primary key                                         |
-| `transactionId` | FK → `retail_sell_transactions.id`                       |
-| `status`        | `DRAFT \| CONFIRMED \| SHIPPED \| CANCELLED`             |
-| `note`          | Optional free-text (required when CANCELLED)             |
-| `createdBy`     | Who triggered this transition                            |
-| `createdAt`     | Timestamp of the transition                              |
+On this side `pricePerGb` is what the customer was **charged** and `operationFee` is typically
+ค่าบล็อค on ทองแผ่น — the margin-capture half of the business. Keeping it out of `totalAmount` is
+what stops a ทองแผ่น sale reading as a better price per gold baht than it achieved.
 
 ---
 
 ## Status Flow
 
 ```
-DRAFT → CONFIRMED → SHIPPED
-  ↓          ↓
-CANCELLED  CANCELLED
+CONFIRMED ──> CANCELLED
+
+(SHIPPED exists in the enum, reachable from nothing)
 ```
 
-| Transition              | Guard           | Inventory effect                                              |
-| ----------------------- | --------------- | ------------------------------------------------------------- |
-| `DRAFT → CONFIRMED`     | none            | none                                                          |
-| `CONFIRMED → SHIPPED`   | sufficient stock | `decrement(...)` — FIFO drains lots, writes `-delta` movement |
-| `DRAFT → CANCELLED`     | none            | none                                                          |
-| `CONFIRMED → CANCELLED` | none            | none — stock was never decremented                            |
+`createTransaction` lands directly on `CONFIRMED` and writes one status row. `DRAFT` and `SHIPPED`
+both survive as enum values and are unreachable — the first for a future POS feed, the second for
+future shipping.
 
-> `SHIPPED → CANCELLED` is **not allowed**. Once inventory has been decremented the lot movements exist — reversing requires a new retail-buy transaction to bring stock back in, not a cancellation.
+| Transition | Guard | Inventory effect |
+| --- | --- | --- |
+| `CONFIRMED → CANCELLED` | note required | none |
 
 ---
 
-## Exposed Usecases
+## Weights are measured, not ordered
 
-| Usecase             | HTTP                              | Description                                           |
-| ------------------- | --------------------------------- | ----------------------------------------------------- |
-| `createTransaction` | `POST /retail-sell`               | Creates transaction + initial `DRAFT` status row      |
-| `advanceStatus`     | `POST /retail-sell/:id/status`    | Appends status row, updates `currentStatus`, fires inventory side-effect if applicable |
-| `getTransaction`    | `GET /retail-sell/:id`            | Returns transaction + full status history             |
-| `listTransactions`  | `GET /retail-sell`                | Filterable by `currentStatus`, `settlementPeriod`, and `branchCode` |
+`resolveMeasuredQuantity`, exactly as on the buy side: what crossed the counter weighs what it
+weighs, and the supplier ordering rules would refuse a real trade. The product/purity pairing is
+still validated.
+
+---
+
+## Endpoints
+
+| Usecase | HTTP | Description |
+| --- | --- | --- |
+| `createTransaction` | `POST /retail-sell` | creates the transaction + its `CONFIRMED` status row |
+| `advanceStatus` | `POST /retail-sell/:id/status` | appends a status row; returns the status reached |
+| `getTransaction` | `GET /retail-sell/:id` | transaction + full status history |
+| `listTransactions` | `GET /retail-sell` | filters: `currentStatus`, `settlementPeriod`, `branchCode`, `from`/`to` |
+
+Behind `authMiddleware`, no `requireRole`, actor from the JWT. Same list window and sort as
+retail-buy.
 
 ---
 
 ## Cross-domain Inventory Coupling
 
-| Event               | Call                                                                                                                                        |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CONFIRMED → SHIPPED` | `decrement({ purityId, brandId, productTypeId, weightGb, weightGm, referenceType: 'RETAIL_SELL', referenceId: transaction.id, movedBy })` |
-
-`referenceType: 'RETAIL_SELL'` is the registration string this domain owns in the inventory movements ledger.
-
----
-
-## `advanceStatus` Transition Rules
-
-```
-allowed transitions:
-  DRAFT      → CONFIRMED | CANCELLED
-  CONFIRMED  → SHIPPED   | CANCELLED
-  SHIPPED    → (terminal)
-  CANCELLED  → (terminal)
-```
+**None.** The `RETAIL_SELL` entry in `TRANSACTION_TYPES` remains available as a `referenceType` for
+manual gain/loss adjustments, which is how a retail-driven stock correction is recorded today.
 
 ---
 
 ## Domain Errors
 
-| Error                      | When                                                                              |
-| -------------------------- | --------------------------------------------------------------------------------- |
-| `InvalidTransitionError`   | Requested `toStatus` is not a legal next state                                    |
-| `TransactionNotFoundError` | Transaction ID does not exist                                                     |
-| `InsufficientStockError`   | `decrement` fails — not enough inventory (propagated from inventory domain)       |
+Identical to retail-buy: `TransactionNotFoundError` (404), `InvalidTransitionError` (422),
+`NoteRequiredError` (422), `ProductTypePurityNotFoundError` (422). `InsufficientStockError` is
+**gone** — nothing here can be short, because nothing here draws on a pool.
 
 ---
 
 ## Open Issues
 
-1. **`custCode` / `emplCode` FK** — plain varchar matching legacy system codes. Replace with FK once customer and employee domains are settled.
+See [retail-buy.md](../retail-buy/retail-buy.md); they apply unchanged. Additionally:
 
-2. **`brandText` / `sizeText` mapping** — sync service owns the mapping. This domain stores both raw strings and resolved IDs.
-
-3. **No user FK** — `recordedBy / createdBy` are plain `varchar`. Replace with FK after auth domain is settled.
-
-4. **`SHIPPED → CANCELLED` is not supported** — once inventory is decremented the lot movements are permanent. Reversal requires a new `retail-buy` transaction to bring stock back in. `CONFIRMED → CANCELLED` (before shipping) is safe and requires no inventory undo.
+1. **Shipping.** Deferred, along with the decrement. A counter sale is hand-over-the-counter; the
+   `SHIPPED` state is for deferred delivery and paper contracts, which are not built.
+2. **Customer deposits.** Gold left with the shop for safekeeping without an operating fee is
+   **custody, not a trade** — title does not transfer. It needs its own domain and must never be
+   recorded here.

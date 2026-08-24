@@ -120,6 +120,13 @@
       "when": 1787540405611,
       "tag": "0016_inventory_movements_index",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1787540405612,
+      "tag": "0017_retail_manual_entry",
+      "breakpoints": true
     }
   ]
 }
