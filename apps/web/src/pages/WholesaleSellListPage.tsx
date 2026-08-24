@@ -3,12 +3,14 @@ import { Link as RouterLink } from "react-router-dom";
 import {
   Container, Typography, Table, TableBody, TableCell, TableContainer, TableFooter,
   TableHead, TableRow, Paper, Chip, Box, TextField, MenuItem, Button, Alert, CircularProgress,
+  Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
 } from "@mui/material";
 import { WHOLE_SELL_STATUSES, shiftBusinessDate, todayBusinessDate } from "@gold-platform/types";
 import { useWholesaleSellList, type WholeSellTransaction } from "../hooks/useWholesaleSell";
 import { useConfirmAllWholesaleSell } from "../hooks/useWholesaleSellMutations";
 import { useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
+import { useAuth } from "../auth/AuthContext";
 import { splitByPurity } from "../utils/inventoryVolume";
 import { countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeSellStatus";
 
@@ -46,6 +48,7 @@ export function WholesaleSellListPage() {
     shiftBusinessDate(todayBusinessDate(), -(DEFAULT_WINDOW_DAYS - 1)),
   );
   const [to, setTo] = useState(() => todayBusinessDate());
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const filter = {
     ...(currentStatus ? { currentStatus } : {}),
@@ -56,6 +59,7 @@ export function WholesaleSellListPage() {
   const { data, isPending, isError, error } = useWholesaleSellList(filter);
   const confirmAll = useConfirmAllWholesaleSell();
   const { showToast } = useToast();
+  const { isAdmin } = useAuth();
   const { data: suppliersRes } = useSuppliers();
   const { data: productTypesRes } = useProductTypes();
   const { data: puritiesRes } = usePurities();
@@ -76,7 +80,14 @@ export function WholesaleSellListPage() {
 
   const windowLabel = `${formatBusinessDate(from)} – ${formatBusinessDate(to)}`;
 
+  /**
+   * The sweep is not scoped to what is on screen — it confirms *every* transaction still in
+   * CREATED, including ones outside the current filter — and confirmation is the lock that ends
+   * the edit window. An irreversible action with a wider reach than the page implies has to be
+   * confirmed, and the dialog is where the real scope gets stated.
+   */
   function handleConfirmAll() {
+    setConfirmOpen(false);
     confirmAll.mutate(undefined, {
       onSuccess: (res) => showToast(`ยืนยันแล้ว ${res.data.confirmed} รายการ`),
       onError: (err) => showToast(err instanceof Error ? err.message : "ยืนยันไม่สำเร็จ", "error"),
@@ -201,9 +212,11 @@ export function WholesaleSellListPage() {
         </Typography>
         {/* the nightly job does this automatically; the button is the mid-day run for when the
             day's deals need locking before then */}
-        <Button variant="outlined" onClick={handleConfirmAll} disabled={confirmAll.isPending || createdCount === 0}>
+        {isAdmin && (
+        <Button variant="outlined" onClick={() => setConfirmOpen(true)} disabled={confirmAll.isPending || createdCount === 0}>
           {confirmAll.isPending ? "กำลังยืนยัน…" : `ยืนยันทั้งหมด (${createdCount})`}
         </Button>
+        )}
         <Button component={RouterLink} to="/wholesale-sell/new">
           สร้างรายการ
         </Button>
@@ -272,6 +285,25 @@ export function WholesaleSellListPage() {
           {renderSection("ทอง 99.9%", nineNineNine, "kg")}
         </>
       )}
+
+      {/* The count on the button is what is visible under the current filter; the sweep is not
+          filtered. Saying so here is the whole reason the dialog exists — an operator who has
+          filtered to one supplier should not discover that afterwards. */}
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>ยืนยันรายการทั้งหมด?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            ระบบจะยืนยัน<strong>ทุกรายการขายส่ง ที่ยังอยู่ในสถานะ "สร้างรายการ"</strong> — รวมถึงรายการที่ไม่ได้แสดงอยู่ในตัวกรองปัจจุบัน
+          </DialogContentText>
+          <DialogContentText sx={{ mt: 2 }}>
+            เมื่อยืนยันแล้วจะ<strong>แก้ไขรายการไม่ได้อีก</strong> และไม่สามารถย้อนกลับได้
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button variant="text" onClick={() => setConfirmOpen(false)}>ยกเลิก</Button>
+          <Button onClick={handleConfirmAll} disabled={confirmAll.isPending}>ยืนยันทั้งหมด</Button>
+        </DialogActions>
+      </Dialog>
     </Container>
   );
 }

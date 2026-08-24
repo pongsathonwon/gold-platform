@@ -145,7 +145,7 @@ export function WholesaleBuyCreatePage() {
 
     const parsed = createWholeBuySchema.safeParse(payload);
     if (!parsed.success) {
-      setFieldError(parsed.error.issues[0]?.message ?? "Invalid input");
+      setFieldError(parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง");
       return;
     }
     setFieldError(null);

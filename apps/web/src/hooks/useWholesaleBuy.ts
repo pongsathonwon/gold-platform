@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReturnReasonValue } from "@gold-platform/types";
-import { client } from "../api/client";
+import { assertOk, client } from "../api/client";
 
 export interface WholeBuyTransaction {
   id: string;
@@ -64,8 +64,11 @@ export interface WholeBuyFilter {
 }
 
 async function unwrap<T>(res: Response, fallback: string): Promise<T> {
-  const body = (await res.json().catch(() => null)) as { data?: T; error?: string } | null;
-  if (!res.ok || !body) throw new Error(body?.error ?? fallback);
+  // assertOk owns the failure path — it is what distinguishes an expired session (401) from a
+  // refusal (403) from an ordinary error, and it reads the API's own message for all three.
+  await assertOk(res, fallback);
+  const body = (await res.json().catch(() => null)) as { data?: T } | null;
+  if (!body) throw new Error(fallback);
   return body.data as T;
 }
 

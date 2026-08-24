@@ -2,15 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
   AdvanceWholeSellStatusReq, CreateWholeSellReq, UpdateWholeSellReq,
 } from "@gold-platform/types";
-import { client } from "../api/client";
-
-async function parseErrorMessage(res: Response) {
-  const body: unknown = await res.json().catch(() => null);
-  if (typeof body === "object" && body !== null && "error" in body) {
-    return String((body as { error: unknown }).error);
-  }
-  return "Request failed";
-}
+import { assertOk, client } from "../api/client";
 
 // every wholesale-sell mutation invalidates the domain's lists and detail views; a status move
 // can also change inventory, so the balance queries go with them
@@ -27,7 +19,7 @@ export function useCreateWholesaleSell() {
   return useMutation({
     mutationFn: async (req: CreateWholeSellReq) => {
       const res = await client["wholesale-sell"].$post({ json: req });
-      if (!res.ok) throw new Error(await parseErrorMessage(res));
+      await assertOk(res, "ทำรายการไม่สำเร็จ");
       return res.json();
     },
     onSuccess: invalidate,
@@ -39,7 +31,7 @@ export function useUpdateWholesaleSell(id: string) {
   return useMutation({
     mutationFn: async (req: UpdateWholeSellReq) => {
       const res = await client["wholesale-sell"][":id"].$patch({ param: { id }, json: req });
-      if (!res.ok) throw new Error(await parseErrorMessage(res));
+      await assertOk(res, "ทำรายการไม่สำเร็จ");
       return res.json();
     },
     onSuccess: invalidate,
@@ -51,7 +43,7 @@ export function useAdvanceWholesaleSellStatus(id: string) {
   return useMutation({
     mutationFn: async (req: AdvanceWholeSellStatusReq) => {
       const res = await client["wholesale-sell"][":id"].status.$post({ param: { id }, json: req });
-      if (!res.ok) throw new Error(await parseErrorMessage(res));
+      await assertOk(res, "ทำรายการไม่สำเร็จ");
       return res.json();
     },
     onSuccess: invalidate,
@@ -68,7 +60,7 @@ export function useConfirmAllWholesaleSell() {
   return useMutation({
     mutationFn: async () => {
       const res = await client["wholesale-sell"]["confirm-all"].$post({ query: { manual: "true" } });
-      if (!res.ok) throw new Error(await parseErrorMessage(res));
+      await assertOk(res, "ทำรายการไม่สำเร็จ");
       return (await res.json()) as { data: { confirmed: number; ids: string[] } };
     },
     onSuccess: invalidate,

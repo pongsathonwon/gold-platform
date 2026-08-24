@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { client } from "../api/client";
+import { assertOk, client } from "../api/client";
 
 export interface InventoryVolumeRow {
   purityId: string;
@@ -53,7 +53,7 @@ export function useInventoryVolume() {
     queryKey: ["inventory", "volume"],
     queryFn: async () => {
       const res = await client.inventory.volume.$get();
-      if (!res.ok) throw new Error("Failed to fetch inventory volume");
+      await assertOk(res, "Failed to fetch inventory volume");
       return (await res.json()) as { data: InventoryVolumeRow[] };
     },
   });
@@ -80,7 +80,7 @@ export function useInventoryMovements(filter: InventoryMovementFilter = {}) {
     queryKey: ["inventory", "movements", filter],
     queryFn: async () => {
       const res = await client.inventory.movements.$get({ query: filter });
-      if (!res.ok) throw new Error("Failed to fetch inventory movements");
+      await assertOk(res, "Failed to fetch inventory movements");
       // movements are ascending by (movedAt, id); opening seeds the per-purity running balance
       const jsonData = (await res.json()) as APIResponse<{ movements: InventoryMovementRow[]; opening: MovementOpening[] }>;
       if(isError(jsonData)) throw new Error(jsonData.error)

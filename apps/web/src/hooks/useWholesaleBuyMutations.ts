@@ -3,15 +3,7 @@ import type {
   AdvanceWholeBuyStatusReq, CreateWholeBuyReq,
   ReceiveStockWholeBuyReq, UpdateWholeBuyReq,
 } from "@gold-platform/types";
-import { client } from "../api/client";
-
-async function parseErrorMessage(res: Response) {
-  const body: unknown = await res.json().catch(() => null);
-  if (typeof body === "object" && body !== null && "error" in body) {
-    return String((body as { error: unknown }).error);
-  }
-  return "Request failed";
-}
+import { assertOk, client } from "../api/client";
 
 // every wholesale-buy mutation invalidates the domain's lists and detail views; a status move
 // can also change inventory, so the balance queries go with them
@@ -28,7 +20,7 @@ export function useCreateWholesaleBuy() {
   return useMutation({
     mutationFn: async (req: CreateWholeBuyReq) => {
       const res = await client["wholesale-buy"].$post({ json: req });
-      if (!res.ok) throw new Error(await parseErrorMessage(res));
+      await assertOk(res, "ทำรายการไม่สำเร็จ");
       return res.json();
     },
     onSuccess: invalidate,
@@ -40,7 +32,7 @@ export function useUpdateWholesaleBuy(id: string) {
   return useMutation({
     mutationFn: async (req: UpdateWholeBuyReq) => {
       const res = await client["wholesale-buy"][":id"].$patch({ param: { id }, json: req });
-      if (!res.ok) throw new Error(await parseErrorMessage(res));
+      await assertOk(res, "ทำรายการไม่สำเร็จ");
       return res.json();
     },
     onSuccess: invalidate,
@@ -52,7 +44,7 @@ export function useAdvanceWholesaleBuyStatus(id: string) {
   return useMutation({
     mutationFn: async (req: AdvanceWholeBuyStatusReq) => {
       const res = await client["wholesale-buy"][":id"].status.$post({ param: { id }, json: req });
-      if (!res.ok) throw new Error(await parseErrorMessage(res));
+      await assertOk(res, "ทำรายการไม่สำเร็จ");
       return res.json();
     },
     onSuccess: invalidate,
@@ -69,7 +61,7 @@ export function useConfirmAllWholesaleBuy() {
   return useMutation({
     mutationFn: async () => {
       const res = await client["wholesale-buy"]["confirm-all"].$post({ query: { manual: "true" } });
-      if (!res.ok) throw new Error(await parseErrorMessage(res));
+      await assertOk(res, "ทำรายการไม่สำเร็จ");
       return (await res.json()) as { data: { confirmed: number; ids: string[] } };
     },
     onSuccess: invalidate,
@@ -86,7 +78,7 @@ export function useReceiveStockWholesaleBuy(id: string) {
       const res = await client["wholesale-buy"][":id"]["receive-stock"].$post({
         param: { id }, json: req,
       });
-      if (!res.ok) throw new Error(await parseErrorMessage(res));
+      await assertOk(res, "ทำรายการไม่สำเร็จ");
       return res.json();
     },
     onSuccess: invalidate,

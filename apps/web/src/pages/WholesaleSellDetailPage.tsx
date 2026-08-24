@@ -11,9 +11,10 @@ import {
 } from "@gold-platform/types";
 import { useWholesaleSellDetail } from "../hooks/useWholesaleSell";
 import { useAdvanceWholesaleSellStatus } from "../hooks/useWholesaleSellMutations";
-import { useBrands, useProductTypes, useSuppliers } from "../hooks/useMasterData";
+import { useBrands, useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
 import { BrandSplitFields, toBrandSplit, type BrandSplitDraft } from "../components/BrandSplitFields";
+import { displayWeight, isInvestmentGrade, weightUnitLabel } from "../utils/purityDisplay";
 import {
   formatBusinessDate, formatNumber, formatWeight, nextStatuses, requiresNote, statusColor, statusLabel,
 } from "../utils/wholeSellStatus";
@@ -31,6 +32,7 @@ export function WholesaleSellDetailPage() {
   const { data: suppliersRes } = useSuppliers();
   const { data: productTypesRes } = useProductTypes();
   const { data: brandsRes } = useBrands();
+  const { data: puritiesRes } = usePurities();
 
   const advance = useAdvanceWholesaleSellStatus(id);
 
@@ -52,8 +54,13 @@ export function WholesaleSellDetailPage() {
   }
 
   const { transaction: t, statuses, brandSplit: recordedSplit } = data;
-  const is999 = t.purityId === "999";
-  const weightUnit = is999 ? "กรัม" : "บาท";
+  // Which purity this is comes from master data, never from the id — the id is data the shop
+  // administers, and `purityId === "999"` silently reclassifies the page if it is ever renamed
+  // or a third purity is added.
+  const is999 = isInvestmentGrade(puritiesRes?.data.find((p) => p.id === t.purityId));
+  // 99.9% is ordered in kilograms, so that is what it is shown in. It used to read grams here and
+  // kilograms in the dialogs below — the same gold, two numbers, one screen.
+  const weightUnit = weightUnitLabel(is999);
   const supplierName = suppliersRes?.data.find((s) => s.id === t.supplierId)?.supplierName ?? t.supplierId;
   const productTypeName = productTypesRes?.data.find((p) => p.id === t.productTypeId)?.productType ?? t.productTypeId;
   const brandName = (id: string) => brandsRes?.data.find((b) => b.id === id)?.brand ?? id;
@@ -68,8 +75,6 @@ export function WholesaleSellDetailPage() {
   // brand is recorded at the vault door, on the one move that takes gold out of the books
   const collectsBrandSplit = pending === "PACKED";
   const noteRequired = pending !== null && requiresNote(pending);
-  const agreedInInputUnit = is999 ? t.weightGm / 1000 : t.weightGb;
-  const inputUnitLabel = is999 ? "kg" : "บาท";
 
   function closeDialog() {
     setPending(null);
@@ -132,10 +137,10 @@ export function WholesaleSellDetailPage() {
       recordedSplit.length === 0
         ? "— (บันทึกเมื่อเบิกทองแพ็ค)"
         : recordedSplit
-            .map((s) => `${brandName(s.brandId)} ${formatWeight(is999 ? s.weightGm : s.weightGb)} ${weightUnit}`)
+            .map((s) => `${brandName(s.brandId)} ${formatWeight(displayWeight(is999, s))} ${weightUnit}`)
             .join(" · "),
     ],
-    ["น้ำหนักที่ตกลง", `${formatWeight(is999 ? t.weightGm : t.weightGb)} ${weightUnit}`],
+    ["น้ำหนักที่ตกลง", `${formatWeight(displayWeight(is999, t))} ${weightUnit}`],
     ["ราคาต่อบาททอง 96.5%", formatNumber(t.pricePerGb965)],
     ["ราคาต่อบาททอง 99.9%", formatNumber(t.pricePerGb999)],
     ["ยอดรวมที่ตกลง", formatNumber(t.totalAmount)],
@@ -179,14 +184,18 @@ export function WholesaleSellDetailPage() {
   // only ever populated by a DISPUTED move — packing records no weight of its own, since we boxed
   // our own gold and the agreed figure is what left
   if (t.actualWeightGb !== null) {
-    const variance = t.actualWeightGb - t.weightGb;
+    // Both the figure and its variance are shown in the purity's own unit. The variance used to
+    // be computed in gold baht and labelled บาท regardless, so a 99.9 percent dispute read
+    // "2 กก. (+3.5 บาท)" — two units in one sentence, for one discrepancy.
+    const measured = { weightGb: t.actualWeightGb, weightGm: t.actualWeightGm ?? 0 };
+    const variance = displayWeight(is999, measured) - displayWeight(is999, t);
     rows.push([
       "น้ำหนักที่ผู้ซื้อชั่งได้",
       <Box component="span">
-        {formatWeight(is999 ? (t.actualWeightGm ?? 0) : t.actualWeightGb)} {weightUnit}
+        {formatWeight(displayWeight(is999, measured))} {weightUnit}
         {variance !== 0 && (
           <Typography component="span" variant="caption" color={variance < 0 ? "error.main" : "success.main"} sx={{ ml: 1 }}>
-            ({variance > 0 ? "+" : ""}{formatWeight(variance)} บาท เทียบกับที่ตกลง)
+            ({variance > 0 ? "+" : ""}{formatWeight(variance)} {weightUnit} เทียบกับที่ตกลง)
           </Typography>
         )}
       </Box>,
@@ -301,11 +310,11 @@ export function WholesaleSellDetailPage() {
             {contestsWeight && (
               <>
                 <TextField
-                  label={`น้ำหนักที่ผู้ซื้อชั่งได้ (${inputUnitLabel})`}
+                  label={`น้ำหนักที่ผู้ซื้อชั่งได้ (${weightUnit})`}
                   type="number"
                   value={actualWeight}
                   onChange={(e) => setActualWeight(e.target.value)}
-                  helperText={`น้ำหนักตามที่ผู้ซื้อแจ้ง เทียบกับที่ตกลง ${formatWeight(agreedInInputUnit)} ${inputUnitLabel} — บันทึกไว้เป็นหลักฐาน ไม่กระทบสต๊อก`}
+                  helperText={`น้ำหนักตามที่ผู้ซื้อแจ้ง เทียบกับที่ตกลง ${formatWeight(displayWeight(is999, t))} ${weightUnit} — บันทึกไว้เป็นหลักฐาน ไม่กระทบสต๊อก`}
                 />
                 <Divider />
               </>

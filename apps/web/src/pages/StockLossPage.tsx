@@ -64,8 +64,8 @@ export function StockLossPage() {
 
   function handleChange(name: keyof LossValues, value: string) {
     setValue(name, value);
-    // origin defaults to "foreign" and is only user-editable for 99.9% purity — reset it back to
-    // that default, not to "", since the field stays hidden (and thus unfixable) for other purities
+    // origin is not a field any more — it is always "foreign" here — but it stays in the reset
+    // list so it is restored to that default rather than blanked
     RESET_ON_CHANGE[name as string]?.forEach((dep) => setValue(dep, dep === "origin" ? "foreign" : ""));
   }
 
@@ -96,17 +96,6 @@ export function StockLossPage() {
       getOptions: () => purityRules.map((p) => ({ value: p.purityId, label: p.label })),
     },
     {
-      name: "origin",
-      label: "ทอง 99",
-      kind: "select",
-      required: true,
-      isVisible: (v) => matchingRule(v)?.percent === 99.9,
-      getOptions: () => [
-        { value: "domestic", label: "Domestic" },
-        { value: "foreign", label: "Foreign" },
-      ],
-    },
-    {
       name: "brandId",
       label: "ยี่ห้อ",
       kind: "select",
@@ -120,9 +109,17 @@ export function StockLossPage() {
       kind: (v) => (matchingRule(v)?.allowedValues ? "select" : "number"),
       required: true,
       getOptions: (v) => (matchingRule(v)?.allowedValues ?? []).map((n) => ({ value: String(n), label: String(n) })),
+      // The unit follows the pairing's own input unit, exactly as the label above does — this
+      // said "บาททอง" for kilogram pairings, so a 1 kg minimum read as "ขั้นต่ำ 1 บาททอง".
+      // The step is named too: for 96.5% gold bar the minimum alone does not tell an operator
+      // that 7 is invalid, and finding that out from a rejected submit is a poor way to learn it.
       helperText: (v) => {
         const rule = matchingRule(v);
-        return rule && !rule.allowedValues ? `ขั้นต่ำ ${rule.minQuantity} บาททอง` : undefined;
+        if (!rule || rule.allowedValues) return undefined;
+        const unit = rule.inputUnit === "kg" ? "กก." : "บาททอง";
+        return rule.stepQuantity
+          ? `ครั้งละ ${rule.stepQuantity} ${unit} (${rule.minQuantity}, ${rule.minQuantity + rule.stepQuantity}, ${rule.minQuantity + rule.stepQuantity * 2}, …)`
+          : `ขั้นต่ำ ${rule.minQuantity} ${unit}`;
       },
     },
     {
@@ -147,7 +144,10 @@ export function StockLossPage() {
     const payload = {
       purityId: values.purityId,
       brandId: rule?.percent === 99.9 ? undefined : values.brandId || undefined,
-      origin: values.origin as "domestic" | "foreign",
+      // Always foreign. The domestic pool is smelted stock: only `smelting` creates it and only
+      // `convert_out` may draw it down, so a manual adjustment must never name it. The form used
+      // to offer it as a choice for 99.9%.
+      origin: "foreign" as const,
       productTypeId: values.productTypeId,
       weight: Number(values.weight),
       referenceType: values.referenceType,
@@ -157,17 +157,17 @@ export function StockLossPage() {
 
     const parsed = stockLossSchema.safeParse(payload);
     if (!parsed.success) {
-      setFieldError(parsed.error.issues[0]?.message ?? "Invalid input");
+      setFieldError(parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง");
       return;
     }
     setFieldError(null);
 
     stockLoss.mutate(parsed.data, {
       onSuccess: () => {
-        showToast("Stock removed");
+        showToast("ปรับลดสต๊อกเรียบร้อย");
         navigate("/inventory");
       },
-      onError: (err) => setSubmitError(err instanceof Error ? err.message : "Failed to remove stock"),
+      onError: (err) => setSubmitError(err instanceof Error ? err.message : "ปรับลดสต๊อกไม่สำเร็จ"),
     });
   }
 
@@ -187,7 +187,7 @@ export function StockLossPage() {
             {submitError && <Alert severity="error">{submitError}</Alert>}
 
             <Button type="submit" disabled={stockLoss.isPending}>
-              {stockLoss.isPending ? "Saving…" : "Remove Stock"}
+              {stockLoss.isPending ? "กำลังบันทึก…" : "บันทึก"}
             </Button>
           </Box>
         </CardContent>

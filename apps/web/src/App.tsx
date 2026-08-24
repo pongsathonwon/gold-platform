@@ -3,7 +3,8 @@ import { CssBaseline, ThemeProvider } from "@mui/material";
 import { Routes, Route, Navigate } from "react-router-dom";
 import theme from "./companyTheme";
 import { AuthProvider } from "./auth/AuthContext";
-import { AuthGuard } from "./auth/AuthGuard";
+import { AuthGuard, AdminGuard } from "./auth/AuthGuard";
+import { UnauthorizedError } from "./api/client";
 import { ToastProvider } from "./components/ToastContext";
 import { NavBar } from "./components/NavBar";
 import { LoginPage } from "./pages/LoginPage";
@@ -20,7 +21,30 @@ import { WholesaleSellListPage } from "./pages/WholesaleSellListPage";
 import { WholesaleSellCreatePage } from "./pages/WholesaleSellCreatePage";
 import { WholesaleSellDetailPage } from "./pages/WholesaleSellDetailPage";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      /**
+       * Never retry an authorisation failure.
+       *
+       * The default is three attempts with backoff, which on an expired session meant every query
+       * on the page spent about five seconds failing before it showed anything — so a dead session
+       * read as a slow, broken app. A 401 will not come good on the second try; the handler in
+       * `api/client.ts` has already ended the session by the time this is consulted.
+       */
+      retry: (failureCount, error) => {
+        if (error instanceof UnauthorizedError) return false;
+        return failureCount < 2;
+      },
+      /**
+       * Master data (brands, purities, product types, suppliers) is administered rarely and read
+       * on nearly every page. Five minutes stops a tab-switch refetching the whole reference set;
+       * transaction and inventory queries override this where freshness matters.
+       */
+      staleTime: 5 * 60 * 1000,
+    },
+  },
+});
 
 export function App() {
   return (
@@ -37,9 +61,13 @@ export function App() {
                 <Route path="/inventory" element={<InventoryLayout />}>
                   <Route index element={<InventoryPage />} />
                   <Route path="movements" element={<InventoryMovementPage />} />
-                  <Route path="gain" element={<StockGainPage />} />
-                  <Route path="loss" element={<StockLossPage />} />
-                  <Route path="switch" element={<ProductSwitchPage />} />
+                  {/* The three adjustment forms move gold on the books with no counterparty
+                      behind them, and the API restricts them to ADMIN. */}
+                  <Route element={<AdminGuard />}>
+                    <Route path="gain" element={<StockGainPage />} />
+                    <Route path="loss" element={<StockLossPage />} />
+                    <Route path="switch" element={<ProductSwitchPage />} />
+                  </Route>
                 </Route>
                 <Route path="/wholesale-buy" element={<WholesaleBuyListPage />} />
                 <Route path="/wholesale-buy/new" element={<WholesaleBuyCreatePage />} />

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { client } from "../api/client";
+import { assertOk, client } from "../api/client";
 
 interface Purity {
   id: string;
@@ -37,6 +37,8 @@ export interface ProductTypePurity {
   inputUnit: "kg" | "gb";
   minQuantity: number;
   allowedValues: number[] | null;
+  // the increment valid weights land on (96.5% gold bar steps by 5); null means no step rule
+  stepQuantity: number | null;
 }
 
 export function usePurities() {
@@ -44,7 +46,7 @@ export function usePurities() {
     queryKey: ["master-data", "purities"],
     queryFn: async () => {
       const res = await client["master-data"]["purity-grades"].$get();
-      if (!res.ok) throw new Error("Failed to fetch purities");
+      await assertOk(res, "Failed to fetch purities");
       return (await res.json()) as { data: Purity[] };
     },
   });
@@ -55,7 +57,7 @@ export function useBrands() {
     queryKey: ["master-data", "brands"],
     queryFn: async () => {
       const res = await client["master-data"].brands.$get();
-      if (!res.ok) throw new Error("Failed to fetch brands");
+      await assertOk(res, "Failed to fetch brands");
       return (await res.json()) as { data: GoldBrand[] };
     },
   });
@@ -66,7 +68,7 @@ export function useProductTypes() {
     queryKey: ["master-data", "product-types"],
     queryFn: async () => {
       const res = await client["master-data"]["product-types"].$get();
-      if (!res.ok) throw new Error("Failed to fetch product types");
+      await assertOk(res, "Failed to fetch product types");
       return (await res.json()) as { data: ProductType[] };
     },
   });
@@ -77,7 +79,7 @@ export function useSuppliers() {
     queryKey: ["master-data", "suppliers"],
     queryFn: async () => {
       const res = await client["master-data"].suppliers.$get();
-      if (!res.ok) throw new Error("Failed to fetch suppliers");
+      await assertOk(res, "Failed to fetch suppliers");
       return (await res.json()) as { data: Supplier[] };
     },
   });
@@ -94,7 +96,7 @@ export function useSupplierBrands(supplierId: string) {
       const res = await client["master-data"].suppliers[":id"].brands.$get({
         param: { id: supplierId },
       });
-      if (!res.ok) throw new Error("Failed to fetch brands for supplier");
+      await assertOk(res, "Failed to fetch brands for supplier");
       return (await res.json()) as { data: GoldBrand[] };
     },
   });
@@ -109,7 +111,7 @@ export function useProductTypePurities(productTypeId: string) {
       const res = await client["master-data"]["product-types"][":id"].purities.$get({
         param: { id: productTypeId },
       });
-      if (!res.ok) throw new Error("Failed to fetch purities for product type");
+      await assertOk(res, "Failed to fetch purities for product type");
       return (await res.json()) as { data: ProductTypePurity[] };
     },
   });

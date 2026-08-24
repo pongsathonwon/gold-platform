@@ -19,8 +19,8 @@ import {
 import { useInventoryMovements } from "../hooks/useInventory";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 import { withCumulative, type WithCumulative } from "../utils/inventoryVolume";
-import { formatBusinessDate } from "../utils/format";
-import { shiftBusinessDate, todayBusinessDate, TRANSACTION_TYPES } from "@gold-platform/types";
+import { formatBusinessDate, formatNumber, formatWeight } from "../utils/format";
+import { originLabel, shiftBusinessDate, todayBusinessDate, TRANSACTION_TYPES } from "@gold-platform/types";
 
 const REFERENCE_TYPE_LABEL: Record<string, string> = Object.fromEntries(
   TRANSACTION_TYPES.map((t) => [t.value, t.label]),
@@ -31,12 +31,10 @@ const PRODUCT_TYPE_LABEL: Record<string, string> = {
   "Gold Plate": "ทองแผ่น",
 };
 
+// money, with an explicit sign — the ledger reads as movement, so "+1,200.00" and "-1,200.00"
+// say more than a bare number and a colour do
 function formatCostDelta(value: number) {
-  const sign = value >= 0 ? "+" : "-";
-  return `${sign}${Math.abs(value).toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+  return `${value >= 0 ? "+" : "-"}${formatNumber(Math.abs(value))}`;
 }
 
 type MovementRow = {
@@ -80,12 +78,12 @@ export function InventoryMovementPage() {
   const brandById = new Map((brandsRes?.data ?? []).map((b) => [b.id, b]));
   const productTypeById = new Map((productTypesRes?.data ?? []).map((pt) => [pt.id, pt]));
 
-  // movements arrive ascending by (movedAt, id); seed the per-purity running balance from the
-  // opening (deltas before `from`), then reverse to show newest-first.
+  // Movements arrive ascending by (movementDate, movedAt, id). The running balance is seeded from
+  // the opening — the deltas before `from` — and the rows stay in that ascending order, so each
+  // row's cumulative reads as the balance after it and the last row carries the window's closing.
   const rows: CumulativeRow[] = useMemo(() => {
     const movements = (movementsRes?.movements ?? []) as MovementRow[];
     const opening = movementsRes?.opening ?? [];
-    // romove reverse order
     return withCumulative(movements, opening);
   }, [movementsRes]);
 
@@ -96,14 +94,15 @@ export function InventoryMovementPage() {
   // 96.5% deltas are in gold baht (บาท); 99.9% in kilograms (กก. = grams / 1000)
   function renderSection(title: string, sectionRows: CumulativeRow[], unit: "gb" | "kg") {
     const weightHeader = unit === "gb" ? "น้ำหนัก (บาท)" : "น้ำหนัก (กก.)";
+    // 99.9% pools are keyed by origin, not brand — the column holds a different fact per section
+    const brandHeader = unit === "gb" ? "แบรน" : "ที่มา";
     const balanceHeader = unit === "gb" ? "คงเหลือสะสม (บาท)" : "คงเหลือสะสม (กก.)";
     const deltaOf = (r: CumulativeRow) => (unit === "gb" ? r.weightGbDelta : r.weightGmDelta / 1000);
     const balanceOf = (r: CumulativeRow) =>
       unit === "gb" ? r.cumulativeWeightGb : r.cumulativeWeightGm / 1000;
     const totalWeight = sectionRows.reduce((sum, r) => sum + deltaOf(r), 0);
     const totalCost = sectionRows.reduce((sum, r) => sum + r.costDelta, 0);
-    // sectionRows are newest-first, so the first row carries the closing balance for the window
-    // since change order the final balance should be last element
+    // rows are oldest-first, so the closing balance for the window is the last row's cumulative
     const closingBalance = sectionRows.length > 0 ? balanceOf(sectionRows[sectionRows.length-1]) : 0;
 
     return (
@@ -116,7 +115,7 @@ export function InventoryMovementPage() {
             <TableHead>
               <TableRow>
                 <TableCell>วันที่</TableCell>
-                <TableCell>แบรน</TableCell>
+                <TableCell>{brandHeader}</TableCell>
                 <TableCell>ประเภททอง</TableCell>
                 <TableCell>ประเภทรายการ</TableCell>
                 <TableCell align="right">{weightHeader}</TableCell>
@@ -129,7 +128,7 @@ export function InventoryMovementPage() {
             <TableBody>
               {sectionRows.map((row) => {
                 const brandOrOrigin =
-                  unit === "kg" ? row.origin : brandById.get(row.brandId)?.brand ?? row.brandId;
+                  unit === "kg" ? originLabel(row.origin) : brandById.get(row.brandId)?.brand ?? row.brandId;
                 const delta = deltaOf(row);
                 const isPositive = row.weightGbDelta >= 0;
                 const deltaColor = isPositive ? "success.main" : "error.main";
@@ -147,13 +146,13 @@ export function InventoryMovementPage() {
                     </TableCell>
                     <TableCell align="right" sx={{ color: deltaColor }}>
                       {isPositive ? "+" : ""}
-                      {delta}
+                      {formatWeight(delta)}
                     </TableCell>
                                         <TableCell align="right" sx={{ color: deltaColor }}>
                       {formatCostDelta(row.costDelta)}
                     </TableCell>
                     <TableCell align="right" sx={{ color: deltaColor, fontWeight: "medium" }}>
-                      {balanceOf(row)}
+                      {formatWeight(balanceOf(row))}
                     </TableCell>
 
                     <TableCell>{row.movedBy}</TableCell>
@@ -180,7 +179,7 @@ export function InventoryMovementPage() {
                     sx={{ fontWeight: "bold", color: totalWeight >= 0 ? "success.main" : "error.main" }}
                   >
                     {totalWeight >= 0 ? "+" : ""}
-                    {totalWeight}
+                    {formatWeight(totalWeight)}
                   </TableCell>
 
                   <TableCell
@@ -190,7 +189,7 @@ export function InventoryMovementPage() {
                     {formatCostDelta(totalCost)}
                   </TableCell>
                                     <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
-                    {closingBalance}
+                    {formatWeight(closingBalance)}
                   </TableCell>
                   <TableCell colSpan={2} />
                 </TableRow>
@@ -207,7 +206,6 @@ export function InventoryMovementPage() {
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 3, gap: 2, flexWrap: "wrap" }}>
         <Typography variant="h2">ความเคลื่อนไหวทองแท่ง</Typography>
         <Box sx={{ display: "flex", gap: 2 }}>
-          {/* change inputLabel attr to slot props */}
           <TextField
             label="ตั้งแต่วันที่"
             type="date"
@@ -233,7 +231,7 @@ export function InventoryMovementPage() {
         </Box>
       )}
 
-      {isError && <Alert severity="error">Failed to load inventory movements.</Alert>}
+      {isError && <Alert severity="error">โหลดความเคลื่อนไหวไม่สำเร็จ</Alert>}
 
       {movementsRes && (
         <>

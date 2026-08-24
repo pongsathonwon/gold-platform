@@ -13,9 +13,11 @@ import {
   CircularProgress,
   Alert,
 } from "@mui/material";
+import { originLabel } from "@gold-platform/types";
 import { useInventoryVolume } from "../hooks/useInventory";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
 import { type VolumeRow, poolKey, weightOf, splitByPurity, wacRate } from "../utils/inventoryVolume";
+import { formatNumber, formatWeight } from "../utils/format";
 
 export function InventoryPage() {
   const { data: volumeRes, isPending, isError } = useInventoryVolume();
@@ -35,8 +37,16 @@ export function InventoryPage() {
 
   function renderSection(title: string, sectionRows: VolumeRow[], unit: "gb" | "kg") {
     const weightHeader = unit === "gb" ? "น้ำหนัก (บาท)" : "น้ำหนัก (กก.)";
+    // 99.9% pools are keyed by origin, not brand — the column holds a different fact per section
+    const brandHeader = unit === "gb" ? "แบรน" : "ที่มา";
     const totalWeight = sectionRows.reduce((sum, r) => sum + weightOf(r, unit), 0);
     const totalCost = sectionRows.reduce((sum, r) => sum + (r.totalCost ?? 0), 0);
+    // The average is per **gold baht** in both sections, because that is what the column says and
+    // what every row above it shows. Dividing by `totalWeight` gave THB/kg in the 99.9% table — a
+    // footer in a different unit from the rows it totals. Weight can legitimately be zero (a pool
+    // drained but still listed), and `0/0` printed a literal "NaN".
+    const totalWeightGb = sectionRows.reduce((sum, r) => sum + r.totalWeightGb, 0);
+    const averageRate = totalWeightGb > 0 ? totalCost / totalWeightGb : 0;
 
     return (
       <Box sx={{ mb: 4 }}>
@@ -47,7 +57,7 @@ export function InventoryPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>แบรน</TableCell>
+                <TableCell>{brandHeader}</TableCell>
                 <TableCell>ประเภททอง</TableCell>
                 <TableCell align="right">{weightHeader}</TableCell>
                 <TableCell align="right">มูลค่า</TableCell>
@@ -57,15 +67,15 @@ export function InventoryPage() {
             <TableBody>
               {sectionRows.map((row) => {
                 const brandOrOrigin =
-                  unit === "kg" ? row.origin : brandById.get(row.brandId)?.brand ?? row.brandId;
+                  unit === "kg" ? originLabel(row.origin) : brandById.get(row.brandId)?.brand ?? row.brandId;
 
                 return (
                   <TableRow key={poolKey(row)}>
                     <TableCell>{brandOrOrigin}</TableCell>
                     <TableCell>{productTypeById.get(row.productTypeId)?.productType ?? row.productTypeId}</TableCell>
-                    <TableCell align="right">{weightOf(row, unit)}</TableCell>
-                    <TableCell align="right">{(row.totalCost ?? 0).toFixed(2)}</TableCell>
-                    <TableCell align="right">{wacRate(row).toFixed(2)}</TableCell>
+                    <TableCell align="right">{formatWeight(weightOf(row, unit))}</TableCell>
+                    <TableCell align="right">{formatNumber(row.totalCost ?? 0)}</TableCell>
+                    <TableCell align="right">{formatNumber(wacRate(row))}</TableCell>
                   </TableRow>
                 );
               })}
@@ -84,12 +94,12 @@ export function InventoryPage() {
                     รวม
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
-                    {totalWeight}
+                    {formatWeight(totalWeight)}
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>
-                    {totalCost.toFixed(2)}
+                    {formatNumber(totalCost)}
                   </TableCell>
-                  <TableCell align="right" >{(totalCost/totalWeight).toFixed(2)}</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: "bold", color: "text.primary" }}>{formatNumber(averageRate)}</TableCell>
                 </TableRow>
               </TableFooter>
             )}
@@ -111,7 +121,7 @@ export function InventoryPage() {
         </Box>
       )}
 
-      {isError && <Alert severity="error">Failed to load inventory volume.</Alert>}
+      {isError && <Alert severity="error">โหลดข้อมูลคลังไม่สำเร็จ</Alert>}
 
       {volumeRes && (
         <>
