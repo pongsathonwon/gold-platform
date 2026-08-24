@@ -12,10 +12,36 @@ export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 
 // Auth schemas
+
+/**
+ * What a login may do. `OPERATOR` runs the trading day; `ADMIN` additionally holds the powers
+ * that rewrite the books (the manual inventory adjustments) or hand out access (creating users).
+ */
+export const USER_ROLES = [
+  { value: 'ADMIN', label: 'ผู้ดูแลระบบ' },
+  { value: 'OPERATOR', label: 'ผู้ปฏิบัติงาน' },
+] as const
+
+export const userRoleSchema = z.enum(['ADMIN', 'OPERATOR'])
+
+export type UserRoleValue = z.infer<typeof userRoleSchema>
+
+export const userRoleLabel = (value: string) =>
+  USER_ROLES.find((r) => r.value === value)?.label ?? value
+
+/**
+ * Creating a login. This is **not** self-service registration — the endpoint behind it requires an
+ * authenticated `ADMIN`. Gold moves on the say-so of whoever holds an account, so accounts are
+ * issued, not claimed.
+ *
+ * `role` is optional and defaults to `OPERATOR` at the database. Privilege has to be asked for
+ * explicitly; forgetting the field can only ever produce the *less* powerful account.
+ */
 export const registerSchema = z.object({
   name: z.string().min(1, "Name is required"),
   username: z.string().min(1, "Username is required"),
   password: z.string().min(8, "Password must be at least 8 characters"),
+  role: userRoleSchema.optional(),
 });
 
 export const loginSchema = z.object({
@@ -30,6 +56,7 @@ export const publicUserSchema = z.object({
   id: z.number(),
   name: z.string().min(1),
   username: z.string().min(1),
+  role: userRoleSchema,
 })
 
 export const LoginResponseSchema = z.object({
@@ -121,12 +148,31 @@ export const businessDateSchema = businessDaySchema
 
 //inventory
 
+/**
+ * Where 99.9% gold came from — the dimension its pools are keyed by, in place of brand.
+ *
+ * `domestic` is smelted in-house (ทองใน), `foreign` is everything bought in (ทองนอก). The stored
+ * values are English because they are an enum in the database; these are what a Thai operator
+ * reads. The inventory tables rendered the raw `foreign` / `domestic` in a column of Thai brands.
+ */
+export const ORIGINS = [
+  { value: 'domestic', label: 'ทองใน' },
+  { value: 'foreign', label: 'ทองนอก' },
+] as const
+
+export type OriginValue = (typeof ORIGINS)[number]['value']
+
+export const originLabel = (value: string) =>
+  ORIGINS.find((o) => o.value === value)?.label ?? value
+
 // Combined transaction-type list used as the "remark" dropdown on the gain/loss forms.
 // The selected value becomes the movement's referenceType. Each type migrates to its own
 // dedicated module later; until then all movements are recorded through gain/loss.
+//
 // `direction` says which of those two forms may offer the option: 'gain' | 'loss' | 'both'.
-// PRODUCT_SWITCH is neither — it's set internally by the dedicated product-switch flow and
-// is never user-selectable — so it carries no direction and is excluded from both dropdowns.
+// 'none' means the value is written by the system, never chosen by an operator, so it appears in
+// neither dropdown — but it still needs a label, because it reaches the movement ledger and the
+// ledger is read by people. PRODUCT_SWITCH and WHOLESALE_SELL_RETURN are both of that kind.
 export const TRANSACTION_TYPES = [
   { value: 'WHOLESALE_BUY', label: 'ซื้อส่ง', direction: 'gain' },
   { value: 'WHOLESALE_SELL', label: 'ขายส่ง', direction: 'loss' },
@@ -136,6 +182,10 @@ export const TRANSACTION_TYPES = [
   { value: 'SMELTING', label: 'หลอม', direction: 'gain' },
   { value: 'CONVERT_OUT', label: 'แปรสภาพออก', direction: 'loss' },
   { value: 'PRODUCT_SWITCH', label: 'สลับสินค้า', direction: 'none' },
+  // Booked by `reverseDecrement` when a wholesale sale is returned — the gold coming back into
+  // the pools it left. System-written, so it is not selectable, but it lands in the ledger and
+  // without an entry here the movements page renders the raw constant among Thai labels.
+  { value: 'WHOLESALE_SELL_RETURN', label: 'ตีกลับคืนสต๊อก (ขายส่ง)', direction: 'none' },
   { value: 'STOCK_COUNT', label: 'ตรวจนับสต๊อก', direction: 'both' },
   { value: 'DAMAGE', label: 'ชำรุด', direction: 'loss' },
   { value: 'LOST', label: 'สูญหาย', direction: 'loss' },
