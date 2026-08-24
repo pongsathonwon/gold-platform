@@ -85,6 +85,41 @@ function toHttpError(error: unknown): [string, number] {
 }
 ```
 
+## Authentication & Authorization
+
+JWT bearer tokens, one hour, signed HS256. The token carries `{ sub, username, role, exp }` — the
+role travels in the claim so authorisation costs no database round trip. The trade is that a role
+change only takes effect at the holder's next login, which a one-hour lifetime makes acceptable.
+
+**There is no self-registration.** `POST /auth/register` was public: on a system where an account
+can write off stock, anyone who could reach the API could grant themselves the run of the vault.
+Accounts are issued via `POST /auth/users`, which requires an authenticated `ADMIN` and returns the
+created user *without* a token.
+
+| Role | Can |
+|---|---|
+| `OPERATOR` (default) | run the trading day — create and advance wholesale/retail transactions, read inventory and movements, read master data |
+| `ADMIN` | everything an operator can, plus the manual inventory adjustments, the bulk confirm sweeps, and user administration |
+
+The split is *who is accountable for a number nobody else asked for*. `POST /inventory/gain|loss`
+and `/inventory/product-switch` move gold on the books with no counterparty behind them — their
+tables carry `auditedBy` precisely because someone answers for them — so they are ADMIN. So are
+`POST /wholesale-buy|sell/confirm-all`, which end the edit window for *every* open transaction at
+once, not just the caller's. Everything a counterparty drives stays open to any operator: that is
+the job.
+
+`requireRole(...roles)` in `infrastructure/http/middleware/auth.middleware.ts` is mounted after
+`authMiddleware` and reads the claims it verified. A token minted before the `role` claim existed
+has no role and is refused rather than waved through — an unreadable claim must never widen access.
+
+Two roles because two is what operations actually distinguish today. A granular permission matrix
+is the right shape once the business says which jobs exist; inventing that split now would be
+guessing at an org chart. A third role is a column value, not a redesign.
+
+`/users` is entirely ADMIN-only and every response goes through `toPublicUser()`. It was previously
+unauthenticated, and `GET /users` returned whole rows — password hashes included — to anonymous
+callers, while `DELETE /users/:id` would remove any account on request.
+
 ## Transaction Domains
 
 All domains share the same status-log pattern: two tables (`*_transactions` + `*_statuses`), `currentStatus` as write-through cache, `allowedTransitions` map in port file, `InvalidTransitionError` → 422 on invalid moves.
@@ -309,7 +344,9 @@ Endpoints are split per domain (not merged) to keep domains isolated. Client cal
 
 Not all purities are valid for every product type (e.g. gold-plate can only be 96.5). Admin configures valid combinations at go-live via `product_type_purities` join table.
 
-`resolveQuantity(productTypeId, purityId, weight)` in `infrastructure/quantity.ts` — the shared Effect every `createTransaction` usecase calls. It looks the pairing up, validates the weight against that pairing's `minQuantity` / `allowedValues`, converts from the pairing's input unit (kg or gb), and delegates to `resolveWeights()`. Fails `ProductTypePurityNotFoundError` or `InvalidQuantityError` → 422.
+`resolveQuantity(productTypeId, purityId, weight)` in `infrastructure/quantity.ts` — the shared Effect every `createTransaction` usecase calls. It looks the pairing up, validates the weight against that pairing's `minQuantity` / `allowedValues` / `stepQuantity`, converts from the pairing's input unit (kg or gb), and delegates to `resolveWeights()`.
+
+**`stepQuantity`** is the increment a weight must land on when the valid series has no end — 96.5% gold bar is `minQuantity: 5, stepQuantity: 5`, so 5/10/15/20/… are valid and 7 is not, because bars come in 5/10/20/50 GB and no combination of stock makes 7. It is master data beside the other two rules rather than a `percent === 96.5` branch in the validator. `isValidQuantity(rule, weight)` is the whole rule as a pure function (tested in `quantity.test.ts` with no database, the same split as `divideWeight`); `quantityErrorMessage(error)` is the one wording all three routers use. Fails `ProductTypePurityNotFoundError` or `InvalidQuantityError` → 422.
 
 `resolveMeasuredQuantity(...)` is the same thing **without** the quantity validation, for weights that were *measured* rather than ordered — a delivery arriving 11.95 GB against a 12 GB order is a short delivery, not invalid input. Use it for any as-weighed figure; never for an ordered one.
 
@@ -354,15 +391,15 @@ that brand comes from the brand split recorded at the stock-moving transition, n
 | `increment(req)` | receive at `CONFIRMED`, smelting at `CONFIRMED` | the single-brand case, delegating to `incrementSplit` |
 | `decrement(req)` | retail-sell at `SHIPPED`, convert-out at `CONFIRMED` | the single-brand case, delegating to `decrementSplit`. Fails `InsufficientStockError` if the balance is short. |
 | `findBrandSplitByReference(type, id)` | wholesale-buy/sell `getTransaction` | reads a transaction's recorded brand split back off the movement ledger — there is no allocation table |
-| `reverseDecrement(req)` | (not yet wired) | find movements by reference → reverse balance delta → insert reverse movements |
-| `productSwitch(req)` | `POST /inventory/product-switch` | decrement `fromBrandId` pool at its live WAC (`fromCostDelta`) → increment `toBrandId` pool with the same value (`toCostDelta = fromCostDelta`, cost conserved). Either direction — `NA → HUA_GOLD` as readily as the reverse; the two brands must differ (422 from the schema). Same purity + productType only. Atomic. |
-| `stockGain(req)` | `POST /inventory/gain` | operator enters `pricePerGb`; `totalCost = pricePerGb × weightGb` → insert adjustment record → upsert balance `+delta` → insert movement |
-| `stockLoss(req)` | `POST /inventory/loss` | decrement balance `-delta` at live WAC first (fails `InsufficientStockError` if short) → insert adjustment record → insert movement |
+| `reverseDecrement(req)` | wholesale-sell at `RETURNED` | find movements by reference → restore every pool and book the opposite movements, **one transaction** (`applyReversal`) |
+| `productSwitch(req)` | `POST /inventory/product-switch` (ADMIN) | decrement `fromBrandId` pool at its live WAC (`fromCostDelta`) → increment `toBrandId` pool with the same value (`toCostDelta = fromCostDelta`, cost conserved). Either direction — `NA → HUA_GOLD` as readily as the reverse; the two brands must differ (422 from the schema). Same purity + productType only. Atomic. |
+| `stockGain(req)` | `POST /inventory/gain` (ADMIN) | operator enters `pricePerGb`; `totalCost = pricePerGb × weightGb`. Adjustment record + balance `+delta` + movement, **one transaction** (`applyStockGain`) |
+| `stockLoss(req)` | `POST /inventory/loss` (ADMIN) | decrement at live WAC + adjustment record + movement, **one transaction** (`applyStockLoss`). Fails `InsufficientStockError` with nothing written if short |
 
 ### WAC Flow (live)
 
 Outbound cost is derived from the current balance at decrement time — **no daily-snapshot dependency**:
-- `decrementBalance` selects the pool row `FOR UPDATE`, checks sufficiency, then computes `rate = totalCost / totalWeightGb` and `costDelta = weightGb × rate` inside the same transaction, and returns `costDelta`.
+- The shared `decrementWithin(tx, ...)` helper selects the pool row `FOR UPDATE`, checks sufficiency, then computes `rate = totalCost / totalWeightGb` and `costDelta = weightGb × rate` inside the same transaction, and returns `costDelta`. A pool drained to zero weight has its `totalCost` set to `0` rather than left holding rounding residue.
 - Safe from divide-by-zero: `available ≥ weightGb > 0` at that point, so a decrement never runs on a zero-weight pool.
 - Because every `increment` updates `totalCost`/`totalWeightGb`, a pool refilled after hitting zero always decrements at the up-to-date average — this is what fixed the 99.9% zero-inventory cost bug.
 - The daily-snapshot machinery (`inventory_daily_snapshots` table, `computeSnapshots`, `GET/POST /inventory/snapshots*`, the "Compute Today's Rate" button) was **removed** — nothing consumed it after the switch to live WAC. Past balances are reconstructable from the `inventory_movements` ledger if a point-in-time valuation is ever needed.
@@ -406,11 +443,11 @@ is what the (unbuilt) management view will use.
 2. **`custCode` / `emplCode` FK** — retail domains use legacy codes; blocked on same decision
 3. **Employee vs user identity** — recommendation: separate `employees` table (carries `emplCode`) from `users` (login only); `customers` table for `custCode`. Defer until stakeholders decide legacy sync strategy
 4. **`users` table PK** — currently `serial` (integer); should migrate to `uuid` to match all other tables before adding any FKs
-5. **DB migrations** — no migration files yet; run `drizzle-kit generate` then `drizzle-kit migrate` before any deployment. Seed: insert `'NA'` brand (`id='NA', brand='N/A', nonFungible=false, active=false`) after first migration.
+5. ~~**DB migrations** — no migration files yet~~ — resolved: `drizzle/` holds 0000–0014. In production migrations run via `node dist/scripts/migrate.js` (`drizzle-orm`'s own migrator), because `drizzle-kit` is a devDependency and is not in the runtime image. Snapshots for 0007–0009 are missing from `drizzle/meta/`; `generate` is unaffected (it diffs only the latest) but the history cannot be replayed from snapshots.
 6. **Goldbar-to-goldbar conversion** — resolved: `smelting` increments domestic 99.9% pool; `convert_out` decrements domestic or foreign pool. No separate conversion domain needed.
 7. **Jewelry inventory** — deferred. Non-fungible tracking in Sprint 1 uses `productSwitch` to move weight between brand pools (either direction) when a legacy POS discrepancy occurs. True item-level non-fungible tracking is a future phase.
-8. **`reverseDecrement()`** — not yet wired to any domain transition. Works without lot lookup — movements now carry pool keys directly, so reversal finds and restores the correct balance row.
-9. ~~**Daily snapshot as hard gate**~~ — resolved: outbound cost now uses live WAC from the balance at decrement time (`decrementBalance`). The daily-snapshot table and endpoints were removed entirely; no day-open compute is required before outbound transactions.
+8. ~~**`reverseDecrement()`** — not yet wired~~ — it is wired: wholesale-sell calls it on `RETURNED`.
+9. ~~**Daily snapshot as hard gate**~~ — resolved: outbound cost now uses live WAC from the balance at decrement time (`decrementWithin`). The daily-snapshot table and endpoints were removed entirely; no day-open compute is required before outbound transactions.
 
 ## Tests
 
@@ -456,6 +493,10 @@ From the repo root, `pnpm test` runs both workspaces through turbo.
 DATABASE_URL=postgres://postgres:password@localhost:5432/gold_platform
 PORT=3000
 JWT_SECRET=<32-char random secret>
+
+# Comma-separated browser origins allowed to call the API. Required — no default, and the
+# server refuses to start without it.
+CORS_ORIGIN=http://localhost:5173
 
 # optional — the hour (0–23) the nightly confirm sweep runs, per domain. Only used to display
 # when a transaction stops being editable; set them to match the real cron. Default 0.

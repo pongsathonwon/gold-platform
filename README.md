@@ -39,6 +39,7 @@ Edit `apps/api/.env`:
 DATABASE_URL=postgres://postgres:password@localhost:5432/gold_platform
 PORT=3000
 JWT_SECRET=change-me-to-a-random-32-char-secret-key
+CORS_ORIGIN=http://localhost:5173
 ```
 
 ### 3. Start PostgreSQL
@@ -99,7 +100,7 @@ gold-platform/
 │   │   ├── src/
 │   │   │   ├── core/                 # Domain logic
 │   │   │   │   ├── auth/
-│   │   │   │   │   ├── adapter/      # auth.routes.ts — POST /auth/register, /auth/login
+│   │   │   │   │   ├── adapter/      # auth.routes.ts — POST /auth/login, POST /auth/users (ADMIN)
 │   │   │   │   │   ├── application/  # auth.usecase.ts
 │   │   │   │   │   ├── domain/       # auth.error.ts
 │   │   │   │   │   └── port/         # auth.port.ts

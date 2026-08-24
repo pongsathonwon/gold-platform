@@ -1,0 +1,20 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.turbo
+**/.turbo
+.git
+.github
+.claude
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Never let a local environment file reach a build context — it would be baked into an image layer
+# and readable by anyone who can pull it.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example

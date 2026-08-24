@@ -99,6 +99,20 @@
       "when": 1786855167651,
       "tag": "0013_product_switch_destination_brand",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1787368781993,
+      "tag": "0014_user_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1787540405610,
+      "tag": "0015_step_quantity",
+      "breakpoints": true
     }
   ]
 }
