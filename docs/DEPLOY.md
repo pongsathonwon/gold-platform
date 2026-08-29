@@ -102,8 +102,22 @@ gcloud sql instances create gold-db \
 
 ```bash
 gcloud sql databases create gold_platform --instance=gold-db
-gcloud sql users create gold_app --instance=gold-db --password="$(openssl rand -base64 32)"
+gcloud sql users create gold_app --instance=gold-db --password="$PASSWORD"
 ```
+
+**Generating that password: not `openssl rand -base64 32`.** Two constraints collide. Base64 emits
+`+`, `/` and `=`, and the password goes into a URL — `postgres://gold_app:PASSWORD@/...` — where `/`
+truncates it and `+` decodes as a space, so the connection fails with a credentials error that looks
+nothing like a quoting bug. Meanwhile Cloud SQL's default password policy rejects anything without
+an uppercase, a lowercase, a digit *and* a non-alphanumeric, so plain `openssl rand -hex` is refused
+outright. What satisfies both is a base64url alphabet plus a fixed suffix covering the four classes;
+the entropy is all in the random part, so a known suffix costs nothing:
+
+```bash
+PASSWORD="$(openssl rand -base64 36 | tr '+/' '-_' | tr -d '=\n')Aa1-"
+```
+
+`-` and `_` are unreserved in a URI, so nothing needs escaping downstream.
 
 **Test the restore before you go live.** A backup nobody has restored is a hypothesis.
 
@@ -130,8 +144,39 @@ for s in gold-database-url gold-jwt-secret; do
 done
 ```
 
-> Use a dedicated service account rather than the default compute one for anything beyond a first
-> deployment. The default is broadly privileged.
+### Project roles — the step that actually blocks the first build
+
+Secret access alone is not enough, and the default compute service account **starts with no project
+roles at all** in a project created today. That is a change from the old behaviour this document was
+written against, where it was granted Editor and everything below happened to work. It no longer
+does, and each missing role fails at a different stage with an error that does not name the role.
+
+```bash
+PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT_ID --format='value(projectNumber)')
+SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+for role in cloudsql.client artifactregistry.writer run.admin iam.serviceAccountUser logging.logWriter; do
+  gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+    --member="serviceAccount:${SA}" --role="roles/${role}" --condition=None
+done
+```
+
+| Role | Without it |
+|---|---|
+| `cloudsql.client` | the service and the migrate job cannot reach the database at all |
+| `artifactregistry.writer` | `push` fails after a successful build |
+| `run.admin` | `run jobs deploy` and `run deploy` are denied |
+| `iam.serviceAccountUser` | the build cannot *act as* the runtime SA, so deploy is denied |
+| `logging.logWriter` | the build fails immediately — `cloudbuild.yaml` sets `CLOUD_LOGGING_ONLY`, and a build that cannot write logs cannot start |
+
+That last one is the confusing one: the build fails before running a single step, and the message is
+about logging configuration rather than permissions.
+
+> This grants five roles to the default compute service account, which is both the build identity
+> and the runtime identity. Splitting them — a build SA that can push and deploy, a runtime SA that
+> can only read secrets and reach Cloud SQL — is the right shape once the first deployment is
+> working, and needs `--service-account` on the build and `--service-account` on the Cloud Run
+> service. Doing it before anything has ever deployed makes a first failure much harder to read.
 
 ---
 
