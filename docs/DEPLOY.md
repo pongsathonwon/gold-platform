@@ -95,6 +95,18 @@ gcloud builds submit --config cloudbuild.yaml \
 Migrations run as a job before traffic moves, never on server startup — starting N instances
 would race them through the same DDL.
 
+### Do not set `TZ` on the service
+
+The container runs in UTC, deliberately. Every date the business cares about is computed against
+`Asia/Bangkok` explicitly — `businessDateOf()` and `todayBusinessDate()` in `@gold-platform/types`,
+`nextAutoConfirmAt()` in `infrastructure/auto-confirm.ts` — and `settlement.ts` does its arithmetic
+in UTC throughout. Nothing reads the host's clock for a business decision.
+
+Setting `TZ=Asia/Bangkok` would therefore change no output, while making the one class of bug it
+looks like it prevents *invisible in production and still broken everywhere else* — a
+`new Date().getHours()` slipped in later would pass on the deployed service and fail in CI, in dev,
+and in tests. The host timezone is not load-bearing and should not be made so.
+
 ---
 
 ## 3. Bootstrap the first admin
@@ -173,9 +185,6 @@ Then log in as the admin, create the operator accounts, and confirm an operator 
 
 These were identified in review and are **not** fixed in this pass:
 
-- **`nextAutoConfirmAt` uses the server's local timezone**, not `Asia/Bangkok`. `confirmDueAt` will
-  read seven hours off on a UTC host. It is informational only — nothing tests against it — but
-  set `TZ=Asia/Bangkok` on the service as a stopgap.
 - **`resolveWeights` picks the newest conversion factor by `effectiveDate` including future-dated
   rows.** Do not insert a future-dated `unit_conversion` row until this is fixed.
 - **Error responses fall through to `JSON.stringify(error)` with a 500**, which can leak table and

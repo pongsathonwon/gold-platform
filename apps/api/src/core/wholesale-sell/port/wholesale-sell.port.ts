@@ -5,6 +5,10 @@ import {
 } from "@gold-platform/types";
 import { RepositoryError } from "../../../infrastructure/db/client.js";
 import {
+    autoConfirmHour as resolveAutoConfirmHour,
+    nextAutoConfirmAt as resolveNextAutoConfirmAt,
+} from "../../../infrastructure/auto-confirm.js";
+import {
     CreateWholeSellStatus, CreateWholeSellTransaction,
     WholeSellStatus, WholeSellStatusShape, WholeSellTransactionShape,
 } from "../../../infrastructure/db/schema/wholesale-sell.schema.js";
@@ -165,23 +169,17 @@ export const REVERSAL_STATUS: WholeSellStatus = WHOLE_SELL_REVERSAL_STATUS
 // event beside the original decrement rather than silently cancelling it out
 export const REVERSE_REFERENCE_TYPE = 'WHOLESALE_SELL_RETURN'
 
-// The hour the nightly confirm job runs. It is not a deadline the API enforces — the job is the
-// cutoff — but knowing when the next run lands is what lets the UI tell an operator how long
-// their deal stays editable. Default midnight; override to match the actual cron schedule.
-const DEFAULT_AUTO_CONFIRM_HOUR = 0
-
+// The hour the nightly confirm job runs — a wall-clock hour in the shop, not on the server. It is
+// not a deadline the API enforces — the job is the cutoff — but knowing when the next run lands is
+// what lets the UI tell an operator how long their deal stays editable. Default midnight; override
+// to match the actual cron schedule.
 export function autoConfirmHour(): number {
-    const raw = Number(process.env.WHOLESALE_SELL_AUTO_CONFIRM_HOUR)
-    if (!Number.isInteger(raw) || raw < 0 || raw > 23) return DEFAULT_AUTO_CONFIRM_HOUR
-    return raw
+    return resolveAutoConfirmHour(process.env.WHOLESALE_SELL_AUTO_CONFIRM_HOUR)
 }
 
-/** The next time the nightly job will run, at or after `from`. */
+/** The next time the nightly job will run, at or after `from`. Bangkok's clock — see the module. */
 export function nextAutoConfirmAt(from: Date): Date {
-    const next = new Date(from)
-    next.setHours(autoConfirmHour(), 0, 0, 0)
-    if (next <= from) next.setDate(next.getDate() + 1)
-    return next
+    return resolveNextAutoConfirmAt(from, autoConfirmHour())
 }
 
 export const BOT_CONFIRM_ACTOR = 'BOT-CONFIRM'

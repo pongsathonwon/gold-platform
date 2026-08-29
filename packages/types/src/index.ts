@@ -90,6 +90,20 @@ export type AuthResponse = z.infer<typeof LoginResponseSchema>
 export const BUSINESS_TIME_ZONE = 'Asia/Bangkok'
 
 /**
+ * Bangkok's fixed offset from UTC, as an ISO suffix.
+ *
+ * Lives beside the zone name because it is the *other* half of the same fact, and the two must
+ * never drift. Thailand has observed UTC+7 with no daylight saving since 1920, so an offset is a
+ * complete description of the zone — which is what lets a wall-clock time in Bangkok be turned
+ * back into an instant by string concatenation (`nextAutoConfirmAt`) rather than by iterating
+ * `Intl` offsets around a DST seam that does not exist here.
+ *
+ * `businessDateOf` still goes through `BUSINESS_TIME_ZONE`: reading a zone is what `Intl` is for,
+ * and the named zone stays the source of truth for anything that formats.
+ */
+export const BUSINESS_UTC_OFFSET = '+07:00'
+
+/**
  * The Bangkok day an instant falls in, as `YYYY-MM-DD`.
  *
  * Pinned to the shop's timezone rather than the machine's: the server may run in UTC and a
