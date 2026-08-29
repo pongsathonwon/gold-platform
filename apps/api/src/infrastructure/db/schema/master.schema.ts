@@ -111,9 +111,9 @@ export const branches = pgTable("branches", {
      */
     active: boolean().default(true).notNull(),
     /** When the row reached the database. Server clock, never caller-supplied. */
-    insertedAt: timestamp().defaultNow().notNull(),
+    insertedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     /** Soft-delete tombstone; null = live. Hard deletion is impossible once transactions FK this. */
-    deletedAt: timestamp(),
+    deletedAt: timestamp({ withTimezone: true }),
 })
 
 export type Branch = typeof branches.$inferSelect

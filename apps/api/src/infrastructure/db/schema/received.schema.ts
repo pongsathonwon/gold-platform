@@ -29,7 +29,7 @@ export const receivedTransactions = pgTable('received_transactions', {
     currentStatus: receivedStatusEnum().notNull().default('RECEIVED'),
 
     recordedBy: varchar().notNull(),
-    recordedAt: timestamp().defaultNow().notNull(),
+    recordedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
 })
 
 export type CreateReceivedTransaction = typeof receivedTransactions.$inferInsert;
@@ -45,7 +45,7 @@ export const receivedStatuses = pgTable('received_statuses', {
     note: text(),
 
     createdBy: varchar().notNull(),
-    createdAt: timestamp().defaultNow().notNull(),
+    createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
 })
 
 export type CreateReceivedStatus = typeof receivedStatuses.$inferInsert;

@@ -23,7 +23,7 @@ export const users = pgTable("users", {
   // Least privilege by default: a row created without an explicit role cannot adjust stock or
   // create further logins. Escalating is a deliberate act, never an omission.
   role: userRoleEnum("role").notNull().default('OPERATOR'),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type UserRole = (typeof userRoleEnum.enumValues)[number];

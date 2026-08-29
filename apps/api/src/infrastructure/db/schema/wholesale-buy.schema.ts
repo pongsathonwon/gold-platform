@@ -109,14 +109,14 @@ export const wholeBuyTransactions = pgTable('whole_buy_transactions', {
 
     // recordedAt + the configured edit window. While CREATED and before this instant the
     // transaction can still be edited; past it the auto-confirm job moves it to CONFIRMED.
-    confirmDueAt: timestamp().notNull(),
+    confirmDueAt: timestamp({ withTimezone: true }).notNull(),
 
     notes: text(),
 
     recordedBy: varchar().notNull(),
     // when the row reached the database — server-written, never caller-supplied. See
     // transactionDate above for why both exist.
-    recordedAt: timestamp().defaultNow().notNull(),
+    recordedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
 })
 
 export type CreateWholeBuyTransaction = typeof wholeBuyTransactions.$inferInsert;
@@ -132,7 +132,7 @@ export const wholeBuyStatuses = pgTable('whole_buy_statuses', {
     note: text(), // required on every failure-branch transition, optional on the happy path
 
     createdBy: varchar().notNull(),
-    createdAt: timestamp().defaultNow().notNull(),
+    createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
 })
 
 export type CreateWholeBuyStatus = typeof wholeBuyStatuses.$inferInsert;

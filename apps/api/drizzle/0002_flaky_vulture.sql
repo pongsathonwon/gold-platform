@@ -1,1 +1,0 @@
-ALTER TABLE "unit_conversion" ALTER COLUMN "factor_value" SET DATA TYPE numeric(6, 4);

@@ -194,7 +194,9 @@ CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> STOC
   `BOT-CONFIRM`), and `?manual=true` is the operator's mid-day run (logged under their username).
   `PATCH /wholesale-buy/:id` is accepted while `CREATED` and refused after — confirmation is the
   lock. `confirmDueAt` (`WHOLESALE_BUY_AUTO_CONFIRM_HOUR`, default midnight) records when the next
-  sweep lands and is **informational only**; nothing tests against it.
+  sweep lands and is **informational only**; nothing tests against it. The hour is wall-clock in
+  `Asia/Bangkok` — `infrastructure/auto-confirm.ts` is the single implementation both wholesale
+  ports call, each passing its own env var.
 - **`POST /wholesale-buy/:id/receive-stock`** does `PAID → RECEIVED → STOCKED` in one call because
   that is one operator action and BU wants it to stay one. It takes no weight. Both status rows are
   still written, so splitting the steps later needs no migration. This is deliberately *not*
@@ -355,6 +357,7 @@ Recording an event and the event happening are different facts. On day one the s
 
 - Carried by **wholesale-buy**, **wholesale-sell**, **retail-buy**, **retail-sell**, **stock gain** and **stock loss**. It matters most on the retail pair, which is written up after the fact — a whole week of counter trades can be entered on one afternoon, and each has to land in the period it happened in. `inventory_movements.movementDate` is the trading day the metal moved: the picked date for a manual adjustment, the day of the transition for a buy reaching `STOCKED` or a sell reaching `PACKED` — the order's own date may be older, but the metal moved when it moved.
 - **A day, not an instant.** All the picked date decides is which Fri–Thu period the record lands in, and that boundary falls on a day. A time would add no information and one more timezone to get wrong.
+- **The two are different column types, and the split is load-bearing.** Picked days are `date` (Drizzle maps them to `YYYY-MM-DD` strings both ways, so no timezone touches them); insert timestamps are `timestamp({ withTimezone: true })` — `timestamptz`. Migration `0018_timestamptz` converted all 19 instant columns. The reason is that each has two writers — the app via `toISOString()`, and `defaultNow()` via Postgres `now()` — and on a naive column those agree only while the session is UTC, silently diverging by the session offset otherwise, with nothing on the row to say which convention wrote it. **Never give a `date` column a timezone**, and never add a naive `timestamp`; the header comment in `db/schema/index.ts` is the full rationale.
 - **"Today" is Bangkok's today.** `todayBusinessDate()` / `businessDateOf(date)` in `@gold-platform/types` format on `Asia/Bangkok`, not on the server's or browser's clock. Never compare `recordedAt.slice(0, 10)` against a picked date — that answers the question in UTC, a different calendar for seven hours a day.
 - **`businessDateSchema`** (also in types) validates a picked date: `YYYY-MM-DD`, not in the future, no floor on backdating. **`businessDaySchema`** is the shape-only form used for report windows, which may reach forward.
 - **On adjustments the date documents, it does not replay.** A backdated gain or loss moves the balance now, at today's live WAC. It dates the record and the movement so reports read correctly; it does not retroactively re-average costs already applied to movements that have been reported on.
@@ -498,7 +501,13 @@ is what the (unbuilt) management view will use.
 2. ~~**`custCode` / `emplCode` FK**~~ — moot for now: migration 0017 **dropped** both columns from the retail tables rather than leaving them unfilled. A walk-in customer is not an entity here, and the trade's only nameable party is the branch. They return with the customer/employee domains, not before.
 3. **Employee vs user identity** — recommendation: separate `employees` table from `users` (login only), plus a `customers` table. Defer until stakeholders decide the legacy sync strategy. **Customer gold deposits need this**: gold left for safekeeping is custody, not a trade — title does not transfer — so it needs its own domain and must never be recorded as a retail-buy.
 4. **`users` table PK** — currently `serial` (integer); should migrate to `uuid` to match all other tables before adding any FKs
-5. ~~**DB migrations** — no migration files yet~~ — resolved: `drizzle/` holds 0000–0014. In production migrations run via `node dist/scripts/migrate.js` (`drizzle-orm`'s own migrator), because `drizzle-kit` is a devDependency and is not in the runtime image. Snapshots for 0007–0009 are missing from `drizzle/meta/`; `generate` is unaffected (it diffs only the latest) but the history cannot be replayed from snapshots.
+5. ~~**DB migrations** — no migration files yet~~ — resolved, and since **squashed to a single baseline**, `drizzle/0000_init.sql`. The 19 files that preceded it (0000–0018) had accumulated a broken snapshot history — `meta/` was missing 0007–0009 and 0016–0018 — which left `drizzle-kit generate` diffing against the stale 0015 snapshot and stalling on an interactive column-conflict prompt. Squashing before the first deployment fixed that at the root; `generate` now reports cleanly.
+
+   The baseline was verified to reproduce the old chain exactly — two databases built both ways and compared on 230 columns, 71 constraints, 28 indexes and the label ordering of 11 enum types. Only physical column order and internal `enumsortorder` floats differ, neither of which reaches the application. The reasoning from the squashed files is preserved in `docs/schema-history.md`; the files are in git before the squash commit.
+
+   **Regenerating: always `pnpm exec drizzle-kit generate`, never ad-hoc `--schema`/`--out` flags.** Those bypass `drizzle.config.ts` and silently drop `casing: 'snake_case'`, yielding a baseline with camelCase columns that applies cleanly and then breaks every query.
+
+   In production migrations run via `node dist/scripts/migrate.js` (`drizzle-orm`'s own migrator), because `drizzle-kit` is a devDependency and is not in the runtime image. Verify any new migration by applying it to a scratch database and diffing `information_schema` against one built the previous way — an existing database is reconciled by resetting `drizzle.__drizzle_migrations` (its `hash` is the SHA256 of the migration file), never by re-running DDL that is already applied.
 6. **Goldbar-to-goldbar conversion** — resolved: `smelting` increments domestic 99.9% pool; `convert_out` decrements domestic or foreign pool. No separate conversion domain needed.
 7. **Jewelry inventory** — deferred. Non-fungible tracking in Sprint 1 uses `productSwitch` to move weight between brand pools (either direction) when a legacy POS discrepancy occurs. True item-level non-fungible tracking is a future phase.
 8. ~~**`reverseDecrement()`** — not yet wired~~ — it is wired: wholesale-sell calls it on `RETURNED`.
@@ -576,8 +585,9 @@ JWT_SECRET=<32-char random secret>
 # server refuses to start without it.
 CORS_ORIGIN=http://localhost:5173
 
-# optional — the hour (0–23) the nightly confirm sweep runs, per domain. Only used to display
-# when a transaction stops being editable; set them to match the real cron. Default 0.
+# optional — the hour (0–23) the nightly confirm sweep runs, per domain. A wall-clock hour in
+# Asia/Bangkok, not on the server. Only used to display when a transaction stops being editable;
+# set them to match the real cron. Default 0.
 WHOLESALE_BUY_AUTO_CONFIRM_HOUR=0
 WHOLESALE_SELL_AUTO_CONFIRM_HOUR=0
 ```

@@ -92,12 +92,12 @@ export const wholeSellTransactions = pgTable('whole_sell_transactions', {
 
     // when the next bulk-confirm sweep lands. While CREATED the transaction is editable; the
     // sweep is what ends that. Informational only — nothing in the API tests against it.
-    confirmDueAt: timestamp().notNull(),
+    confirmDueAt: timestamp({ withTimezone: true }).notNull(),
 
     notes: text(),
 
     recordedBy: varchar().notNull(),
-    recordedAt: timestamp().defaultNow().notNull(),
+    recordedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
 })
 
 export type CreateWholeSellTransaction = typeof wholeSellTransactions.$inferInsert;
@@ -113,7 +113,7 @@ export const wholeSellStatuses = pgTable('whole_sell_statuses', {
     note: text(), // required on every failure-branch transition, optional on the happy path
 
     createdBy: varchar().notNull(),
-    createdAt: timestamp().defaultNow().notNull(),
+    createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
 })
 
 export type CreateWholeSellStatus = typeof wholeSellStatuses.$inferInsert;

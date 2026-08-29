@@ -44,7 +44,7 @@ export const inventoryMovements = pgTable('inventory_movements', {
     movementDate: date({ mode: 'string' }).notNull(),
 
     // when the row was written — the bookkeeping instant, kept for ordering within a day
-    movedAt: timestamp().notNull().defaultNow(),
+    movedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
     movedBy: varchar().notNull(),
 }, (table) => [
     /**
@@ -83,7 +83,7 @@ export const stockGainAdjustments = pgTable('stock_gain_adjustments', {
     // Friday's. Defaults to today; `auditedAt` below is when the row was actually written.
     transactionDate: date({ mode: 'string' }).notNull(),
     auditedBy: varchar().notNull(),
-    auditedAt: timestamp().notNull().defaultNow(),
+    auditedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 })
 
 export type CreateStockGain = typeof stockGainAdjustments.$inferInsert;
@@ -103,7 +103,7 @@ export const stockLossAdjustments = pgTable('stock_loss_adjustments', {
     // as on the gain side — the day the loss belongs to, not the day it was typed
     transactionDate: date({ mode: 'string' }).notNull(),
     auditedBy: varchar().notNull(),
-    auditedAt: timestamp().notNull().defaultNow(),
+    auditedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 })
 
 export type CreateStockLoss = typeof stockLossAdjustments.$inferInsert;
@@ -123,7 +123,7 @@ export const productSwitchAdjustments = pgTable('product_switch_adjustments', {
     toCostDelta: decimal({ mode: 'number' }).notNull(),
     notes: text(),
     switchedBy: varchar().notNull(),
-    switchedAt: timestamp().notNull().defaultNow(),
+    switchedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 })
 
 export type CreateProductSwitch = typeof productSwitchAdjustments.$inferInsert;

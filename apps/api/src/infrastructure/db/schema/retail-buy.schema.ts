@@ -54,7 +54,7 @@ export const retailBuyTransactions = pgTable('retail_buy_transactions', {
     notes: text(),
 
     recordedBy: varchar().notNull(), // from the JWT, never the request body
-    recordedAt: timestamp().defaultNow().notNull(), // server clock
+    recordedAt: timestamp({ withTimezone: true }).defaultNow().notNull(), // server clock
 })
 
 export type CreateRetailBuyTransaction = typeof retailBuyTransactions.$inferInsert;
@@ -70,7 +70,7 @@ export const retailBuyStatuses = pgTable('retail_buy_statuses', {
     note: text(), // required when CANCELLED, optional otherwise
 
     createdBy: varchar().notNull(),
-    createdAt: timestamp().defaultNow().notNull(),
+    createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
 })
 
 export type CreateRetailBuyStatus = typeof retailBuyStatuses.$inferInsert;
