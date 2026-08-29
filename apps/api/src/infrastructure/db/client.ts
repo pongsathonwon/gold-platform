@@ -42,9 +42,26 @@ const mapDatabaseConnectionError = (error: unknown) => {
   });
 };
 
+/**
+ * Connections per instance.
+ *
+ * postgres.js defaults to 10, and that default is the wrong shape for this deployment: the number
+ * that reaches the database is `max` × the Cloud Run instance ceiling, so an unstated 10 quietly
+ * became 40 against a shared-core Cloud SQL instance whose own limit is not much higher — and the
+ * migration job wants a connection too. Five against a ceiling of two revisions bounds it at ten.
+ *
+ * It is not a throughput constraint at this volume. The four transaction domains together see on
+ * the order of 60 writes a day, so a single connection would serve them; the pool is sized for
+ * concurrent *requests* — a page opening several queries at once — not for load.
+ */
+const MAX_CONNECTIONS_PER_INSTANCE = 5
+
 export const makeConnection = (url: string) =>
   Effect.try({
-    try: () => postgres(url, { types: { date: { to: 1082, from: [1082], serialize: (d: string) => d, parse: (d: string) => d } } }),
+    try: () => postgres(url, {
+      max: MAX_CONNECTIONS_PER_INSTANCE,
+      types: { date: { to: 1082, from: [1082], serialize: (d: string) => d, parse: (d: string) => d } },
+    }),
     catch: (error) => mapDatabaseConnectionError(error),
   });
 

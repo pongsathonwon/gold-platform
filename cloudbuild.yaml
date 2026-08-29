@@ -96,11 +96,36 @@ steps:
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=DATABASE_URL=gold-database-url:latest,JWT_SECRET=gold-jwt-secret:latest
       - --set-env-vars=CORS_ORIGIN=${_CORS_ORIGIN},NODE_ENV=production
-      # A gold shop's internal tool has a handful of concurrent users. One warm instance keeps the
-      # cold-start cost off the operator's first request of the morning; the ceiling is there to
-      # bound the connection count against Cloud SQL, not to handle load.
+      # Sized against measured volume, not a guess: the busiest domain peaks at ~15 transactions a
+      # day, so all four together are on the order of 60 — call it one every eight minutes across a
+      # working day. One instance serves that with room to spare.
+      #
+      # The ceiling exists to bound connections against Cloud SQL, not to absorb load, so it is the
+      # smallest number that still allows a rolling deploy to overlap the old revision. Each
+      # instance opens up to `max` postgres.js connections (set to 5 in db/client.ts), so the worst
+      # case here is 10 plus the migration job — comfortably inside a shared-core instance's limit.
+      # It was 4, which paired with the driver's default pool of 10 to allow 40.
+      #
+      # min-instances is the one setting here with a real price attached, and the price changes when
+      # the 90-day trial credit runs out. Read this before paying a bill you did not expect.
+      #
+      # Cloud Run's permanent free tier is 2M requests, 180,000 vCPU-seconds and 360,000 GiB-seconds
+      # a month. This service's *request* load uses about 3% of that. But a warm instance bills for
+      # wall-clock time whether or not anything calls it: one instance held for a month is roughly
+      # 2.6M vCPU-seconds, about fourteen times the whole allowance. So the flag below, not the
+      # traffic, is what decides between a free service and one costing on the order of $20/month.
+      #
+      # It stays at 1 anyway, because during the trial it costs nothing and it is the better
+      # experience: Cloud Run retires an idle instance after roughly fifteen minutes, and at one
+      # request every eight minutes the traffic is sparse enough to cross that gap repeatedly — so 0
+      # buys cold starts several times a day, not once in the morning.
+      #
+      # When the credit expires, that is the decision: keep paying ~$20/month for a warm instance,
+      # or set this to 0 and accept a few seconds' wait on the first request after each idle gap.
+      # At this volume nothing else on the service is load-bound, so it is the only lever that
+      # meaningfully moves the bill. See docs/DEPLOY.md, "What this costs".
       - --min-instances=1
-      - --max-instances=4
+      - --max-instances=2
       - --cpu=1
       - --memory=512Mi
       # Cloud Run's default startup probe allows 240s; the server refuses to listen until it has

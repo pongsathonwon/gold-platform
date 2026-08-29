@@ -14,6 +14,43 @@ Three deployed pieces:
 
 ---
 
+## What this costs
+
+Sized against measured volume: the busiest domain peaks at ~15 transactions a day, so all four
+together are on the order of 60 — roughly one every eight minutes across a working day. That is
+small enough that most of this stack falls inside permanent free tiers, and the bill is dominated
+by two decisions rather than by traffic.
+
+| Piece | Monthly | Note |
+|---|---|---|
+| Cloud SQL `db-g1-small` | ~$30 | **no free tier** — the only unavoidable cost |
+| Cloud Run, `--min-instances=1` | ~$20 | a warm instance bills for wall-clock time |
+| Cloud Run, `--min-instances=0` | ~$0 | request load is ~3% of the free tier |
+| Firebase Hosting | $0 | within free tier |
+| Artifact Registry, Secret Manager | <$1 | |
+| Egress | ~$0.01 | the free allowance is North America only, but this is JSON |
+
+**Start on the $300 / 90-day trial credit.** It covers this entire stack — warm instance, Cloud SQL
+with point-in-time recovery, everything — for the full ninety days. That is the recommended way in:
+run the real configuration rather than a cut-down one, and arrive at the end of the trial with three
+months of actual usage instead of estimates.
+
+**Two things to do before the credit expires**, because both get harder afterwards:
+
+1. **Decide `--min-instances`.** At 1 it is ~$20/month and the operator never waits. At 0 it is free
+   and they wait a few seconds after each idle gap — several times a day at this traffic, not once
+   in the morning. The reasoning is written at the flag itself in `cloudbuild.yaml`.
+2. **Test a restore.** Point-in-time recovery is the main thing Cloud SQL is being paid for, and an
+   untested backup is a hypothesis. It is also precisely the capability that would be given up by
+   moving to a self-managed VPS later, so verify it is real while the credit is covering it.
+
+Cloud Run's permanent free tier — 2M requests, 180,000 vCPU-seconds, 360,000 GiB-seconds a month —
+comfortably covers this service's *requests*. It does not cover an idle warm instance, which is
+about fourteen times the whole vCPU allowance. Traffic is not what decides the Cloud Run bill here;
+that one flag is.
+
+---
+
 ## 1. One-time setup
 
 ```bash
@@ -32,6 +69,22 @@ gcloud artifacts repositories create gold-platform \
 ### Cloud SQL
 
 This database holds the gold position. Backups and point-in-time recovery are not optional.
+
+**On the tier, and what it costs you.** `db-g1-small` is a shared-core machine type, and Google
+excludes both shared-core tiers from the Cloud SQL SLA — the documentation is blunt that they are
+"designed to provide low-cost test and development instances only". That is a deliberate choice
+here, not an oversight: SLA coverage requires high availability *and* a dedicated CPU, which is a
+jump to roughly $100/month for a workload whose four transaction domains together see on the order
+of 60 writes a day. The shop is buying durability, not uptime — thirty retained backups and
+point-in-time recovery, so a bad afternoon is recoverable to the minute — and accepting that a
+zonal incident means an outage rather than a failover.
+
+Revisit that if the shop ever cannot trade without this system. It is a tier change and a failover
+replica, not a rewrite. What would *not* be a good trade is dropping to `db-f1-micro` to save the
+difference: it is the same no-SLA bucket with 0.6 GB of RAM, and `sumMovementsBefore` — the opening
+balance behind `GET /inventory/movements` — aggregates every movement before the window with no
+limit, so it is the one query whose cost grows with the age of the ledger rather than the size of
+the request.
 
 ```bash
 gcloud sql instances create gold-db \
