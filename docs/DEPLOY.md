@@ -307,7 +307,60 @@ API with the real origin.
 
 ---
 
-## 5. After deploying
+## 5. The nightly confirm sweep
+
+`PATCH /wholesale-{buy,sell}/:id` is accepted while a transaction is `CREATED` and refused after, so
+confirmation is what locks the day's entries. Until this job exists that lock never closes on its
+own, and `confirmDueAt` — which the UI shows an operator as their deadline — describes a run that
+never happens.
+
+A Cloud Run job on a Cloud Scheduler trigger, not a scheduled HTTP call:
+
+```bash
+gcloud run jobs deploy gold-confirm-sweep \
+  --image=asia-southeast1-docker.pkg.dev/PROJECT/gold-platform/gold-api:latest \
+  --command=node --args=dist/scripts/confirm-sweep.js \
+  --region=asia-southeast1 \
+  --set-cloudsql-instances=PROJECT:asia-southeast1:gold-db \
+  --set-secrets=DATABASE_URL=gold-database-url:latest,JWT_SECRET=gold-jwt-secret:latest \
+  --set-env-vars=CORS_ORIGIN=https://your-spa-domain,NODE_ENV=production \
+  --max-retries=1 --task-timeout=300s
+
+gcloud scheduler jobs create http gold-confirm-sweep-nightly \
+  --location=asia-southeast1 --schedule="0 0 * * *" --time-zone="Asia/Bangkok" \
+  --uri="https://run.googleapis.com/v2/projects/PROJECT/locations/asia-southeast1/jobs/gold-confirm-sweep:run" \
+  --http-method=POST --oauth-service-account-email="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+```
+
+**Why a job and not `POST /wholesale-*/confirm-all`.** Those routes are `requireRole('ADMIN')`, so a
+scheduled caller needs a token the app itself minted, and those last an hour — leaving either a
+standing credential or a refresh dance, to reach an endpoint that ends the edit window for every
+open transaction at once. The job talks to the database and exposes no HTTP surface at all.
+
+**Keep the schedule and `WHOLESALE_*_AUTO_CONFIRM_HOUR` in agreement.** The cron decides when the
+window actually closes; the env vars only decide what the UI *says* about it. Nothing enforces that
+they match, so a change to one is silently a lie in the other. Both default to midnight Bangkok.
+
+Two notes from getting this running:
+
+- The job needs `CORS_ORIGIN` — a setting it has no use for — because `AppConfig` bundles the HTTP
+  configuration with the database, and it needs the database.
+- It cannot be given `PORT`: that is a reserved env name on Cloud Run, rejected on a job and injected
+  only into services. `PORT` is therefore defaulted in `env.ts` rather than required.
+
+Verify the whole chain rather than just the job, since the scheduler's OAuth is its own failure mode:
+
+```bash
+gcloud scheduler jobs run gold-confirm-sweep-nightly --location=asia-southeast1
+gcloud run jobs executions list --job=gold-confirm-sweep --region=asia-southeast1 --limit=1
+```
+
+A fresh execution timestamped to that moment is the proof. Re-running is safe: once a transaction
+leaves `CREATED` it stops matching, so a retry or double-fire confirms nothing twice.
+
+---
+
+## 6. After deploying
 
 Verify:
 
