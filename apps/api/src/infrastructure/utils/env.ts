@@ -22,8 +22,20 @@ export class AppConfig extends Context.Tag("AppConfig")<
 
 const envSchema = z.object({
   DATABASE_URL: z.string().url(),
-  // Cloud Run injects PORT and expects the container to listen on it; locally it comes from .env
-  PORT: z.coerce.number(),
+  /**
+   * The port the HTTP server listens on. Defaulted, not required, and the default is never the
+   * value in production.
+   *
+   * Cloud Run injects PORT into a *service* and expects the container to listen on it. It does not
+   * inject it into a *job*, and it will not let you set it either — PORT is a reserved env name and
+   * `run jobs update --set-env-vars=PORT=...` is rejected outright. So while this was required, any
+   * job reaching for AppConfig died at boot with `Expected number, received nan`: the confirm sweep
+   * needs the database, and the database lives behind the same config as the HTTP settings.
+   *
+   * Defaulting is safe precisely because a service always has the value injected, so the fallback
+   * only ever applies where nothing listens on it.
+   */
+  PORT: z.coerce.number().default(3000),
   JWT_SECRET: z.string().min(32),
   /**
    * Comma-separated list of browser origins allowed to call this API.
@@ -57,9 +69,18 @@ export class ConfigError extends Data.TaggedError("ConfigError")<{
   payload: z.ZodError;
 }> { }
 
-export const loadEnv = <T>(
-  schema: z.Schema<T>,
-): Effect.Effect<T, ConfigError> => {
+/**
+ * Parses `process.env` against a schema.
+ *
+ * Generic over the schema rather than over its result, because `z.Schema<T>` is
+ * `ZodType<T, ZodTypeDef, T>` — it pins a schema's *input* type to its output type. Any schema
+ * using `.default()` has an optional input and a required output, so inference collapsed the two
+ * into the input and every defaulted field came back `T | undefined`. That made a Zod default
+ * unusable here: the value was present at runtime and optional to the type checker.
+ */
+export const loadEnv = <S extends z.ZodTypeAny>(
+  schema: S,
+): Effect.Effect<z.output<S>, ConfigError> => {
   const result = schema.safeParse(process.env);
   return result.success
     ? Effect.succeed(result.data)
