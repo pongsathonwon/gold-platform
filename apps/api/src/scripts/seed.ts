@@ -5,13 +5,15 @@
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import bcrypt from "bcryptjs";
-import { socketOptions } from "../infrastructure/db/connection.js";
+import { parseConnection } from "../infrastructure/db/connection.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is not set");
 
-// socketOptions supplies the Cloud SQL unix socket; postgres.js will not take it from the URL.
-const client = postgres(DATABASE_URL, socketOptions(DATABASE_URL));
+// parseConnection lifts the Cloud SQL unix socket out of the URL; postgres.js needs it as an
+// option, and leaving ?host= in the query string makes the server reject the startup packet.
+const { url: dbUrl, options: dbOptions } = parseConnection(DATABASE_URL);
+const client = postgres(dbUrl, dbOptions);
 const db = drizzle(client, { casing: "snake_case" });
 
 // lazy imports so schema types resolve after casing is set

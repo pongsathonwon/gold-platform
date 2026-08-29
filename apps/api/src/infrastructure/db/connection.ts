@@ -30,16 +30,33 @@
  * migration job and the seed job each construct their own client, and all three failed the same way.
  */
 
-/** postgres.js options derived from `url` — `{ host }` when it names a unix socket, else `{}`. */
-export function socketOptions(url: string): { host?: string } {
-    let socket: string | null = null
+/**
+ * Splits a `DATABASE_URL` into the string postgres.js should parse and the options it needs.
+ *
+ * `?host=` must be *removed* from the URL, not merely read from it. Anything in the query string
+ * that postgres.js does not recognise as one of its own settings is forwarded to the server as a
+ * connection parameter:
+ *
+ *     connection: { ...query entries not in defaults }
+ *
+ * `host` is not a Postgres GUC, so the backend rejects the startup packet outright with
+ * `FATAL: unrecognized configuration parameter "host"` — after connecting to the right socket,
+ * which makes it read like a permissions or database problem rather than a spare query parameter.
+ */
+export function parseConnection(databaseUrl: string): { url: string; options: { host?: string } } {
+    let parsed: URL
     try {
-        socket = new URL(url).searchParams.get('host')
+        parsed = new URL(databaseUrl)
     } catch {
-        // Not parseable as a URL. Say nothing and let postgres.js raise its own error — but never
+        // Not parseable. Hand it back untouched and let postgres.js raise its own error — but never
         // echo the string, which holds the password.
-        return {}
+        return { url: databaseUrl, options: {} }
     }
+
+    const socket = parsed.searchParams.get('host')
     // A socket directory is an absolute path. Anything else is a hostname and belongs in the URL.
-    return socket && socket.startsWith('/') ? { host: socket } : {}
+    if (!socket || !socket.startsWith('/')) return { url: databaseUrl, options: {} }
+
+    parsed.searchParams.delete('host')
+    return { url: parsed.toString(), options: { host: socket } }
 }

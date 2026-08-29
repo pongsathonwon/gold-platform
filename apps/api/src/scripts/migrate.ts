@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
-import { socketOptions } from "../infrastructure/db/connection.js";
+import { parseConnection } from "../infrastructure/db/connection.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is not set");
@@ -24,12 +24,14 @@ if (!DATABASE_URL) throw new Error("DATABASE_URL is not set");
 // max: 1 — migrations are a single serial conversation with the database, and the advisory lock
 // Drizzle takes is held on one connection.
 //
-// `socketOptions` supplies the Cloud SQL unix socket, which postgres.js will not take from the URL.
+// `parseConnection` lifts the Cloud SQL unix socket out of the URL: postgres.js will not take it
+// from the query string, and leaving it there makes the *server* reject the startup packet.
 // This construction is deliberately inside the try: it used to sit above it, so a malformed URL
 // threw uncaught and Node printed the string — password and all — into Cloud Logging.
 let client: postgres.Sql;
 try {
-    client = postgres(DATABASE_URL, { max: 1, ...socketOptions(DATABASE_URL) });
+    const { url, options } = parseConnection(DATABASE_URL);
+    client = postgres(url, { max: 1, ...options });
 } catch (error) {
     console.error("Could not build a database connection from DATABASE_URL:",
         error instanceof Error ? error.message : "unknown error");
