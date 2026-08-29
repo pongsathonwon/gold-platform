@@ -1,5 +1,7 @@
 {
   "hosting": {
+    "// site": "Named explicitly because the project holds a site whose id is not the project id. Without this, deploys target the default site (project-6ae60f7c-b11d-492a-bf9.web.app) instead of this one.",
+    "site": "goldoffice",
     "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
