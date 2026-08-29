@@ -3,6 +3,7 @@ import { Context, Data, Effect, Schedule } from "effect";
 import postgres from "postgres";
 import { sql } from "drizzle-orm";
 import { AppConfig } from "../utils/env.js";
+import { socketOptions } from "./connection.js";
 
 export class RepositoryError extends Data.TaggedError("RepositoryError")<{ message: string }> { }
 
@@ -60,6 +61,8 @@ export const makeConnection = (url: string) =>
   Effect.try({
     try: () => postgres(url, {
       max: MAX_CONNECTIONS_PER_INSTANCE,
+      // Cloud SQL's unix socket, which cannot travel in the URL string — see connection.ts.
+      ...socketOptions(url),
       types: { date: { to: 1082, from: [1082], serialize: (d: string) => d, parse: (d: string) => d } },
     }),
     catch: (error) => mapDatabaseConnectionError(error),

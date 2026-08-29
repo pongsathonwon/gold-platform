@@ -126,12 +126,29 @@ PASSWORD="$(openssl rand -base64 36 | tr '+/' '-_' | tr -d '=\n')Aa1-"
 Never as `--set-env-vars`, and never as a Cloud Build substitution — both end up in logs.
 
 ```bash
-# The Cloud SQL unix-socket form. Cloud Run mounts the socket at /cloudsql/INSTANCE.
-printf 'postgres://gold_app:THE_PASSWORD@/gold_platform?host=/cloudsql/PROJECT:asia-southeast1:gold-db' \
+# Cloud Run mounts the socket at /cloudsql/INSTANCE. Note `localhost` — see below.
+printf 'postgres://gold_app:THE_PASSWORD@localhost/gold_platform?host=/cloudsql/PROJECT:asia-southeast1:gold-db' \
   | gcloud secrets create gold-database-url --data-file=-
 
 openssl rand -base64 48 | tr -d '\n' | gcloud secrets create gold-jwt-secret --data-file=-
 ```
+
+**The `localhost` is load-bearing, and the libpq form does not work here.** Postgres tooling
+conventionally writes a socket connection with an empty host — `postgres://user:pass@/db?host=/sock`
+— but postgres.js parses connection strings with the WHATWG `new URL()`, which rejects that: there
+is no host. The process then dies at construction with `ERR_INVALID_URL` **and prints the whole
+string, password included**, so the first symptom is a credential in your logs. Percent-encoding the
+path as the host is worse, because it parses: `url.hostname` stays encoded and it quietly dials a
+socket named `%2Fcloudsql%2F...`.
+
+postgres.js only takes a socket from its `host` *option*, never from the URL — `path` is derived as
+`host.indexOf('/') > -1 && host + '/.s.PGSQL.' + port`, and the options object outranks the URL. So
+the URL carries `localhost` purely to stay parseable, `?host=` carries the socket, and
+`socketOptions()` in `infrastructure/db/connection.ts` moves it across. Locally there is no `?host=`,
+`localhost` is the real host, and it is ordinary TCP — one variable, both environments, no branching.
+
+Every entry point that opens a connection goes through that helper. The server, the migration job
+and the seed job each build their own client and all three broke identically without it.
 
 Grant the runtime service account read access to both:
 
