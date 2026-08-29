@@ -172,6 +172,19 @@ done
 That last one is the confusing one: the build fails before running a single step, and the message is
 about logging configuration rather than permissions.
 
+There is a sixth grant, and it is not a project role. `gcloud builds submit` uploads the source as a
+tarball to a staging bucket **as you**, then the build service account reads it back — so it needs
+object read on that bucket or the build dies at "could not resolve source" before any step runs,
+which reads like a missing file rather than a permission:
+
+```bash
+gcloud storage buckets add-iam-policy-binding gs://YOUR_PROJECT_ID_cloudbuild \
+  --member="serviceAccount:${SA}" --role=roles/storage.objectViewer
+```
+
+Scoped to the bucket rather than granted project-wide, since reading the source archive is all it
+needs to do with storage.
+
 > This grants five roles to the default compute service account, which is both the build identity
 > and the runtime identity. Splitting them — a build SA that can push and deploy, a runtime SA that
 > can only read secrets and reach Cloud SQL — is the right shape once the first deployment is
@@ -187,8 +200,19 @@ builds the image, runs migrations **to completion**, then deploys.
 
 ```bash
 gcloud builds submit --config cloudbuild.yaml \
-  --substitutions=_SQL_INSTANCE=PROJECT:asia-southeast1:gold-db,_CORS_ORIGIN=https://your-spa-domain
+  --substitutions=_SQL_INSTANCE=PROJECT:asia-southeast1:gold-db,_CORS_ORIGIN=https://your-spa-domain,SHORT_SHA=$(git rev-parse --short HEAD)
 ```
+
+**`SHORT_SHA` has to be passed by hand here.** It is a built-in substitution that Cloud Build fills
+in only for builds started by a *trigger*, from a commit it knows about. A manual `builds submit`
+has no commit, so it resolves to empty — and since `cloudbuild.yaml` tags images
+`gold-api:${SHORT_SHA}`, the tag silently degrades rather than erroring usefully. From a trigger,
+drop it and let Cloud Build supply the real value.
+
+Also note `.gcloudignore` at the repo root. Without it gcloud derives one from `.gitignore`, which
+says nothing about `.claude/` — and the agent worktrees under it are full copies of the repository.
+The upload goes from 1.7 MB to well over a gigabyte, and each of those copies carries its own
+`cloudbuild.yaml` and `drizzle/`.
 
 Migrations run as a job before traffic moves, never on server startup — starting N instances
 would race them through the same DDL.

@@ -1,0 +1,34 @@
+# What `gcloud builds submit` uploads as the build context.
+#
+# Without this file gcloud derives one from .gitignore, which covers node_modules and dist but says
+# nothing about `.claude/` — and the agent worktrees under it are full copies of the repository,
+# well over a gigabyte. They are not merely wasted upload time: each one carries its own
+# cloudbuild.yaml, Dockerfile and drizzle/ directory, so a stray path in a build step could read a
+# stale copy of the thing it is supposed to be building.
+#
+# Kept deliberately: apps/api/drizzle (the migration SQL the runtime image copies beside dist/) and
+# every workspace manifest, since the Dockerfile installs from the lockfile at the repo root.
+
+.git/
+.gitignore
+
+# Agent worktrees — stale duplicates of this repository.
+.claude/
+
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.turbo/
+**/.turbo/
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Never upload a local environment file. The build has no use for one and the image must not
+# contain it; production values come from Secret Manager.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example

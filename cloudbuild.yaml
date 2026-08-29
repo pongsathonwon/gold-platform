@@ -38,6 +38,10 @@ steps:
     args:
       - -c
       - |
+        # Without this, only the *last* command decides the step's exit code — a failing
+        # type-check followed by passing tests reports success and ships. That is not
+        # hypothetical: it is what this step did until the first real build exposed it.
+        set -euo pipefail
         corepack enable
         pnpm install --frozen-lockfile
         pnpm type-check
