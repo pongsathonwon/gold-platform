@@ -40,9 +40,11 @@ months of actual usage instead of estimates.
 1. **Decide `--min-instances`.** At 1 it is ~$20/month and the operator never waits. At 0 it is free
    and they wait a few seconds after each idle gap — several times a day at this traffic, not once
    in the morning. The reasoning is written at the flag itself in `cloudbuild.yaml`.
-2. **Test a restore.** Point-in-time recovery is the main thing Cloud SQL is being paid for, and an
-   untested backup is a hypothesis. It is also precisely the capability that would be given up by
-   moving to a self-managed VPS later, so verify it is real while the credit is covering it.
+2. ~~**Test a restore.**~~ Done on 2026-08-30: cloned to a point in time before that day's
+   migrations, confirmed the clone held the pre-migration schema, confirmed production was
+   untouched, deleted the clone. Procedure in "Testing a restore" under Cloud SQL below. Worth
+   repeating after any change to the backup configuration — and note PITR only reaches back 7 days,
+   so a problem has to be noticed inside a week.
 
 Cloud Run's permanent free tier — 2M requests, 180,000 vCPU-seconds, 360,000 GiB-seconds a month —
 comfortably covers this service's *requests*. It does not cover an idle warm instance, which is
@@ -119,7 +121,52 @@ PASSWORD="$(openssl rand -base64 36 | tr '+/' '-_' | tr -d '=\n')Aa1-"
 
 `-` and `_` are unreserved in a URI, so nothing needs escaping downstream.
 
-**Test the restore before you go live.** A backup nobody has restored is a hypothesis.
+**Test the restore before you go live.** A backup nobody has restored is a hypothesis. See
+"Testing a restore" below — it has been done once, on 2026-08-30, and the procedure is written down.
+
+### Testing a restore
+
+**Clone to a new instance. Never restore over the live one to find out whether restoring works.**
+
+`gcloud sql backups restore` overwrites its target, so using it as a test converts a drill into an
+outage. `gcloud sql instances clone` builds a *separate* instance from the transaction logs, which
+makes the test non-destructive and lets the clone be inspected side by side with production.
+
+The question worth answering is not "does a backup exist" but **"can I get back to the state just
+before a bad change"** — so pick a point in time, not the nightly backup:
+
+```bash
+# A moment after the pre-change backup and before the migrations ran.
+gcloud sql instances clone gold-platform gold-restore-test \
+  --point-in-time='2026-08-30T07:22:00.000Z'
+```
+
+Then prove it actually rewound, rather than trusting that it did. Connect to the clone's own IP and
+ask it something that changed:
+
+```
+                         clone (07:22)      production (now)
+  migrations applied     3                  5
+  users.id type          integer            uuid
+  bare numeric columns   53                 0
+  accounts               admin (id 1)       admin (uuid)
+```
+
+That is the real output of the drill: the clone was genuinely on the far side of migrations `0003`
+and `0004`, with the old integer keys and the unscaled columns. Production was verified untouched in
+the same pass.
+
+**Then delete the clone** — it bills like any other instance. It inherits deletion protection from
+its source, so that comes off first, and *only on the clone*:
+
+```bash
+gcloud sql instances patch gold-restore-test --no-deletion-protection --quiet
+gcloud sql instances delete gold-restore-test --quiet
+```
+
+Two things this drill established beyond the restore itself: PITR reaches back **7 days**
+(`transactionLogRetentionDays`), so a problem has to be noticed inside a week; and production has
+deletion protection on, which is why the clone did too.
 
 ### Secrets
 
@@ -269,6 +316,13 @@ gcloud run jobs deploy gold-seed \
 Create `gold-seed-password` as a generated value first. `SEED_PASSWORD` has no default and must be
 at least 12 characters — the script refuses to run without it. Change the password at first login
 and delete the secret afterwards.
+
+**On this deployment that is already done.** The seeded `admin` was deactivated once a named admin
+account existed, and `gold-seed-password` was destroyed on 2026-08-30 — so the only secrets left are
+`gold-database-url` and `gold-jwt-secret`. The `admin` row is kept rather than deleted, because
+deactivating reserves the username permanently and keeps the audit trail naming one person; see the
+`deletedAt` comment in `user.schema.ts`. Do not recreate the secret to "get back in": issue a login
+through `POST /auth/users` as an existing admin.
 
 The seed can also create a second, `OPERATOR` login via `SEED_OPERATOR_USERNAME` (default
 `operator`) and `SEED_OPERATOR_PASSWORD`. It is **skipped unless that password is set**, and it is
