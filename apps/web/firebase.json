@@ -10,22 +10,23 @@
         "destination": "/index.html"
       }
     ],
+    "// headers": "Order matters: the catch-all is first and the asset rule overrides it. Headers match the REQUESTED path, never the rewritten one, so a rule on /index.html only fires for a literal request to /index.html — which is the one path nobody asks for. Every real entry point (/ and every deep link) went to Firebase's default max-age=3600, so a returning operator could run the previous bundle for an hour after a deploy.",
     "headers": [
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
       {
         "source": "/assets/**",
         "headers": [
           {
             "key": "Cache-Control",
             "value": "public, max-age=31536000, immutable"
-          }
-        ]
-      },
-      {
-        "source": "/index.html",
-        "headers": [
-          {
-            "key": "Cache-Control",
-            "value": "no-cache"
           }
         ]
       }
