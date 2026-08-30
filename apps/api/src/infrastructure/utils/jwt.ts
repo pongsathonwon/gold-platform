@@ -2,7 +2,7 @@ import { Context, Effect } from "effect";
 import { UnknownException } from "effect/Cause";
 import { sign, verify } from "hono/jwt";
 import { JWTPayload } from "hono/utils/jwt/types";
-import { AppConfig } from "./env.js";
+import { JwtConfig } from "./env.js";
 
 interface ForJwt {
     sign: (payload: JWTPayload) => Effect.Effect<string, UnknownException>
@@ -18,7 +18,7 @@ class HonoJwtService implements ForJwt {
 }
 
 export const makeJwtServie = Effect.gen(function* () {
-    const conf = yield* AppConfig
-    return new HonoJwtService(conf.jwt.secret)
+    const conf = yield* JwtConfig
+    return new HonoJwtService(conf.secret)
 });
 

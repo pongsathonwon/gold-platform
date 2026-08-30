@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { AppConfig } from "./infrastructure/utils/env.js";
+import { HttpConfig } from "./infrastructure/utils/env.js";
 import { appRuntime } from "./infrastructure/runtime.js";
 import { authRouter } from "./core/auth/adapter/auth.routes.js";
 import { usersRouter } from "./core/user/adapter/user.routes.js";
@@ -62,12 +62,12 @@ const app = new Hono()
 export type AppType = typeof app;
 
 const program = Effect.gen(function* () {
-  const config = yield* AppConfig;
+  const config = yield* HttpConfig;
 
   const server = serve(
     // 0.0.0.0, not the default loopback: a container's port is reachable from outside only if the
     // process listens on every interface.
-    { fetch: app.fetch, port: config.app.port, hostname: "0.0.0.0" },
+    { fetch: app.fetch, port: config.port, hostname: "0.0.0.0" },
     (info) => console.log(`API running on port ${info.port}`),
   );
 

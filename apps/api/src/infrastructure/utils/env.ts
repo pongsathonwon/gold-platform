@@ -1,42 +1,49 @@
 import { Context, Data, Effect, } from "effect";
 import { z } from "zod";
 
-interface ForSetupApp {
-  app: {
-    port: number;
-    // exact origins allowed to call the API from a browser
-    corsOrigins: string[];
-  };
-  database: {
-    url: string;
-  };
-  jwt: {
-    secret: string;
-  };
-}
-
-export class AppConfig extends Context.Tag("AppConfig")<
-  AppConfig,
-  ForSetupApp
+/**
+ * Configuration is three tags, not one, because the workloads need different pieces of it.
+ *
+ * There used to be a single `AppConfig` carrying the HTTP settings, the database URL and the JWT
+ * secret behind one Zod schema. Anything that touched *any* of it parsed *all* of it, so a
+ * workload had to satisfy variables it never read. That was not a tidiness complaint:
+ *
+ *   - The confirm-sweep job needs the database and nothing else. It ran with `CORS_ORIGIN` and
+ *     `JWT_SECRET` bound to it purely to get past the parser — a standing secret binding on a job
+ *     that never mints or verifies a token.
+ *   - Worse, `PORT` had to be given a default it should not need. Cloud Run injects PORT into a
+ *     *service* but not into a *job*, and refuses to let you set it (`PORT` is a reserved name, so
+ *     `run jobs update --set-env-vars=PORT=...` is rejected). While it was required, every job
+ *     reaching for config died at boot with `Expected number, received nan`.
+ *
+ * Splitting them is what actually fixes that: a job builds `DatabaseConfig` alone and never looks
+ * at an HTTP variable. The `PORT` default stays, because a default is right for a port anyway, but
+ * it is no longer load-bearing.
+ *
+ * Each tag owns its own schema so the failure names the thing that is missing.
+ */
+export class DatabaseConfig extends Context.Tag("DatabaseConfig")<
+  DatabaseConfig,
+  { url: string }
 >() { }
 
-const envSchema = z.object({
+export class HttpConfig extends Context.Tag("HttpConfig")<
+  HttpConfig,
+  { port: number; corsOrigins: string[] }
+>() { }
+
+export class JwtConfig extends Context.Tag("JwtConfig")<
+  JwtConfig,
+  { secret: string }
+>() { }
+
+const databaseSchema = z.object({
   DATABASE_URL: z.string().url(),
-  /**
-   * The port the HTTP server listens on. Defaulted, not required, and the default is never the
-   * value in production.
-   *
-   * Cloud Run injects PORT into a *service* and expects the container to listen on it. It does not
-   * inject it into a *job*, and it will not let you set it either — PORT is a reserved env name and
-   * `run jobs update --set-env-vars=PORT=...` is rejected outright. So while this was required, any
-   * job reaching for AppConfig died at boot with `Expected number, received nan`: the confirm sweep
-   * needs the database, and the database lives behind the same config as the HTTP settings.
-   *
-   * Defaulting is safe precisely because a service always has the value injected, so the fallback
-   * only ever applies where nothing listens on it.
-   */
+});
+
+const httpSchema = z.object({
+  /** Cloud Run injects this into a service. The default only ever applies where nothing listens. */
   PORT: z.coerce.number().default(3000),
-  JWT_SECRET: z.string().min(32),
   /**
    * Comma-separated list of browser origins allowed to call this API.
    *
@@ -48,20 +55,26 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().min(1),
 });
 
-export const makeAppConfig = Effect.gen(function* () {
-  const env = yield* loadEnv(envSchema);
+const jwtSchema = z.object({
+  JWT_SECRET: z.string().min(32),
+});
+
+export const makeDatabaseConfig = Effect.gen(function* () {
+  const env = yield* loadEnv(databaseSchema);
+  return { url: env["DATABASE_URL"] };
+});
+
+export const makeHttpConfig = Effect.gen(function* () {
+  const env = yield* loadEnv(httpSchema);
   return {
-    app: {
-      port: env["PORT"],
-      corsOrigins: env["CORS_ORIGIN"].split(",").map((o) => o.trim()).filter(Boolean),
-    },
-    database: {
-      url: env["DATABASE_URL"],
-    },
-    jwt: {
-      secret: env["JWT_SECRET"],
-    },
+    port: env["PORT"],
+    corsOrigins: env["CORS_ORIGIN"].split(",").map((o) => o.trim()).filter(Boolean),
   };
+});
+
+export const makeJwtConfig = Effect.gen(function* () {
+  const env = yield* loadEnv(jwtSchema);
+  return { secret: env["JWT_SECRET"] };
 });
 
 export class ConfigError extends Data.TaggedError("ConfigError")<{

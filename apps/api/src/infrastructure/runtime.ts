@@ -1,18 +1,33 @@
 import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { DrizzleClient, makeClient } from "./db/client.js";
-import { AppConfig, makeAppConfig } from "./utils/env.js";
+import {
+  DatabaseConfig, HttpConfig, JwtConfig,
+  makeDatabaseConfig, makeHttpConfig, makeJwtConfig,
+} from "./utils/env.js";
 
-export const AppConfigLive = Layer.effect(AppConfig, makeAppConfig);
-
-const AppLayer = Layer
+/**
+ * The database and nothing else — what a scheduled job needs.
+ *
+ * A `ManagedRuntime` builds every layer it was given, so the split in `env.ts` only pays off if
+ * there is a runtime that was never given the others. The confirm sweep runs on this one and
+ * therefore never reads `JWT_SECRET` or `CORS_ORIGIN`, which is the point.
+ */
+const DatabaseLayer = Layer
   .scoped(DrizzleClient, makeClient)
   .pipe(
-    Layer.provideMerge(Layer.effect(AppConfig, makeAppConfig))
+    Layer.provideMerge(Layer.effect(DatabaseConfig, makeDatabaseConfig))
   )
 
-export type BaseError = Layer.Layer.Error<typeof AppLayer>
+/** The database plus what serving HTTP additionally needs: a port, origins, a signing secret. */
+const ServerLayer = DatabaseLayer.pipe(
+  Layer.provideMerge(Layer.effect(JwtConfig, makeJwtConfig)),
+  Layer.provideMerge(Layer.effect(HttpConfig, makeHttpConfig)),
+)
 
-export const appRuntime = ManagedRuntime.make(AppLayer);
+export type BaseError = Layer.Layer.Error<typeof ServerLayer>
+
+export const appRuntime = ManagedRuntime.make(ServerLayer);
+export const jobRuntime = ManagedRuntime.make(DatabaseLayer);
 
 export type TApp = typeof appRuntime
 
@@ -28,8 +43,26 @@ type ErrorEffect<E> = {
 
 type Result<T, E> = SuccessEffect<T> | ErrorEffect<E>
 
-export async function runEffect<R, E>(effect: Effect.Effect<R, E, AppConfig | DrizzleClient>): Promise<Result<R, E | BaseError | string>> {
-  const result = await appRuntime.runPromiseExit(effect)
+/** Runs an effect on the HTTP runtime — what every route handler calls. */
+export async function runEffect<R, E>(
+  effect: Effect.Effect<R, E, DatabaseConfig | JwtConfig | HttpConfig | DrizzleClient>,
+): Promise<Result<R, E | BaseError | string>> {
+  return toResult(await appRuntime.runPromiseExit(effect))
+}
+
+/**
+ * Runs an effect on the database-only runtime — for scripts and scheduled jobs.
+ *
+ * Requiring `JwtConfig` here is a type error rather than a boot-time crash, which is the guard
+ * that keeps a job from quietly acquiring an HTTP dependency again.
+ */
+export async function runJob<R, E>(
+  effect: Effect.Effect<R, E, DatabaseConfig | DrizzleClient>,
+): Promise<Result<R, E | BaseError | string>> {
+  return toResult(await jobRuntime.runPromiseExit(effect))
+}
+
+function toResult<R, E>(result: Exit.Exit<R, E>): Result<R, E | BaseError | string> {
   if (Exit.isSuccess(result)) return {
     result: 'success',
     data: result.value,

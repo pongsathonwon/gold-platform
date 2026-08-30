@@ -12,6 +12,11 @@
  * worse trade than running the usecase directly, which needs no credential at all. It is the same
  * shape as migrate.js and seed.js: a job, the database, and no HTTP surface.
  *
+ * It runs on `jobRuntime`, which is built from the database layer alone, so this process never
+ * reads JWT_SECRET or CORS_ORIGIN. Both used to be bound to the Cloud Run job purely to get past
+ * a config parser that insisted on the whole environment. `runJob` types that guarantee: an
+ * effect needing JwtConfig will not compile here.
+ *
  * Both domains run even if the first fails, because they are independent books and half a sweep is
  * better than none — but any failure exits non-zero so the schedule reports it rather than logging
  * quietly into an empty room.
@@ -24,7 +29,7 @@
  */
 import { confirmAllCreated as confirmBuys } from "../core/wholesale-buy/application/wholesale-buy.usecase.js";
 import { confirmAllCreated as confirmSells } from "../core/wholesale-sell/application/wholesale-sell.usecase.js";
-import { appRuntime, runEffect } from "../infrastructure/runtime.js";
+import { jobRuntime, runJob } from "../infrastructure/runtime.js";
 
 const sweeps = [
     { domain: "wholesale-buy", run: confirmBuys },
@@ -35,7 +40,7 @@ let failed = false;
 
 for (const sweep of sweeps) {
     // No actor: the status rows are written as BOT-CONFIRM.
-    const outcome = await runEffect(sweep.run());
+    const outcome = await runJob(sweep.run());
     if (outcome.result === "success") {
         console.log(`${sweep.domain}: confirmed ${outcome.data.confirmed}`);
     } else {
@@ -44,7 +49,7 @@ for (const sweep of sweeps) {
     }
 }
 
-await appRuntime.dispose();
+await jobRuntime.dispose();
 
 if (failed) {
     console.error("Confirm sweep finished with failures.");

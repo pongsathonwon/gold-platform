@@ -2,7 +2,7 @@ import { drizzle, PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { Context, Data, Effect, Schedule } from "effect";
 import postgres from "postgres";
 import { sql } from "drizzle-orm";
-import { AppConfig } from "../utils/env.js";
+import { DatabaseConfig } from "../utils/env.js";
 import { parseConnection } from "./connection.js";
 
 export class RepositoryError extends Data.TaggedError("RepositoryError")<{ message: string }> { }
@@ -103,9 +103,9 @@ export class DrizzleClient extends Context.Tag("DrizzleClient")<
 >() { }
 
 export const makeClient = Effect.gen(function* () {
-  const config = yield* AppConfig;
+  const config = yield* DatabaseConfig;
   const schema = yield* loadSchema
-  const pool = yield* makeConnection(config.database.url);
+  const pool = yield* makeConnection(config.url);
   yield* Effect.addFinalizer(() => Effect.promise(() => pool.end()));
   const db = drizzle(pool, {
     schema,
