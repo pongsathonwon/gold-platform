@@ -153,6 +153,41 @@ nobody on the other side of the transaction.
 
 ---
 
+## 6a. Code splitting — every page is lazy
+
+`App.tsx` loads all 22 route components through `React.lazy`. The app used to build as a single
+739 KB script, so an operator opening the retail list downloaded both wholesale detail pages, all
+three trading views and the three ADMIN-only adjustment forms before anything rendered.
+
+| | cold load, gzipped |
+| --- | --- |
+| before | 216.9 KB |
+| after | **182.5 KB** |
+
+Page chunks are now 2–9 KB each and arrive on navigation.
+
+- **`LoginPage` is deliberately eager.** It is the one route an unauthenticated visitor always
+  lands on; deferring it buys a second round trip on the critical path in exchange for nothing.
+- **The Suspense boundary is per route, not once around `<Routes>`.** A single outer boundary
+  would blank the inventory and trading tab bars every time someone switched tabs beneath them,
+  because the nearest boundary above the suspending child would sit outside the layout. `page()`
+  wraps each element so the layout stays mounted and only the panel shows the spinner.
+- **The retail pair keeps two component types.** Two `lazy()` calls on `RetailListPage` share one
+  network fetch but produce distinct types, so `/retail-buy` → `/retail-sell` still remounts
+  instead of letting React reconcile one component whose hooks would swap underneath it (§9g).
+- **`manualChunks` groups `react`, `router` and `query` only — never MUI.** Grouping `@mui`
+  measured *worse*: it forces components that only one page uses (`Table`, `Dialog`, `Tabs`) into
+  the eager bundle, where Rollup had been leaving them in that page's chunk. Cold load went
+  182.5 → 192.7 KB. Leave MUI to Rollup.
+- The groups that remain are acyclic — `router` and `query` depend on `react`, neither on the
+  other — which is what stops Rollup emitting chunks that reference each other before
+  initialisation. **Re-run the smoke test before changing them.**
+
+**Verifying a build:** a green `vite build` says nothing about whether the lazy chunks resolve. The
+`scratchpad/smoke.mjs` pattern — serve `dist` with an SPA fallback, drive headless Chromium through
+every route, fail on any console error, page error or failed asset request — is what caught that the
+first split was sound. A production bundle has been shipped broken from this repo before.
+
 ## 7. UI Conventions
 
 - **MUI v9** for all UI primitives. Use MUI components — do not reach for plain HTML elements for layout or form controls.

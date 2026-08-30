@@ -30,12 +30,38 @@ function requireApiUrl(mode: string): void {
   }
 }
 
+/**
+ * Splits the framework away from the app's own code.
+ *
+ * Routes are already lazy (`App.tsx`), which took the entry chunk from 739 KB to ~583 KB. What is
+ * left is almost entirely libraries, and they are on a completely different release cadence from
+ * this app: shipping a fix to a retail page should not make an operator re-download React, MUI and
+ * Emotion. Assets are served with a one-year immutable cache under content-hashed names, so a
+ * chunk that does not change is a chunk that is never fetched again.
+ *
+ * The groups are acyclic by construction — `mui`, `router` and `query` all depend on `react` and
+ * none depends on another — which is what keeps Rollup from emitting chunks that reference each
+ * other before initialisation. Do not fold two of these together without re-running the smoke test.
+ */
+function vendorChunk(id: string): string | undefined {
+  if (!id.includes("node_modules")) return undefined;
+  if (/[\\/]node_modules[\\/](react|react-dom|scheduler|react-is)[\\/]/.test(id)) return "react";
+  if (/[\\/]node_modules[\\/](react-router|react-router-dom)[\\/]/.test(id)) return "router";
+  if (/[\\/]node_modules[\\/]@tanstack[\\/]/.test(id)) return "query";
+  return undefined;
+}
+
 export default defineConfig(({ mode }) => {
   requireApiUrl(mode);
   return {
     plugins: [react()],
     server: {
       port: 5173,
+    },
+    build: {
+      rollupOptions: {
+        output: { manualChunks: vendorChunk },
+      },
     },
     test: {
       environment: "node",

@@ -1,33 +1,81 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { CssBaseline, ThemeProvider } from "@mui/material";
+import { Box, CircularProgress, CssBaseline, ThemeProvider } from "@mui/material";
 import { Routes, Route, Navigate } from "react-router-dom";
+import { lazy, Suspense, type ReactElement } from "react";
 import theme from "./companyTheme";
 import { AuthProvider } from "./auth/AuthContext";
 import { AuthGuard, AdminGuard } from "./auth/AuthGuard";
 import { UnauthorizedError } from "./api/client";
 import { ToastProvider } from "./components/ToastContext";
 import { NavBar } from "./components/NavBar";
-import { UsersPage } from "./pages/UsersPage";
 import { LoginPage } from "./pages/LoginPage";
-import { InventoryLayout } from "./pages/InventoryLayout";
-import { InventoryPage } from "./pages/InventoryPage";
-import { InventoryMovementPage } from "./pages/InventoryMovementPage";
-import { StockGainPage } from "./pages/StockGainPage";
-import { StockLossPage } from "./pages/StockLossPage";
-import { ProductSwitchPage } from "./pages/ProductSwitchPage";
-import { WholesaleBuyListPage } from "./pages/WholesaleBuyListPage";
-import { WholesaleBuyCreatePage } from "./pages/WholesaleBuyCreatePage";
-import { WholesaleBuyDetailPage } from "./pages/WholesaleBuyDetailPage";
-import { WholesaleSellListPage } from "./pages/WholesaleSellListPage";
-import { WholesaleSellCreatePage } from "./pages/WholesaleSellCreatePage";
-import { WholesaleSellDetailPage } from "./pages/WholesaleSellDetailPage";
-import { RetailBuyListPage, RetailSellListPage } from "./pages/retail/RetailListPage";
-import { RetailBuyCreatePage, RetailSellCreatePage } from "./pages/retail/RetailCreatePage";
-import { RetailBuyDetailPage, RetailSellDetailPage } from "./pages/retail/RetailDetailPage";
-import { TradingLayout } from "./pages/trading/TradingLayout";
-import { TradingSpreadPage } from "./pages/trading/TradingSpreadPage";
-import { TradingPeriodPage } from "./pages/trading/TradingPeriodPage";
-import { TradingLedgerPage } from "./pages/trading/TradingLedgerPage";
+
+/**
+ * Every page below the login screen is loaded on demand.
+ *
+ * The whole app used to be one 739 KB script, so an operator opening the retail list downloaded
+ * both wholesale detail pages, all three trading views and the three admin adjustment forms before
+ * anything rendered. Nobody visits more than a handful of these in a session, and the ADMIN-only
+ * pages are dead weight for the operators who make up most of the logins.
+ *
+ * `LoginPage` is deliberately **not** lazy. It is the one route an unauthenticated visitor always
+ * lands on, so deferring it would buy a second round trip on the critical path to trade the
+ * fastest paint in the app for nothing.
+ *
+ * Pages export named components, hence the `.then(...)` unwrapping — `lazy` wants a default.
+ */
+const lazyPage = <M, K extends keyof M>(load: () => Promise<M>, name: K) =>
+  lazy(() => load().then((m) => ({ default: m[name] as React.ComponentType })));
+
+const UsersPage = lazyPage(() => import("./pages/UsersPage"), "UsersPage");
+const InventoryLayout = lazyPage(() => import("./pages/InventoryLayout"), "InventoryLayout");
+const InventoryPage = lazyPage(() => import("./pages/InventoryPage"), "InventoryPage");
+const InventoryMovementPage = lazyPage(() => import("./pages/InventoryMovementPage"), "InventoryMovementPage");
+const StockGainPage = lazyPage(() => import("./pages/StockGainPage"), "StockGainPage");
+const StockLossPage = lazyPage(() => import("./pages/StockLossPage"), "StockLossPage");
+const ProductSwitchPage = lazyPage(() => import("./pages/ProductSwitchPage"), "ProductSwitchPage");
+const WholesaleBuyListPage = lazyPage(() => import("./pages/WholesaleBuyListPage"), "WholesaleBuyListPage");
+const WholesaleBuyCreatePage = lazyPage(() => import("./pages/WholesaleBuyCreatePage"), "WholesaleBuyCreatePage");
+const WholesaleBuyDetailPage = lazyPage(() => import("./pages/WholesaleBuyDetailPage"), "WholesaleBuyDetailPage");
+const WholesaleSellListPage = lazyPage(() => import("./pages/WholesaleSellListPage"), "WholesaleSellListPage");
+const WholesaleSellCreatePage = lazyPage(() => import("./pages/WholesaleSellCreatePage"), "WholesaleSellCreatePage");
+const WholesaleSellDetailPage = lazyPage(() => import("./pages/WholesaleSellDetailPage"), "WholesaleSellDetailPage");
+/**
+ * The retail pair is one implementation behind two component types, and that must survive here.
+ * Two `lazy()` calls on the same module share one network fetch but produce two distinct types, so
+ * routing from `/retail-buy` to `/retail-sell` still remounts rather than letting React reconcile
+ * one component whose hooks would swap underneath it. See `apps/web/CLAUDE.md` §9g.
+ */
+const RetailBuyListPage = lazyPage(() => import("./pages/retail/RetailListPage"), "RetailBuyListPage");
+const RetailSellListPage = lazyPage(() => import("./pages/retail/RetailListPage"), "RetailSellListPage");
+const RetailBuyCreatePage = lazyPage(() => import("./pages/retail/RetailCreatePage"), "RetailBuyCreatePage");
+const RetailSellCreatePage = lazyPage(() => import("./pages/retail/RetailCreatePage"), "RetailSellCreatePage");
+const RetailBuyDetailPage = lazyPage(() => import("./pages/retail/RetailDetailPage"), "RetailBuyDetailPage");
+const RetailSellDetailPage = lazyPage(() => import("./pages/retail/RetailDetailPage"), "RetailSellDetailPage");
+const TradingLayout = lazyPage(() => import("./pages/trading/TradingLayout"), "TradingLayout");
+const TradingSpreadPage = lazyPage(() => import("./pages/trading/TradingSpreadPage"), "TradingSpreadPage");
+const TradingPeriodPage = lazyPage(() => import("./pages/trading/TradingPeriodPage"), "TradingPeriodPage");
+const TradingLedgerPage = lazyPage(() => import("./pages/trading/TradingLedgerPage"), "TradingLedgerPage");
+
+/**
+ * Wraps one route element in its own Suspense boundary.
+ *
+ * Per route rather than once around `<Routes>`: a single outer boundary would blank the layout
+ * chrome — the inventory and trading tab bars — every time someone switched tabs underneath it,
+ * because the nearest boundary above the suspending child would be outside the layout. Here the
+ * layout stays mounted and only the panel it wraps shows the spinner.
+ */
+const page = (element: ReactElement) => (
+  <Suspense
+    fallback={
+      <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}>
+        <CircularProgress />
+      </Box>
+    }
+  >
+    {element}
+  </Suspense>
+);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -66,32 +114,32 @@ export function App() {
               <Route path="/login" element={<LoginPage />} />
               <Route element={<AuthGuard />}>
                 <Route path="/" element={<Navigate to="/inventory" replace />} />
-                <Route path="/inventory" element={<InventoryLayout />}>
-                  <Route index element={<InventoryPage />} />
-                  <Route path="movements" element={<InventoryMovementPage />} />
+                <Route path="/inventory" element={page(<InventoryLayout />)}>
+                  <Route index element={page(<InventoryPage />)} />
+                  <Route path="movements" element={page(<InventoryMovementPage />)} />
                   {/* The three adjustment forms move gold on the books with no counterparty
                       behind them, and the API restricts them to ADMIN. */}
                   <Route element={<AdminGuard />}>
-                    <Route path="gain" element={<StockGainPage />} />
-                    <Route path="loss" element={<StockLossPage />} />
-                    <Route path="switch" element={<ProductSwitchPage />} />
+                    <Route path="gain" element={page(<StockGainPage />)} />
+                    <Route path="loss" element={page(<StockLossPage />)} />
+                    <Route path="switch" element={page(<ProductSwitchPage />)} />
                   </Route>
                 </Route>
-                <Route path="/wholesale-buy" element={<WholesaleBuyListPage />} />
-                <Route path="/wholesale-buy/new" element={<WholesaleBuyCreatePage />} />
-                <Route path="/wholesale-buy/:id" element={<WholesaleBuyDetailPage />} />
-                <Route path="/wholesale-sell" element={<WholesaleSellListPage />} />
-                <Route path="/wholesale-sell/new" element={<WholesaleSellCreatePage />} />
-                <Route path="/wholesale-sell/:id" element={<WholesaleSellDetailPage />} />
+                <Route path="/wholesale-buy" element={page(<WholesaleBuyListPage />)} />
+                <Route path="/wholesale-buy/new" element={page(<WholesaleBuyCreatePage />)} />
+                <Route path="/wholesale-buy/:id" element={page(<WholesaleBuyDetailPage />)} />
+                <Route path="/wholesale-sell" element={page(<WholesaleSellListPage />)} />
+                <Route path="/wholesale-sell/new" element={page(<WholesaleSellCreatePage />)} />
+                <Route path="/wholesale-sell/:id" element={page(<WholesaleSellDetailPage />)} />
                 {/* Retail is open to any operator, like wholesale: recording the day's counter
                     trades is ordinary work. The ADMIN gate is for the inventory adjustments, which
                     move gold with nobody on the other side of the transaction. */}
-                <Route path="/retail-buy" element={<RetailBuyListPage />} />
-                <Route path="/retail-buy/new" element={<RetailBuyCreatePage />} />
-                <Route path="/retail-buy/:id" element={<RetailBuyDetailPage />} />
-                <Route path="/retail-sell" element={<RetailSellListPage />} />
-                <Route path="/retail-sell/new" element={<RetailSellCreatePage />} />
-                <Route path="/retail-sell/:id" element={<RetailSellDetailPage />} />
+                <Route path="/retail-buy" element={page(<RetailBuyListPage />)} />
+                <Route path="/retail-buy/new" element={page(<RetailBuyCreatePage />)} />
+                <Route path="/retail-buy/:id" element={page(<RetailBuyDetailPage />)} />
+                <Route path="/retail-sell" element={page(<RetailSellListPage />)} />
+                <Route path="/retail-sell/new" element={page(<RetailSellCreatePage />)} />
+                <Route path="/retail-sell/:id" element={page(<RetailSellDetailPage />)} />
                 {/* Three readings of one window, offered side by side because BU has not chosen
                     between them. The layout owns the window and the data so the tabs cannot
                     disagree — which is the whole point of showing all three. */}
@@ -99,12 +147,12 @@ export function App() {
                     ADMIN-only on the API — issuing a login is how someone gets the ability to
                     move gold, so it belongs with the adjustments rather than with the day's work. */}
                 <Route element={<AdminGuard />}>
-                  <Route path="/users" element={<UsersPage />} />
+                  <Route path="/users" element={page(<UsersPage />)} />
                 </Route>
-                <Route path="/trading" element={<TradingLayout />}>
-                  <Route index element={<TradingSpreadPage />} />
-                  <Route path="periods" element={<TradingPeriodPage />} />
-                  <Route path="ledger" element={<TradingLedgerPage />} />
+                <Route path="/trading" element={page(<TradingLayout />)}>
+                  <Route index element={page(<TradingSpreadPage />)} />
+                  <Route path="periods" element={page(<TradingPeriodPage />)} />
+                  <Route path="ledger" element={page(<TradingLedgerPage />)} />
                 </Route>
               </Route>
             </Routes>
