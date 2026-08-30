@@ -24,6 +24,23 @@ export const users = pgTable("users", {
   // create further logins. Escalating is a deliberate act, never an omission.
   role: userRoleEnum("role").notNull().default('OPERATOR'),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  /**
+   * Deactivation tombstone; null means the account can sign in.
+   *
+   * A login is never hard-deleted. `recordedBy`, `movedBy`, `auditedBy` and `createdBy` across
+   * every domain store a *username string* rather than a foreign key, so removing the row does not
+   * break those records — but it does destroy the only place the person behind the name is
+   * described, and it frees the username to be issued to somebody else. From then on two different
+   * people share one name in the audit trail with nothing to separate them.
+   *
+   * So the `unique` on `username` is deliberately left covering deactivated rows: a departed
+   * operator's username stays reserved, permanently. That is the point rather than a side effect.
+   *
+   * `branches` established this pattern and pairs `deletedAt` with a separate reversible `active`
+   * flag. Users get only the tombstone: "not trading right now" is a meaningful state for a branch
+   * and nothing anyone has asked for on an account, and restoring is what covers a mistaken one.
+   */
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
 });
 
 export type UserRole = (typeof userRoleEnum.enumValues)[number];

@@ -15,8 +15,13 @@ const navLinks = [
   { to: "/retail-sell", label: "ขายปลีก" },
 ];
 
+// Shown only to an ADMIN, because the page is behind AdminGuard and every route it calls is
+// ADMIN-only. Offering an operator a link that answers "หน้านี้สำหรับผู้ดูแลระบบเท่านั้น" would be
+// advertising a door to people who cannot open it.
+const adminNavLinks = [{ to: "/users", label: "ผู้ใช้งาน" }];
+
 export function NavBar() {
-  const { isAuthenticated, user, logout } = useAuth();
+  const { isAuthenticated, isAdmin, user, logout } = useAuth();
   const navigate = useNavigate();
 
   if (!isAuthenticated) return null;
@@ -32,7 +37,7 @@ export function NavBar() {
         <Typography variant="h5" sx={{ flexGrow: 1, color: "inherit" }}>
           GoldOffice
         </Typography>
-        {navLinks.map((link) => (
+        {[...navLinks, ...(isAdmin ? adminNavLinks : [])].map((link) => (
           <Box
             key={link.to}
             component={NavLink}

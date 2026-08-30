@@ -2,13 +2,50 @@ import { Effect, Layer, Option } from "effect";
 import { UserRepository } from "../port/user.port.js";
 import { TApp } from "../../../infrastructure/runtime.js";
 import { makeUserRepository } from "../adapter/user.repository.js";
-import { UserNotFoundError } from "../domain/user.error.js";
+import {
+  CannotDeactivateSelfError,
+  LastAdminError,
+  UserNotFoundError,
+} from "../domain/user.error.js";
+import { isActive } from "../domain/user.entity.js";
 
-export const makeDeleteUserUseCase = (id: number) =>
+/**
+ * Deactivates an account, refusing the two moves that cannot be undone from inside the app.
+ *
+ * `actorId` is the caller's own id, read from the verified token rather than the request body —
+ * self-deactivation is refused, and a check the caller could supply the answer to is not a check.
+ *
+ * The last-admin rule is the one that matters. Creating accounts, restoring them and adjusting
+ * inventory are all ADMIN-only, so an installation whose final administrator switches themselves
+ * off cannot appoint a replacement: recovery is a manual UPDATE against the production database.
+ * It is only evaluated when the target is an active admin, so deactivating an operator never pays
+ * for the count.
+ */
+export const makeDeactivateUserUseCase = (id: number, actorId: number) =>
   Effect.gen(function* () {
     const repo = yield* UserRepository;
-    const result = yield* repo.deleteById(id);
-    return result;
+
+    if (id === actorId) return yield* Effect.fail(new CannotDeactivateSelfError({ id }));
+
+    const found = yield* repo.findById(id);
+    const target = yield* Option.match(found, {
+      onSome: Effect.succeed,
+      onNone: () => Effect.fail(new UserNotFoundError({ id })),
+    });
+
+    if (target.role === "ADMIN" && isActive(target)) {
+      const admins = yield* repo.countActiveAdmins();
+      if (admins <= 1) return yield* Effect.fail(new LastAdminError({ id }));
+    }
+
+    return yield* repo.deactivateById(id);
+  });
+
+/** Lets a deactivated account sign in again. Restoring is always safe — it only adds access. */
+export const makeRestoreUserUseCase = (id: number) =>
+  Effect.gen(function* () {
+    const repo = yield* UserRepository;
+    return yield* repo.restoreById(id);
   });
 
 export const makeFindUserByIdCase = (id: number) =>
@@ -51,9 +88,18 @@ export class UserManagementUseCase {
     )
   }
 
-  deleteUserById(id: number) {
+  deactivateUserById(id: number, actorId: number) {
     return this.runtime.runPromiseExit(
-      makeDeleteUserUseCase(id)
+      makeDeactivateUserUseCase(id, actorId)
+        .pipe(
+          Effect.provide(this.userServiceLive)
+        )
+    )
+  }
+
+  restoreUserById(id: number) {
+    return this.runtime.runPromiseExit(
+      makeRestoreUserUseCase(id)
         .pipe(
           Effect.provide(this.userServiceLive)
         )

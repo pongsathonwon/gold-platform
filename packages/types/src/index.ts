@@ -57,6 +57,14 @@ export const publicUserSchema = z.object({
   name: z.string().min(1),
   username: z.string().min(1),
   role: userRoleSchema,
+  /**
+   * Whether the account can sign in. False means deactivated — the row is kept so the username
+   * stays reserved and the audit trail keeps naming one person, but the login is refused.
+   *
+   * Defaulted, because a token minted before this field existed decodes without it and the holder
+   * should not be treated as deactivated for the remaining hour of their session.
+   */
+  active: z.boolean().default(true),
 })
 
 export const LoginResponseSchema = z.object({

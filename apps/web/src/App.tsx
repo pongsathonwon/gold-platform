@@ -7,6 +7,7 @@ import { AuthGuard, AdminGuard } from "./auth/AuthGuard";
 import { UnauthorizedError } from "./api/client";
 import { ToastProvider } from "./components/ToastContext";
 import { NavBar } from "./components/NavBar";
+import { UsersPage } from "./pages/UsersPage";
 import { LoginPage } from "./pages/LoginPage";
 import { InventoryLayout } from "./pages/InventoryLayout";
 import { InventoryPage } from "./pages/InventoryPage";
@@ -94,6 +95,12 @@ export function App() {
                 {/* Three readings of one window, offered side by side because BU has not chosen
                     between them. The layout owns the window and the data so the tabs cannot
                     disagree — which is the whole point of showing all three. */}
+                {/* Account administration. Behind AdminGuard because every route it calls is
+                    ADMIN-only on the API — issuing a login is how someone gets the ability to
+                    move gold, so it belongs with the adjustments rather than with the day's work. */}
+                <Route element={<AdminGuard />}>
+                  <Route path="/users" element={<UsersPage />} />
+                </Route>
                 <Route path="/trading" element={<TradingLayout />}>
                   <Route index element={<TradingSpreadPage />} />
                   <Route path="periods" element={<TradingPeriodPage />} />
