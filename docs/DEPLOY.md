@@ -90,7 +90,7 @@ limit, so it is the one query whose cost grows with the age of the ledger rather
 the request.
 
 ```bash
-gcloud sql instances create gold-db \
+gcloud sql instances create gold-platform \
   --database-version=POSTGRES_17 \
   --tier=db-g1-small \
   --region=asia-southeast1 \
@@ -104,8 +104,16 @@ gcloud sql instances create gold-db \
 `--backup-start-time` is UTC: 19:00 UTC is 02:00 in Bangkok, comfortably after the shop closes.
 
 ```bash
-gcloud sql databases create gold_platform --instance=gold-db
-gcloud sql users create gold_app --instance=gold-db --password="$PASSWORD"
+gcloud sql databases create gold_platform --instance=gold-platform
+gcloud sql users create gold_app --instance=gold-platform --password="$PASSWORD"
+```
+
+**The instance and the database differ only by the separator** — `gold-platform` with a hyphen is
+the Cloud SQL instance, `gold_platform` with an underscore is the database inside it. Postgres would
+have folded an unquoted hyphen into a subtraction, so the database could not carry the same name.
+Nothing warns you when they are swapped: the connection string simply fails to find a database.
+
+```bash
 ```
 
 **Generating that password: not `openssl rand -base64 32`.** Two constraints collide. Base64 emits
@@ -175,7 +183,7 @@ Never as `--set-env-vars`, and never as a Cloud Build substitution — both end 
 
 ```bash
 # Cloud Run mounts the socket at /cloudsql/INSTANCE. Note `localhost` — see below.
-printf 'postgres://gold_app:THE_PASSWORD@localhost/gold_platform?host=/cloudsql/PROJECT:asia-southeast1:gold-db' \
+printf 'postgres://gold_app:THE_PASSWORD@localhost/gold_platform?host=/cloudsql/PROJECT:asia-southeast1:gold-platform' \
   | gcloud secrets create gold-database-url --data-file=-
 
 openssl rand -base64 48 | tr -d '\n' | gcloud secrets create gold-jwt-secret --data-file=-
@@ -305,8 +313,7 @@ The connection is **regional and must match the triggers' region**, and creating
 
 Written with this deployment's real values rather than placeholders, because these are exactly the
 three that are painful to reconstruct — and none of them is a secret: the project id is already
-committed in `apps/web/.firebaserc`, and both URLs are public addresses. Note the Cloud SQL instance
-is named **`gold-platform`**, not the `gold-db` used in §1's generic setup.
+committed in `apps/web/.firebaserc`, and both URLs are public addresses.
 
 ```bash
 # The console owner-prefixes the repository resource when it links one. Read the real name back
@@ -336,13 +343,33 @@ depending on whoever ran it remembering all three. If gcloud asks for `--service
 address.** Nothing checks that either is right. A wrong `_CORS_ORIGIN` is loud — the browser blocks
 every call. A wrong `_API_URL` is silent until someone tries to log in.
 
+### Two wirings that look right and are not
+
+Google offers this project two other ways to deploy on a push, and both are one button away from
+where you will be standing. Neither can express what `cloudbuild.yaml` does.
+
+**Cloud Run → "Continuously deploy from a repository".** It creates its own Cloud Build trigger with
+a generated config, and offers exactly two build types: Dockerfile or buildpacks. There is no field
+for a build config file, so it can only ever build an image and deploy it — no `pnpm test`, no
+migration job, no SPA. Set up beside the trigger above, it also fires on every push to `main`, so
+two builds race into the same service. The tell is the URL: `/run/create`, not `/cloud-build`.
+
+**Cloud Run → deploy on new image in Artifact Registry.** Worse, because it looks closest to right.
+Read the step order: `push` puts the image in the registry, *then* `migrate` runs to completion,
+*then* `deploy` moves traffic. A registry-linked service deploys at `push` — the new revision starts
+serving before its own migrations have run, which is the single ordering this whole file exists to
+prevent. Nothing about it fails loudly; it just runs new code against an old schema.
+
+Both are subsets of the trigger. Only the trigger owns the whole sequence, which is the only place
+"migrate, *then* traffic" can be guaranteed.
+
 ### Deploying by hand
 
 Still works, and is the way out if the trigger is broken or the repository connection lapses:
 
 ```bash
 gcloud builds submit --config cloudbuild.yaml \
-  --substitutions=_SQL_INSTANCE=PROJECT:asia-southeast1:gold-db,_CORS_ORIGIN=https://your-spa-domain,_API_URL=https://YOUR-API,SHORT_SHA=$(git rev-parse --short HEAD)
+  --substitutions=_SQL_INSTANCE=PROJECT:asia-southeast1:gold-platform,_CORS_ORIGIN=https://your-spa-domain,_API_URL=https://YOUR-API,SHORT_SHA=$(git rev-parse --short HEAD)
 ```
 
 **`SHORT_SHA` has to be passed by hand here.** It is a built-in substitution Cloud Build fills in
@@ -387,7 +414,7 @@ gcloud run jobs deploy gold-seed \
   --image=asia-southeast1-docker.pkg.dev/PROJECT/gold-platform/gold-api:latest \
   --command=node --args=dist/scripts/seed.js \
   --region=asia-southeast1 \
-  --set-cloudsql-instances=PROJECT:asia-southeast1:gold-db \
+  --set-cloudsql-instances=PROJECT:asia-southeast1:gold-platform \
   --set-secrets=DATABASE_URL=gold-database-url:latest,SEED_PASSWORD=gold-seed-password:latest \
   --execute-now --wait
 ```
@@ -464,7 +491,7 @@ gcloud run jobs deploy gold-confirm-sweep \
   --image=asia-southeast1-docker.pkg.dev/PROJECT/gold-platform/gold-api:latest \
   --command=node --args=dist/scripts/confirm-sweep.js \
   --region=asia-southeast1 \
-  --set-cloudsql-instances=PROJECT:asia-southeast1:gold-db \
+  --set-cloudsql-instances=PROJECT:asia-southeast1:gold-platform \
   --set-secrets=DATABASE_URL=gold-database-url:latest,JWT_SECRET=gold-jwt-secret:latest \
   --set-env-vars=CORS_ORIGIN=https://your-spa-domain,NODE_ENV=production \
   --max-retries=1 --task-timeout=300s
@@ -545,8 +572,12 @@ These were identified in review and are **not** fixed in this pass:
   such route is behind `authMiddleware`, so this is disclosure to a signed-in operator rather than
   to the internet. `handleExit` in `infrastructure/http/errors.ts` is *not* affected: it maps every
   error to a fixed generic message, and is the shape the domain routers should adopt.
-- **The SPA bundle is one 700 KB chunk.** Fine over a LAN, worth code-splitting before any
-  branch uses it over mobile data.
+- ~~**The SPA bundle is one 700 KB chunk.**~~ Fixed. Routes load on demand and the framework is
+  split from the app's code, so the entry chunk is no longer the whole application: the largest
+  chunk is now 330 KB (99 KB gzipped) and React, the router and the query client are their own
+  cacheable chunks. The reasoning is at `vendorChunk()` in `apps/web/vite.config.ts`, and it matters
+  more now that `/assets/**` is served immutable for a year — a chunk that does not change is a
+  chunk nobody fetches twice.
 - **`POST /wholesale-*/:id/status` and the retail/receive routes have no role restriction.** They
   require authentication but any operator may drive any transition. Whether some of those moves
   (writing off stock, for instance) should be admin-only is a business question, not a bug.
