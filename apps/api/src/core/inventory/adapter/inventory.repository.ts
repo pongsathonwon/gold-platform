@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { randomUUID } from "crypto";
 import { and, asc, eq, gte, lt, lte, sql } from "drizzle-orm";
-import { todayBusinessDate } from "@gold-platform/types";
+import { roundMoney, todayBusinessDate } from "@gold-platform/types";
 import { Database, DrizzleClient, RepositoryError } from "../../../infrastructure/db/client.js";
 import {
     inventoryBalance, inventoryMovements,
@@ -60,7 +60,21 @@ async function decrementWithin(tx: Executor, key: BalanceKey, weightGb: number, 
 
     // live WAC — safe from divide-by-zero: available >= weightGb > 0 here
     const rate = balance.totalWeightGb > 0 ? balance.totalCost / balance.totalWeightGb : 0
-    const costDelta = weightGb * rate
+    /**
+     * Rounded once, here, because this figure is used twice: it is written to the movement's
+     * `cost_delta` and it is subtracted from the pool's `total_cost` below.
+     *
+     * Unrounded, those two disagree. `cost_delta` is a `numeric(18,2)`, so Postgres quantizes it on
+     * insert, while the balance update interpolates the raw double into a `numeric` expression and
+     * subtracts every digit of it. The ledger would then say one thing and the balance another, by
+     * a fraction of a satang per movement, compounding — and the ledger is supposed to be the
+     * record the balances are reconstructable from.
+     *
+     * `rate` itself is deliberately *not* rounded: it is an intermediate that is never stored, and
+     * quantizing a per-gold-baht rate to satang before multiplying would introduce far more error
+     * than it removes.
+     */
+    const costDelta = roundMoney(weightGb * rate)
 
     // A pool drained to nothing must not keep a fraction of a satang of cost behind: the next
     // increment would average against a rate built from weight that is no longer there. Zero is

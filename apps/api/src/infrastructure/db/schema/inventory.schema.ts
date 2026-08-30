@@ -1,4 +1,5 @@
 import { date, decimal, index, uniqueIndex, pgTable, primaryKey, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { factor, money, weight } from "./columns.js";
 import { brands, originEnum, productTypes, purities } from "./master.schema.js";
 
 // aggregate balance — one row per pool (purityId, brandId, origin, productTypeId)
@@ -8,9 +9,9 @@ export const inventoryBalance = pgTable('inventory_balance', {
     brandId: varchar().notNull().references(() => brands.id),
     origin: originEnum().notNull(),
     productTypeId: varchar().notNull().references(() => productTypes.id),
-    totalWeightGb: decimal({ mode: 'number' }).notNull().default(0),
-    totalWeightGm: decimal({ mode: 'number' }).notNull().default(0),
-    totalCost: decimal({ mode: 'number' }).notNull().default(0),
+    totalWeightGb: weight().notNull().default(0),
+    totalWeightGm: weight().notNull().default(0),
+    totalCost: money().notNull().default(0),
 }, (table) => [
     primaryKey({ columns: [table.purityId, table.brandId, table.origin, table.productTypeId] })
 ])
@@ -30,9 +31,9 @@ export const inventoryMovements = pgTable('inventory_movements', {
     referenceType: varchar().notNull(),
     referenceId: uuid().notNull(),
 
-    weightGbDelta: decimal({ mode: 'number' }).notNull(),
-    weightGmDelta: decimal({ mode: 'number' }).notNull(),
-    costDelta: decimal({ mode: 'number' }).notNull(),
+    weightGbDelta: weight().notNull(),
+    weightGmDelta: weight().notNull(),
+    costDelta: money().notNull(),
     notes: text(),
 
     // The trading day this movement belongs to. It is what the movement report windows on, so a
@@ -101,11 +102,11 @@ export const stockGainAdjustments = pgTable('stock_gain_adjustments', {
     brandId: varchar().references(() => brands.id),
     origin: originEnum().notNull(),
     productTypeId: varchar().notNull().references(() => productTypes.id),
-    weightGb: decimal({ mode: 'number' }).notNull(),
-    weightGm: decimal({ mode: 'number' }).notNull(),
-    conversionFactor: decimal({ mode: 'number' }).notNull(),
-    pricePerGb: decimal({ mode: 'number' }).notNull(),
-    totalCost: decimal({ mode: 'number' }).notNull(),
+    weightGb: weight().notNull(),
+    weightGm: weight().notNull(),
+    conversionFactor: factor().notNull(),
+    pricePerGb: money().notNull(),
+    totalCost: money().notNull(),
     referenceType: varchar().notNull(),
     notes: text(),
     // the day the correction is being made *for* — a Friday stock count typed up on Monday is
@@ -125,8 +126,8 @@ export const stockLossAdjustments = pgTable('stock_loss_adjustments', {
     brandId: varchar().references(() => brands.id),
     origin: originEnum().notNull(),
     productTypeId: varchar().notNull().references(() => productTypes.id),
-    weightGb: decimal({ mode: 'number' }).notNull(),
-    weightGm: decimal({ mode: 'number' }).notNull(),
+    weightGb: weight().notNull(),
+    weightGm: weight().notNull(),
     referenceType: varchar().notNull(),
     notes: text(),
     // as on the gain side — the day the loss belongs to, not the day it was typed
@@ -146,10 +147,10 @@ export const productSwitchAdjustments = pgTable('product_switch_adjustments', {
     productTypeId: varchar().notNull().references(() => productTypes.id),
     fromBrandId: varchar().notNull().references(() => brands.id),
     toBrandId: varchar().notNull().references(() => brands.id),
-    weightGb: decimal({ mode: 'number' }).notNull(),
-    weightGm: decimal({ mode: 'number' }).notNull(),
-    fromCostDelta: decimal({ mode: 'number' }).notNull(),
-    toCostDelta: decimal({ mode: 'number' }).notNull(),
+    weightGb: weight().notNull(),
+    weightGm: weight().notNull(),
+    fromCostDelta: money().notNull(),
+    toCostDelta: money().notNull(),
     notes: text(),
     switchedBy: varchar().notNull(),
     switchedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),

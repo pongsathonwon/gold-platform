@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { BrandSplit, derivePricePerGb999, todayBusinessDate } from "@gold-platform/types";
+import { roundMoney, BrandSplit, derivePricePerGb999, todayBusinessDate } from "@gold-platform/types";
 import {
     AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CONTESTED_STATUS,
     CreateTransactionReq, INVENTORY_STATUS, InvalidTransitionError, ListFilter,
@@ -59,7 +59,7 @@ export const createTransaction = (req: CreateTransactionReq) =>
             conversionFactor,
             pricePerGb965: req.pricePerGb965,
             pricePerGb999,
-            totalAmount: weightGb * price,
+            totalAmount: roundMoney(weightGb * price),
             actualWeightGb: null,
             actualWeightGm: null,
             actualAmount: null,
@@ -145,7 +145,7 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
             fields.conversionFactor = conversionFactor;
             fields.pricePerGb965 = pricePerGb965;
             fields.pricePerGb999 = pricePerGb999;
-            fields.totalAmount = weightGb * applicablePrice(unitOfMeasure, pricePerGb965, pricePerGb999);
+            fields.totalAmount = roundMoney(weightGb * applicablePrice(unitOfMeasure, pricePerGb965, pricePerGb999));
         }
 
         return yield* repo.updateTransaction(transaction.id, fields);
@@ -250,7 +250,7 @@ const recordContestedWeight = (
         yield* repo.recordContestedWeights(transaction.id, {
             actualWeightGb: measured.weightGb,
             actualWeightGm: measured.weightGm,
-            actualAmount: measured.weightGb * price,
+            actualAmount: roundMoney(measured.weightGb * price),
         });
     })
 

@@ -1,7 +1,7 @@
 import { Data, Effect } from "effect";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { and, eq } from "drizzle-orm";
-import { BrandSplit, NA_BRAND } from "@gold-platform/types";
+import { BrandSplit, NA_BRAND, roundMoney, roundWeight } from "@gold-platform/types";
 import { DrizzleClient, RepositoryError } from "./db/client.js";
 import { brands, purities, supplierBrands, suppliers } from "./db/schema/master.schema.js";
 
@@ -89,8 +89,6 @@ export interface ResolveBrandSplitReq {
     // the named portions, in the unit the transaction's weight was entered in
     requested: BrandSplit
 }
-
-const round6 = (n: number) => Math.round(n * 1e6) / 1e6
 
 /** The brands a supplier is registered to deal in, excluding the fungible sentinel. */
 const findSupplierBrandIds = (supplierId: string) =>
@@ -195,7 +193,7 @@ export function divideWeight(req: DivideWeightReq): DivideResult {
         merged.set(entry.brandId, (merged.get(entry.brandId) ?? 0) + entry.weight)
     }
 
-    const named = round6([...merged.values()].reduce((sum, w) => sum + w, 0))
+    const named = roundWeight([...merged.values()].reduce((sum, w) => sum + w, 0))
     if (named > req.weightGb) {
         return { ok: false, error: new BrandSplitExceedsWeightError({ named, total: req.weightGb }) }
     }
@@ -205,15 +203,15 @@ export function divideWeight(req: DivideWeightReq): DivideResult {
     const split: ResolvedBrandWeight[] = [...merged].map(([brandId, weightGb]) => ({
         brandId,
         weightGb,
-        weightGm: round6(weightGb * req.conversionFactor),
+        weightGm: roundWeight(weightGb * req.conversionFactor),
     }))
 
     // The residual is what makes the sum exact. Taking it by subtraction rather than by
     // reconversion is deliberate: the branded lines plus this one always restore the transaction's
     // stored weights to the last decimal, whatever the factor rounds to.
-    const remainderGb = round6(req.weightGb - named)
+    const remainderGb = roundWeight(req.weightGb - named)
     if (remainderGb > 0) {
-        const remainderGm = round6(req.weightGm - split.reduce((sum, s) => sum + s.weightGm, 0))
+        const remainderGm = roundWeight(req.weightGm - split.reduce((sum, s) => sum + s.weightGm, 0))
         /**
          * Folded into an existing NA line rather than pushed alongside it.
          *
@@ -229,8 +227,8 @@ export function divideWeight(req: DivideWeightReq): DivideResult {
          */
         const existingNa = split.find((line) => line.brandId === NA_BRAND)
         if (existingNa) {
-            existingNa.weightGb = round6(existingNa.weightGb + remainderGb)
-            existingNa.weightGm = round6(existingNa.weightGm + remainderGm)
+            existingNa.weightGb = roundWeight(existingNa.weightGb + remainderGb)
+            existingNa.weightGm = roundWeight(existingNa.weightGm + remainderGm)
         } else {
             split.push({ brandId: NA_BRAND, weightGb: remainderGb, weightGm: remainderGm })
         }
@@ -267,9 +265,9 @@ export const apportionCost = (split: ResolvedBrandWeight[], totalCost: number, t
     if (split.length === 0) return []
     let assigned = 0
     return split.map((line, i) => {
-        if (i === split.length - 1) return { ...line, totalCost: round6(totalCost - assigned) }
-        const share = round6(totalWeightGb > 0 ? (totalCost * line.weightGb) / totalWeightGb : 0)
-        assigned = round6(assigned + share)
+        if (i === split.length - 1) return { ...line, totalCost: roundMoney(totalCost - assigned) }
+        const share = roundMoney(totalWeightGb > 0 ? (totalCost * line.weightGb) / totalWeightGb : 0)
+        assigned = roundMoney(assigned + share)
         return { ...line, totalCost: share }
     })
 }

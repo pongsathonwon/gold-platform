@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { StockGainReq, StockLossReq, todayBusinessDate } from "@gold-platform/types";
+import { roundMoney, StockGainReq, StockLossReq, todayBusinessDate } from "@gold-platform/types";
 import {
     DecrementReq, IncrementReq, InventoriesRepository, InventoryVolume, MovementEntry,
     MovementFilter, ProductSwitchReq, ProtectedOriginError, ReverseDecrementReq, SplitMovementReq,
@@ -61,7 +61,7 @@ export const stockGain = (req: StockGainReq, auditedBy: string) =>
         const transactionDate = req.transactionDate ?? todayBusinessDate();
         const { weightGb, weightGm, conversionFactor } = yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
         // operator enters price per gold baht (บาททอง); total cost is derived from the resolved GB weight
-        const totalCost = req.pricePerGb * weightGb;
+        const totalCost = roundMoney(req.pricePerGb * weightGb);
 
         // record, balance and ledger entry are three descriptions of one event, so they are
         // applied as one transaction — see `applyStockGain` in the repository

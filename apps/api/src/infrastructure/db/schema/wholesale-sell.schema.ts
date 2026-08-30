@@ -1,4 +1,5 @@
 import { date, decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { factor, money, weight } from "./columns.js";
 import { productTypes, purities, suppliers } from "./master.schema.js";
 
 // Happy path:  CREATED → CONFIRMED → PACKED → SHIPPED → PAID
@@ -51,30 +52,30 @@ export const wholeSellTransactions = pgTable('whole_sell_transactions', {
     // which is also what lets RETURNED reverse a mixed shipment pool by pool.
 
     // agreed weight — snapshotted at creation, only editable while CREATED
-    weightGb: decimal({ mode: 'number' }).notNull(),
-    weightGm: decimal({ mode: 'number' }).notNull(),
-    conversionFactor: decimal({ mode: 'number' }).notNull(), // GB * factor = GM, snapshotted from unit_conversions
+    weightGb: weight().notNull(),
+    weightGm: weight().notNull(),
+    conversionFactor: factor().notNull(), // GB * factor = GM, snapshotted from unit_conversions
 
     // both quotes are recorded on every transaction whatever the item's purity. The operator
     // enters only the 96.5% one; the 99.9% one is derived from it by the purity ratio.
     // the 96.5% quote keeps its original physical column name (price_per_gb) — it was always
     // this quote, the 965 suffix just makes that explicit now that a second one exists
-    pricePerGb965: decimal('price_per_gb', { mode: 'number' }).notNull(),
-    pricePerGb999: decimal('price_per_gb_999', { mode: 'number' }).notNull(),
-    totalAmount: decimal({ mode: 'number' }).notNull(), // agreedWeightGb * the purity-matched price
+    pricePerGb965: money('price_per_gb').notNull(),
+    pricePerGb999: money('price_per_gb_999').notNull(),
+    totalAmount: money().notNull(), // agreedWeightGb * the purity-matched price
 
     // The weight the buyer contests, recorded when a shipped deal is moved to DISPUTED. Packing
     // records nothing here — we boxed our own gold from our own vault, so there is no second,
     // independent measurement to capture. Null therefore means "nobody is arguing", and the only
     // thing that can ever populate it is the buyer's own re-weigh.
-    actualWeightGb: decimal({ mode: 'number' }),
-    actualWeightGm: decimal({ mode: 'number' }),
-    actualAmount: decimal({ mode: 'number' }), // actualWeightGb * the purity-matched price
+    actualWeightGb: weight(),
+    actualWeightGm: weight(),
+    actualAmount: money(), // actualWeightGb * the purity-matched price
 
     // What the buyer actually settled, when it differed from totalAmount. Null means it matched.
     // BU's rare "we took less and closed the file" case: a recorded variance, not a status, since
     // an accepted shortfall ends the deal exactly like an exact payment does.
-    settledAmount: decimal({ mode: 'number' }),
+    settledAmount: money(),
 
     // Why the shipment came home; set on the move into RETURNED, alongside the mandatory note.
     returnReason: wholeSellReturnReasonEnum(),

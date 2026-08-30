@@ -1,4 +1,5 @@
 import { boolean, date, decimal, integer, pgEnum, pgTable, primaryKey, timestamp, uuid, varchar, } from "drizzle-orm/pg-core";
+import { factor } from "./columns.js";
 
 export const originEnum = pgEnum('origin', ['domestic', 'foreign'])
 
@@ -95,7 +96,9 @@ export const supplierBrands = pgTable('suppler_brands', {
 
 export const unitConversions = pgTable('unit_conversion', {
     id: uuid().primaryKey().defaultRandom(),
-    factorValue: decimal({ mode: 'number', scale: 4, precision: 6 }).notNull(),
+    // The same helper the transaction tables snapshot this into, so the copy cannot be declared
+    // differently from the original.
+    factorValue: factor().notNull(),
     effectiveDate: date().defaultNow().notNull(),
     changeBy: uuid()
 })

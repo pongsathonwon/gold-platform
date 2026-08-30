@@ -1,4 +1,5 @@
 import { date, decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { factor, money, weight } from "./columns.js";
 import { productTypes, purities, suppliers } from "./master.schema.js";
 
 // Happy path:  CREATED → CONFIRMED → PAID → RECEIVED → STOCKED
@@ -55,18 +56,18 @@ export const wholeBuyTransactions = pgTable('whole_buy_transactions', {
     // would be a second copy of those same numbers, free to drift from them.
 
     // ordered weight — snapshotted at creation, only editable while CREATED
-    weightGb: decimal({ mode: 'number' }).notNull(),
-    weightGm: decimal({ mode: 'number' }).notNull(),
-    conversionFactor: decimal({ mode: 'number' }).notNull(), // GB * factor = GM, snapshotted from unit_conversions
+    weightGb: weight().notNull(),
+    weightGm: weight().notNull(),
+    conversionFactor: factor().notNull(), // GB * factor = GM, snapshotted from unit_conversions
 
     // both quotes are recorded on every transaction whatever the item's purity.
     // 99.9% is quoted off the 96.5% price by the purity ratio (99.9/96.5) — the operator
     // calculates that value, the server stores what they entered.
     // the 96.5% quote keeps its original physical column name (price_per_gb) — it was always
     // this quote, the 965 suffix just makes that explicit now that a second one exists
-    pricePerGb965: decimal('price_per_gb', { mode: 'number' }).notNull(),
-    pricePerGb999: decimal('price_per_gb_999', { mode: 'number' }).notNull(),
-    totalAmount: decimal({ mode: 'number' }).notNull(), // orderedWeightGb * the purity-matched price
+    pricePerGb965: money('price_per_gb').notNull(),
+    pricePerGb999: money('price_per_gb_999').notNull(),
+    totalAmount: money().notNull(), // orderedWeightGb * the purity-matched price
 
     // The measured weight of a delivery we took in and then contested — written only on a move
     // into DISPUTED, and cleared again if the shipment is later accepted. Null therefore always
@@ -75,14 +76,14 @@ export const wholeBuyTransactions = pgTable('whole_buy_transactions', {
     //
     // Accepting never writes here. The weight check happens at the door before custody transfers,
     // and a delivery that fails it is refused (PAID → RETURNED) rather than measured and booked.
-    actualWeightGb: decimal({ mode: 'number' }),
-    actualWeightGm: decimal({ mode: 'number' }),
-    actualAmount: decimal({ mode: 'number' }), // actualWeightGb * the purity-matched price
+    actualWeightGb: weight(),
+    actualWeightGm: weight(),
+    actualAmount: money(), // actualWeightGb * the purity-matched price
 
     // What was actually paid, when it differed from totalAmount. Null means the payment matched.
     // Recorded on the move into PAID and never branched on — an accepted variance closes the deal
     // exactly like an exact payment, so it is a number accounting needs, not a state anyone works.
-    settledAmount: decimal({ mode: 'number' }),
+    settledAmount: money(),
 
     // Why the shipment went back; set on the move into RETURNED, alongside the mandatory note.
     // A column rather than prose because supplier reliability has to be reportable.

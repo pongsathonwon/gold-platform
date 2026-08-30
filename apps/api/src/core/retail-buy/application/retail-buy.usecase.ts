@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { RETAIL_BUY_NOTE_REQUIRED, todayBusinessDate } from "@gold-platform/types";
+import { roundMoney, RETAIL_BUY_NOTE_REQUIRED, todayBusinessDate } from "@gold-platform/types";
 import {
     AdvanceStatusReq, allowedTransitions, CreateTransactionReq,
     InvalidTransitionError, ListFilter, NoteRequiredError, RetailBuyRepository,
@@ -47,7 +47,7 @@ export const createTransaction = (req: CreateTransactionReq) =>
             pricePerGb: req.pricePerGb,
             // Gold value only. The fee rides alongside so this stays comparable with the wholesale
             // domains, which have no fees at all.
-            totalAmount: weightGb * req.pricePerGb,
+            totalAmount: roundMoney(weightGb * req.pricePerGb),
             operationFee: req.operationFee ?? null,
             transactionDate,
             settlementPeriod: resolveSettlementPeriodOn(transactionDate),

@@ -1,4 +1,5 @@
 import { date, decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { factor, money, weight } from "./columns.js";
 import { branches, brands, productTypes, purities } from "./master.schema.js";
 
 /**
@@ -28,19 +29,19 @@ export const retailSellTransactions = pgTable('retail_sell_transactions', {
      */
     brandId: varchar().references(() => brands.id),
 
-    weightGb: decimal({ mode: 'number' }).notNull(),
-    weightGm: decimal({ mode: 'number' }).notNull(),
-    conversionFactor: decimal({ mode: 'number' }).notNull(), // GB * factor = GM, snapshotted from unit_conversions
+    weightGb: weight().notNull(),
+    weightGm: weight().notNull(),
+    conversionFactor: factor().notNull(), // GB * factor = GM, snapshotted from unit_conversions
 
-    pricePerGb: decimal({ mode: 'number' }).notNull(), // what the customer was charged, per gold baht
-    totalAmount: decimal({ mode: 'number' }).notNull(), // weightGb * pricePerGb — gold value ONLY
+    pricePerGb: money().notNull(), // what the customer was charged, per gold baht
+    totalAmount: money().notNull(), // weightGb * pricePerGb — gold value ONLY
     /**
      * ค่าบล็อค on ทองแผ่น, in THB. Deliberately **outside** `totalAmount`: keeping the total to gold
      * value is what makes it comparable against the wholesale domains, which have no fees at all,
      * and what keeps the price-per-gold-baht average from reading a fee as spread. Anything needing
      * all-in cash adds the two.
      */
-    operationFee: decimal({ mode: 'number' }),
+    operationFee: money(),
 
     /** The business day the deal happened — picked by the operator, defaults to today, never future. */
     transactionDate: date().notNull(),

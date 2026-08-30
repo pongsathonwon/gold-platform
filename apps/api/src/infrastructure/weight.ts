@@ -2,7 +2,7 @@ import { Data, Effect } from "effect";
 import { desc, eq, lte } from "drizzle-orm";
 import { DrizzleClient, RepositoryError } from "./db/client.js";
 import { purities, unitConversions } from "./db/schema/master.schema.js";
-import { todayBusinessDate } from "@gold-platform/types";
+import { roundWeight, todayBusinessDate } from "@gold-platform/types";
 
 export class PurityNotFoundError extends Data.TaggedError("PurityNotFoundError")<{ purityId: string }> {}
 export class NoConversionRateError extends Data.TaggedError("NoConversionRateError") {}
@@ -59,8 +59,13 @@ export const resolveWeights = (purityId: string, weight: number) =>
 
         // unitOfMeasure 'g'  → caller sends grams,  gb = gm / factor
         // unitOfMeasure 'gb' → caller sends baht,   gm = gb * factor
+        //
+        // The derived side is rounded to the scale its column stores. The entered side is not
+        // touched: it is what the operator typed, and rounding a value nobody computed would only
+        // ever be a way to disagree with them. `weight / 15.244` does not terminate, so without
+        // this the column and the request hold different numbers from the first transaction on.
         if (purity.unitOfMeasure === 'g') {
-            return { weightGm: weight, weightGb: weight / conversionFactor, conversionFactor, unitOfMeasure: 'g' } satisfies ResolvedWeights
+            return { weightGm: weight, weightGb: roundWeight(weight / conversionFactor), conversionFactor, unitOfMeasure: 'g' } satisfies ResolvedWeights
         }
-        return { weightGb: weight, weightGm: weight * conversionFactor, conversionFactor, unitOfMeasure: 'gb' } satisfies ResolvedWeights
+        return { weightGb: weight, weightGm: roundWeight(weight * conversionFactor), conversionFactor, unitOfMeasure: 'gb' } satisfies ResolvedWeights
     })

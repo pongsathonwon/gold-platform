@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { RETAIL_SELL_NOTE_REQUIRED, todayBusinessDate } from "@gold-platform/types";
+import { roundMoney, RETAIL_SELL_NOTE_REQUIRED, todayBusinessDate } from "@gold-platform/types";
 import {
     AdvanceStatusReq, allowedTransitions, CreateTransactionReq,
     InvalidTransitionError, ListFilter, NoteRequiredError, RetailSellRepository,
@@ -48,7 +48,7 @@ export const createTransaction = (req: CreateTransactionReq) =>
             pricePerGb: req.pricePerGb,
             // Gold value only. ค่าบล็อค rides alongside, so the price-per-gold-baht average reads
             // spread rather than fee and stays comparable with wholesale.
-            totalAmount: weightGb * req.pricePerGb,
+            totalAmount: roundMoney(weightGb * req.pricePerGb),
             operationFee: req.operationFee ?? null,
             transactionDate,
             settlementPeriod: resolveSettlementPeriodOn(transactionDate),

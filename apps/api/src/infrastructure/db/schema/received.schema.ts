@@ -1,4 +1,5 @@
 import { decimal, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { factor, money, weight } from "./columns.js";
 import { brands, productTypes, purities } from "./master.schema.js";
 
 export const receivedStatusEnum = pgEnum('received_status', [
@@ -16,12 +17,12 @@ export const receivedTransactions = pgTable('received_transactions', {
     productTypeId: varchar().notNull().references(() => productTypes.id),
 
     // snapshotted at creation, never updated
-    weightGb: decimal({ mode: 'number' }).notNull(),
-    weightGm: decimal({ mode: 'number' }).notNull(),
-    conversionFactor: decimal({ mode: 'number' }).notNull(),
+    weightGb: weight().notNull(),
+    weightGm: weight().notNull(),
+    conversionFactor: factor().notNull(),
 
     // management-calculated value, required at creation
-    totalCost: decimal({ mode: 'number' }).notNull(),
+    totalCost: money().notNull(),
 
     settlementPeriod: varchar().notNull(),
 
