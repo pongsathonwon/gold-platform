@@ -213,7 +213,26 @@ export function divideWeight(req: DivideWeightReq): DivideResult {
     const remainderGb = round6(req.weightGb - named)
     if (remainderGb > 0) {
         const remainderGm = round6(req.weightGm - split.reduce((sum, s) => sum + s.weightGm, 0))
-        split.push({ brandId: NA_BRAND, weightGb: remainderGb, weightGm: remainderGm })
+        /**
+         * Folded into an existing NA line rather than pushed alongside it.
+         *
+         * `NA` is ordinarily the residual's home and nothing else, so this appears to be a case
+         * that cannot arise — but it can: registering `NA` in `suppler_brands` is a data change,
+         * not a code change, and an operator could then name it explicitly *and* leave a
+         * remainder. Pushing unconditionally emitted the same pool twice in one split.
+         *
+         * Two rows for one pool sum correctly, so nothing was visibly wrong — but each becomes its
+         * own inventory movement, `findBrandSplitByReference` reads the transaction back with a
+         * duplicated brand, and the unique index that now guards against double-booking would
+         * reject the whole booking. One pool, one line.
+         */
+        const existingNa = split.find((line) => line.brandId === NA_BRAND)
+        if (existingNa) {
+            existingNa.weightGb = round6(existingNa.weightGb + remainderGb)
+            existingNa.weightGm = round6(existingNa.weightGm + remainderGm)
+        } else {
+            split.push({ brandId: NA_BRAND, weightGb: remainderGb, weightGm: remainderGm })
+        }
     }
 
     return { ok: true, split }

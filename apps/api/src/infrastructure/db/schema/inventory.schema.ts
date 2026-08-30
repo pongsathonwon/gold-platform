@@ -1,4 +1,4 @@
-import { date, decimal, index, pgTable, primaryKey, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { date, decimal, index, uniqueIndex, pgTable, primaryKey, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { brands, originEnum, productTypes, purities } from "./master.schema.js";
 
 // aggregate balance — one row per pool (purityId, brandId, origin, productTypeId)
@@ -60,6 +60,35 @@ export const inventoryMovements = pgTable('inventory_movements', {
      * yesterday–today reads more rows every month the shop stays in business.
      */
     index('inventory_movements_movement_date_idx').on(table.movementDate, table.movedAt, table.id),
+    /**
+     * One movement per pool per reference — the constraint that makes a retry safe.
+     *
+     * Booking stock and writing the status row that records it are separate transactions. A crash
+     * between them leaves the movement applied and the transaction still in its old status, so the
+     * obvious recovery — repeat the transition — increments the pool a second time. Nothing
+     * detects it: both movements are individually valid, the balance is simply wrong, and the
+     * ledger reads as two deliveries of gold that arrived once.
+     *
+     * **Not `(reference_type, reference_id)`**, which is what it looks like it should be and would
+     * break every brand split. A mixed delivery books one movement per branded pool under a single
+     * reference — that is what `findBrandSplitByReference` reads back, and it is the design. The
+     * pool columns are what make each of those rows distinct, so they belong in the key.
+     *
+     * That leaves exactly one legitimate way to write the same pool twice under one reference, and
+     * `divideWeight` no longer does it: the residual is folded into an existing `NA` line rather
+     * than pushed beside it.
+     *
+     * A reversal is a different `reference_type` (`WHOLESALE_SELL_RETURN`), so unwinding a sell
+     * never collides with the sell's own rows.
+     */
+    uniqueIndex('inventory_movements_reference_pool_uq').on(
+        table.referenceType,
+        table.referenceId,
+        table.purityId,
+        table.brandId,
+        table.origin,
+        table.productTypeId,
+    ),
 ])
 
 export type CreateMovement = typeof inventoryMovements.$inferInsert;

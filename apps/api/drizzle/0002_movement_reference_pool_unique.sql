@@ -1,0 +1,32 @@
+-- One inventory movement per pool per reference, so a retry cannot book stock twice.
+--
+-- Booking stock and writing the status row that records it are separate transactions. A crash
+-- between them leaves the movement applied and the transaction still in its previous status, so the
+-- natural recovery — repeat the transition — increments the pool a second time. Nothing catches it:
+-- both movements are individually valid, the balance is simply wrong by one delivery, and the ledger
+-- reads as gold that arrived twice.
+--
+-- Deliberately **not** `(reference_type, reference_id)`, which is the obvious key and would reject
+-- every mixed-brand delivery. One transaction books one movement per branded pool under a single
+-- reference — that is what `findBrandSplitByReference` reads back to show a transaction's split, and
+-- it is the design rather than an accident. The pool columns are what distinguish those rows, so
+-- they belong in the key.
+--
+-- That left exactly one way to write the same pool twice under one reference legitimately, and it is
+-- closed in the same change: `divideWeight` used to push the residual as its own `NA` line, which
+-- duplicated the pool whenever `NA` had also been named explicitly. It now folds into the existing
+-- line. Reachable only by registering `NA` in `suppler_brands` — a data change, not a code one —
+-- which is why it had never happened and would have surfaced as a failed booking rather than as a
+-- validation message.
+--
+-- A reversal carries its own `reference_type` (`WHOLESALE_SELL_RETURN`), so unwinding a sell never
+-- collides with the sell's own movements.
+--
+-- If this migration fails, the database already holds a double-booking. Do not drop the index to
+-- get past it: find the duplicate groups, decide which row is the real one, and correct the balance
+-- to match before re-running.
+--
+--   SELECT reference_type, reference_id, purity_id, brand_id, origin, product_type_id, count(*)
+--   FROM inventory_movements GROUP BY 1,2,3,4,5,6 HAVING count(*) > 1;
+
+CREATE UNIQUE INDEX "inventory_movements_reference_pool_uq" ON "inventory_movements" USING btree ("reference_type","reference_id","purity_id","brand_id","origin","product_type_id");

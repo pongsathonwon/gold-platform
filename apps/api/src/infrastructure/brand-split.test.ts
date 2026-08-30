@@ -151,3 +151,40 @@ describe("apportioning the money across the split", () => {
         expect(costed.reduce((sum, c) => sum + c.totalCost, 0)).toBe(1000);
     });
 });
+
+describe("one pool, one line", () => {
+    /**
+     * `inventory_movements` carries a unique index on (reference, pool), so a split that names the
+     * same pool twice is no longer a cosmetic oddity — it is a booking the database refuses.
+     *
+     * NA is ordinarily the residual's home and nothing else, which is why this went unnoticed. But
+     * registering NA in `suppler_brands` is a data change rather than a code change, and once it is
+     * registered an operator can name it *and* leave a remainder.
+     */
+    it("folds the residual into an explicitly named NA line rather than adding a second", () => {
+        const split = expectReconstructs({
+            ...base,
+            registered: ["HUA_GOLD", "NA"],
+            requested: [{ brandId: "HUA_GOLD", weight: 5 }, { brandId: "NA", weight: 3 }],
+        });
+        // 5 named to HUA, 3 named to NA, 4 left over — the 4 joins the NA line, it does not open one
+        expect(split).toHaveLength(2);
+        expect(split.find((s) => s.brandId === "NA")?.weightGb).toBeCloseTo(7, 6);
+        expect(split.find((s) => s.brandId === "HUA_GOLD")?.weightGb).toBeCloseTo(5, 6);
+    });
+
+    it("never emits a duplicate pool, whatever is named", () => {
+        for (const requested of [
+            [],
+            [{ brandId: "HUA_GOLD", weight: 12 }],
+            [{ brandId: "NA", weight: 12 }],
+            [{ brandId: "NA", weight: 4 }],
+            [{ brandId: "HUA_GOLD", weight: 4 }, { brandId: "NA", weight: 4 }],
+            [{ brandId: "NA", weight: 2 }, { brandId: "NA", weight: 3 }],
+        ]) {
+            const split = expectReconstructs({ ...base, registered: ["HUA_GOLD", "NA"], requested });
+            const brands = split.map((s) => s.brandId);
+            expect(new Set(brands).size).toBe(brands.length);
+        }
+    });
+});

@@ -1,7 +1,8 @@
 import { Data, Effect } from "effect";
-import { eq } from "drizzle-orm";
+import { desc, eq, lte } from "drizzle-orm";
 import { DrizzleClient, RepositoryError } from "./db/client.js";
 import { purities, unitConversions } from "./db/schema/master.schema.js";
+import { todayBusinessDate } from "@gold-platform/types";
 
 export class PurityNotFoundError extends Data.TaggedError("PurityNotFoundError")<{ purityId: string }> {}
 export class NoConversionRateError extends Data.TaggedError("NoConversionRateError") {}
@@ -26,11 +27,33 @@ export const resolveWeights = (purityId: string, weight: number) =>
         if (purityRows.length !== 1) return yield* Effect.fail(new PurityNotFoundError({ purityId }))
         const purity = purityRows[0]
 
+        /**
+         * The factor in force **today**, which is not the same as the newest row.
+         *
+         * This used to read every row, sort ascending and take the last — so the instant anyone
+         * pre-entered a rate change with a future `effectiveDate`, every conversion in the system
+         * started using it. Nothing would fail: weights would simply be computed at a factor that
+         * is not yet the agreed one, on transactions already being priced and booked against it.
+         *
+         * Bounded by Bangkok's today rather than the server's, for the same reason every other
+         * business date is. A row dated today is in force — the boundary is the start of the day,
+         * so `lte` and not `lt`.
+         *
+         * A future-dated row is now simply invisible until its day arrives, which is what
+         * `effectiveDate` promises. If *every* row is future-dated there is no factor in force and
+         * `NoConversionRateError` is the honest answer rather than borrowing tomorrow's number.
+         */
         const rateRows = yield* Effect.tryPromise({
-            try: () => db.select().from(unitConversions).orderBy(unitConversions.effectiveDate).execute(),
+            try: () => db
+                .select()
+                .from(unitConversions)
+                .where(lte(unitConversions.effectiveDate, todayBusinessDate()))
+                .orderBy(desc(unitConversions.effectiveDate))
+                .limit(1)
+                .execute(),
             catch: () => new RepositoryError({ message: 'cannot look up conversion rate' }),
         })
-        const latestRate = rateRows.at(-1)
+        const latestRate = rateRows.at(0)
         if (!latestRate) return yield* Effect.fail(new NoConversionRateError())
         const conversionFactor = latestRate.factorValue
 

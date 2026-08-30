@@ -144,7 +144,9 @@ socket named `%2Fcloudsql%2F...`.
 postgres.js only takes a socket from its `host` *option*, never from the URL — `path` is derived as
 `host.indexOf('/') > -1 && host + '/.s.PGSQL.' + port`, and the options object outranks the URL. So
 the URL carries `localhost` purely to stay parseable, `?host=` carries the socket, and
-`socketOptions()` in `infrastructure/db/connection.ts` moves it across. Locally there is no `?host=`,
+`parseConnection()` in `infrastructure/db/connection.ts` moves it across — and strips
+`?host=` from the url, because postgres.js forwards unrecognised query parameters to the server as
+startup parameters and `host` is not a Postgres setting. Locally there is no `?host=`,
 `localhost` is the real host, and it is ordinary TCP — one variable, both environments, no branching.
 
 Every entry point that opens a connection goes through that helper. The server, the migration job
@@ -377,13 +379,11 @@ Then log in as the admin, create the operator accounts, and confirm an operator 
 
 These were identified in review and are **not** fixed in this pass:
 
-- **`resolveWeights` picks the newest conversion factor by `effectiveDate` including future-dated
-  rows.** Do not insert a future-dated `unit_conversion` row until this is fixed.
-- **Error responses fall through to `JSON.stringify(error)` with a 500**, which can leak table and
-  column names to a caller.
-- **A crash between an inventory movement and its status row can double-book stock on retry.**
-  The two are separate transactions; there is no unique constraint on
-  `inventory_movements(reference_type, reference_id)` to catch a repeat.
+- **Thirteen domain routers end `toHttpError` with `JSON.stringify(error)` and a 500**, which can
+  put a `RepositoryError`'s underlying query text — table and column names — in the response. Every
+  such route is behind `authMiddleware`, so this is disclosure to a signed-in operator rather than
+  to the internet. `handleExit` in `infrastructure/http/errors.ts` is *not* affected: it maps every
+  error to a fixed generic message, and is the shape the domain routers should adopt.
 - **No rate limiting on `POST /auth/login`.** Consider Cloud Armor on the load balancer.
 - **The SPA bundle is one 700 KB chunk.** Fine over a LAN, worth code-splitting before any
   branch uses it over mobile data.
