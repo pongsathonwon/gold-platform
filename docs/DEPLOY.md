@@ -293,6 +293,11 @@ gcloud builds repositories create gold-platform \
   --connection=gold-github --region=asia-southeast1
 ```
 
+Doing it from the console instead — Cloud Build → Triggers → Create trigger → *Link repository* — is the
+same thing and needs no CLI. It names the repository resource `pongsathonwon-gold-platform`, which is
+what this deployment has; the CLI form above would have named it `gold-platform`. Either works, but
+the trigger path below has to match whichever one exists.
+
 The connection is **regional and must match the triggers' region**, and creating it needs
 `roles/secretmanager.admin` on *you* — the App's token is stored as a secret.
 
@@ -304,7 +309,10 @@ committed in `apps/web/.firebaserc`, and both URLs are public addresses. Note th
 is named **`gold-platform`**, not the `gold-db` used in §1's generic setup.
 
 ```bash
-REPO=projects/project-6ae60f7c-b11d-492a-bf9/locations/asia-southeast1/connections/gold-github/repositories/gold-platform
+# The console owner-prefixes the repository resource when it links one. Read the real name back
+# with `gcloud builds repositories list --connection=gold-github --region=asia-southeast1`
+# rather than assuming it matches the GitHub repo name.
+REPO=projects/project-6ae60f7c-b11d-492a-bf9/locations/asia-southeast1/connections/gold-github/repositories/pongsathonwon-gold-platform
 
 gcloud builds triggers create github --name=gold-deploy-main \
   --region=asia-southeast1 --repository=$REPO \
