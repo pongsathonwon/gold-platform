@@ -1,0 +1,33 @@
+# The pull-request gate: type-check and test, and nothing else.
+#
+# `cloudbuild.yaml` cannot do double duty here — it builds, migrates and deploys, and a build
+# triggered by a proposed change must not do any of those. So this file is the same `verify` step
+# with the rest removed, and the two triggers are:
+#
+#   gold-verify-pr    pull request → main    this file
+#   gold-deploy-main  push to main           cloudbuild.yaml
+#
+# Keep the step below identical to `verify` in cloudbuild.yaml. If they drift, a green PR stops
+# meaning the release build will get past its first step.
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+steps:
+  - id: verify
+    name: node:22
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        # Without this, only the *last* command decides the step's exit code — a failing
+        # type-check followed by passing tests reports success. See the same note in
+        # cloudbuild.yaml, where it shipped a revision before it was caught.
+        set -euo pipefail
+        corepack enable
+        pnpm install --frozen-lockfile
+        pnpm type-check
+        pnpm test
+
+timeout: 900s

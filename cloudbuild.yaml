@@ -1,15 +1,19 @@
 # Cloud Build → Artifact Registry → Cloud Run.
 #
+# Run by the `gold-deploy-main` trigger on every push to main. A proposed change runs
+# cloudbuild.verify.yaml instead, which is this file's verify step and nothing else.
+#
 # Two deployed units and one job:
 #   gold-api        Cloud Run service, the Hono API
 #   gold-migrate    Cloud Run job, run once per release BEFORE traffic moves
-#   (the SPA)       static hosting — see docs/DEPLOY.md; not built here
+#   (the SPA)       static apps/web build, pushed to Firebase Hosting after the API is live
 #
 # Substitutions are set on the trigger:
 #   _REGION                asia-southeast1
 #   _REPO                  Artifact Registry repository name
 #   _SQL_INSTANCE          project:region:instance
 #   _CORS_ORIGIN           https://the-spa-domain
+#   _API_URL               https://the-cloud-run-url  (baked into the SPA bundle)
 #
 # Secrets (DATABASE_URL, JWT_SECRET) are never substitutions — they are bound to the service from
 # Secret Manager at deploy time, so they exist only in the runtime environment and never in a
@@ -20,6 +24,7 @@ substitutions:
   _REPO: gold-platform
   _SQL_INSTANCE: ''
   _CORS_ORIGIN: ''
+  _API_URL: ''
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -137,4 +142,42 @@ steps:
       # rather than serving 500s.
       - --timeout=60s
 
-timeout: 1200s
+  # The SPA, after the API and never before it. `_API_URL` is inlined into the bundle by vite, so
+  # this step ships a frontend pinned to a specific API — publishing it while the revision it talks
+  # to is still the old one is the one ordering that can serve calls the backend does not have yet.
+  #
+  # node_modules is already here: Cloud Build steps share /workspace, and `verify` installed it.
+  # Nothing else survives between steps, so the pnpm store and any npx download do not.
+  #
+  # The `...` in the filter is pnpm for "and its workspace dependencies", built in topological order.
+  # @gold-platform/types resolves to dist/, so the web tsc cannot start until it is compiled. Today
+  # `verify` happens to leave it there — `type-check` dependsOn `^build` — but that is a side effect
+  # of another task's configuration, not something this step should rest on.
+  #
+  # An empty `_API_URL` fails the build rather than producing a bundle: vite.config.ts refuses a
+  # production build without it, because the failure it prevents — a bundle silently pointing at
+  # localhost — is invisible until someone tries to log in. It has happened once.
+  #
+  # firebase-tools is fetched per build rather than pinned in the lockfile. Cloud Build keeps no npm
+  # cache between builds, so adding it as a dependency would download it every time anyway, for the
+  # cost of a heavier install everywhere else. Pin the version here if a CLI release ever breaks a
+  # deploy — the CLI is the only unpinned thing in this file.
+  #
+  # It authenticates as the build service account through the metadata server; there is no token to
+  # store. The project comes from apps/web/.firebaserc and the site id from apps/web/firebase.json,
+  # which is why this runs in that directory and passes neither.
+  - id: web
+    name: node:22
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        corepack enable
+        VITE_API_URL=${_API_URL} pnpm --filter '@gold-platform/web...' build
+        cd apps/web
+        npx --yes firebase-tools deploy --only hosting --non-interactive
+
+# Five steps now, of which verify and the two builds dominate. The old 1200s left no headroom once
+# the SPA build joined.
+timeout: 1800s

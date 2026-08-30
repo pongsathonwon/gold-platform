@@ -58,7 +58,8 @@ that one flag is.
 ```bash
 gcloud config set project YOUR_PROJECT_ID
 gcloud services enable run.googleapis.com sqladmin.googleapis.com \
-  artifactregistry.googleapis.com cloudbuild.googleapis.com secretmanager.googleapis.com
+  artifactregistry.googleapis.com cloudbuild.googleapis.com secretmanager.googleapis.com \
+  firebasehosting.googleapis.com
 ```
 
 ### Artifact Registry
@@ -221,7 +222,8 @@ does, and each missing role fails at a different stage with an error that does n
 PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT_ID --format='value(projectNumber)')
 SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-for role in cloudsql.client artifactregistry.writer run.admin iam.serviceAccountUser logging.logWriter; do
+for role in cloudsql.client artifactregistry.writer run.admin iam.serviceAccountUser \
+            logging.logWriter firebasehosting.admin serviceusage.serviceUsageConsumer; do
   gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
     --member="serviceAccount:${SA}" --role="roles/${role}" --condition=None
 done
@@ -234,6 +236,8 @@ done
 | `run.admin` | `run jobs deploy` and `run deploy` are denied |
 | `iam.serviceAccountUser` | the build cannot *act as* the runtime SA, so deploy is denied |
 | `logging.logWriter` | the build fails immediately — `cloudbuild.yaml` sets `CLOUD_LOGGING_ONLY`, and a build that cannot write logs cannot start |
+| `firebasehosting.admin` | the `web` step builds the SPA and then cannot publish it |
+| `serviceusage.serviceUsageConsumer` | the Firebase CLI resolves the project before it deploys, and that call is denied first |
 
 That last one is the confusing one: the build fails before running a single step, and the message is
 about logging configuration rather than permissions.
@@ -261,27 +265,94 @@ needs to do with storage.
 
 ## 2. Deploy
 
-The Cloud Build trigger at [`cloudbuild.yaml`](../cloudbuild.yaml) runs type-check and tests,
-builds the image, runs migrations **to completion**, then deploys.
+**Merge into `main`.** That is the release.
+
+Work happens on `dev`. Two triggers watch the GitHub repository, and the split matters: the config
+that deploys must never run on a change somebody is only proposing.
+
+| Trigger | Fires on | Config | Does |
+|---|---|---|---|
+| `gold-verify-pr` | pull request → `main` | [`cloudbuild.verify.yaml`](../cloudbuild.verify.yaml) | type-check, tests |
+| `gold-deploy-main` | push to `main` | [`cloudbuild.yaml`](../cloudbuild.yaml) | verify, build, migrate, deploy API, publish SPA |
+
+Migrations run as a Cloud Run job, to completion, before traffic moves — never on server startup,
+where starting N instances would race them through the same DDL. The SPA is published last, after
+the API revision it was built against is live.
+
+### Connecting the repository — one time
+
+A 2nd-generation connection, which is an installation of the Cloud Build GitHub App. The
+authorisation is a browser flow either way, so the console (Cloud Build → Repositories → *Connect
+repository*, region `asia-southeast1`) is the easier path. On the CLI:
+
+```bash
+gcloud builds connections create github gold-github --region=asia-southeast1
+# prints an authorisation URL — open it and install the App on pongsathonwon/gold-platform
+gcloud builds repositories create gold-platform \
+  --remote-uri=https://github.com/pongsathonwon/gold-platform.git \
+  --connection=gold-github --region=asia-southeast1
+```
+
+The connection is **regional and must match the triggers' region**, and creating it needs
+`roles/secretmanager.admin` on *you* — the App's token is stored as a secret.
+
+### The triggers — one time
+
+Written with this deployment's real values rather than placeholders, because these are exactly the
+three that are painful to reconstruct — and none of them is a secret: the project id is already
+committed in `apps/web/.firebaserc`, and both URLs are public addresses. Note the Cloud SQL instance
+is named **`gold-platform`**, not the `gold-db` used in §1's generic setup.
+
+```bash
+REPO=projects/project-6ae60f7c-b11d-492a-bf9/locations/asia-southeast1/connections/gold-github/repositories/gold-platform
+
+gcloud builds triggers create github --name=gold-deploy-main \
+  --region=asia-southeast1 --repository=$REPO \
+  --branch-pattern='^main$' --build-config=cloudbuild.yaml \
+  --substitutions=_SQL_INSTANCE=project-6ae60f7c-b11d-492a-bf9:asia-southeast1:gold-platform,_CORS_ORIGIN=https://goldoffice.web.app,_API_URL=https://gold-api-onf535drkq-as.a.run.app
+
+gcloud builds triggers create github --name=gold-verify-pr \
+  --region=asia-southeast1 --repository=$REPO \
+  --pull-request-pattern='^main$' --build-config=cloudbuild.verify.yaml
+```
+
+`_CORS_ORIGIN` and `_API_URL` above are what the running service and the hosting site actually use
+today, read back off the deployment — so the first triggered build changes neither.
+
+The substitutions live on the trigger from here on; nobody types them again, and the deploy stops
+depending on whoever ran it remembering all three. If gcloud asks for `--service-account`, give it
+`projects/project-6ae60f7c-b11d-492a-bf9/serviceAccounts/442257468432-compute@developer.gserviceaccount.com`
+— the same account the role grants above went to.
+
+**`_API_URL` is the SPA's copy of the API address and `_CORS_ORIGIN` is the API's copy of the SPA
+address.** Nothing checks that either is right. A wrong `_CORS_ORIGIN` is loud — the browser blocks
+every call. A wrong `_API_URL` is silent until someone tries to log in.
+
+### Deploying by hand
+
+Still works, and is the way out if the trigger is broken or the repository connection lapses:
 
 ```bash
 gcloud builds submit --config cloudbuild.yaml \
-  --substitutions=_SQL_INSTANCE=PROJECT:asia-southeast1:gold-db,_CORS_ORIGIN=https://your-spa-domain,SHORT_SHA=$(git rev-parse --short HEAD)
+  --substitutions=_SQL_INSTANCE=PROJECT:asia-southeast1:gold-db,_CORS_ORIGIN=https://your-spa-domain,_API_URL=https://YOUR-API,SHORT_SHA=$(git rev-parse --short HEAD)
 ```
 
-**`SHORT_SHA` has to be passed by hand here.** It is a built-in substitution that Cloud Build fills
-in only for builds started by a *trigger*, from a commit it knows about. A manual `builds submit`
-has no commit, so it resolves to empty — and since `cloudbuild.yaml` tags images
-`gold-api:${SHORT_SHA}`, the tag silently degrades rather than erroring usefully. From a trigger,
-drop it and let Cloud Build supply the real value.
+**`SHORT_SHA` has to be passed by hand here.** It is a built-in substitution Cloud Build fills in
+only for builds started by a *trigger*, from a commit it knows about. A manual `builds submit` has
+no commit, so it resolves to empty — and since `cloudbuild.yaml` tags images `gold-api:${SHORT_SHA}`,
+the tag silently degrades rather than erroring usefully. A triggered build supplies the real value.
 
-Also note `.gcloudignore` at the repo root. Without it gcloud derives one from `.gitignore`, which
-says nothing about `.claude/` — and the agent worktrees under it are full copies of the repository.
-The upload goes from 1.7 MB to well over a gigabyte, and each of those copies carries its own
-`cloudbuild.yaml` and `drizzle/`.
+That manual path also deploys **your working tree**, not a commit — including changes you have not
+pushed. The trigger builds what is on `main`, which is the whole point of moving to it.
 
-Migrations run as a job before traffic moves, never on server startup — starting N instances
-would race them through the same DDL.
+Two things that apply only to `builds submit`, because a triggered build clones from GitHub instead
+of uploading anything:
+
+- `.gcloudignore` at the repo root decides what is uploaded. Without it gcloud derives one from
+  `.gitignore`, which says nothing about `.claude/` — and the agent worktrees under it are full
+  copies of the repository. The upload goes from 1.7 MB to well over a gigabyte, and each of those
+  copies carries its own `cloudbuild.yaml` and `drizzle/`.
+- The build service account needs object read on the staging bucket, granted in §1.
 
 ### Do not set `TZ` on the service
 
@@ -347,19 +418,27 @@ UPDATE users SET role = 'ADMIN' WHERE username = 'the-admin-username';
 
 ## 4. The SPA
 
-`VITE_API_URL` is baked in at build time, so the API must be deployed first.
+**Released by the same build as the API** — the `web` step in `cloudbuild.yaml`, which runs after
+the API revision is serving. There is no separate frontend deploy to remember, and no window where
+the two halves are from different commits beyond the minute the build takes.
+
+`VITE_API_URL` comes from the `_API_URL` substitution and is inlined into the bundle, so the SPA is
+pinned to one API address at build time. `apps/web/.firebaserc` pins the project and
+`apps/web/firebase.json` names the site, so the step passes neither; `firebase.json` also rewrites
+all paths to `index.html`, which a client-side router needs — without it a refresh on
+`/wholesale-buy/123` returns 404.
+
+By hand, if the pipeline is unavailable:
 
 ```bash
 VITE_API_URL=https://gold-api-xxxx-as.a.run.app pnpm --filter @gold-platform/web build
-firebase deploy --only hosting
+cd apps/web && firebase deploy --only hosting
 ```
 
-`apps/web/firebase.json` rewrites all paths to `index.html`, which a client-side router needs —
-without it a refresh on `/wholesale-buy/123` returns 404.
-
-Set `_CORS_ORIGIN` to the hosting domain and redeploy the API. The two references are circular on
-a first deploy: ship the API with a placeholder, build the SPA against its URL, then redeploy the
-API with the real origin.
+**On a first deploy the two references are circular**, and the trigger cannot resolve that for you:
+the API needs `_CORS_ORIGIN` to be the hosting domain, and the SPA needs `_API_URL` to be the Cloud
+Run URL. Ship the API once with a placeholder origin, read the two real URLs off the created
+resources, put both on the trigger, and push again. After that neither changes.
 
 ---
 
