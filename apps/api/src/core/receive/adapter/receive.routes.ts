@@ -6,14 +6,16 @@ import { authMiddleware } from "../../../infrastructure/http/middleware/auth.mid
 import { createTransaction, advanceStatus, getTransaction, listTransactions } from "../application/receive.usecase.js";
 import { TransactionNotFoundError, InvalidTransitionError, GracePeriodExpiredError } from "../port/receive.port.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { unhandledError } from "../../../infrastructure/http/errors.js";
 
-function toHttpError(error: unknown): [string, number] {
+function toHttpError(error: unknown): [string, ContentfulStatusCode] {
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
     if (error instanceof GracePeriodExpiredError) return [`grace period has expired, cancel is no longer allowed`, 422]
     if (error instanceof PurityNotFoundError) return [`purity ${error.purityId} not found`, 422]
     if (error instanceof NoConversionRateError) return [`no conversion rate available`, 503]
-    return [JSON.stringify(error), 500]
+    return unhandledError(error, "receive")
 }
 
 const advanceStatusValues = ['CONFIRMED', 'CANCELLED'] as const
@@ -55,22 +57,22 @@ export const receiveRoutes = new Hono()
         const req = c.req.valid("json")
         const result = await runEffect(createTransaction(req))
         if (result.result === "success") return c.json({ data: result.data }, 201)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .get("/", zValidator("query", listQuerySchema), async (c) => {
         const req = c.req.valid("query")
         const result = await runEffect(listTransactions(req))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .get("/:id", async (c) => {
         const result = await runEffect(getTransaction(c.req.param("id")))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .post("/:id/status", zValidator("json", advanceStatusSchema), async (c) => {
         const req = c.req.valid("json")
         const result = await runEffect(advanceStatus({ transactionId: c.req.param("id"), ...req }))
         if (result.result === "success") return c.json({}, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })

@@ -1,4 +1,5 @@
 import { Data, Effect } from "effect";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { and, eq } from "drizzle-orm";
 import { BrandSplit, NA_BRAND } from "@gold-platform/types";
 import { DrizzleClient, RepositoryError } from "./db/client.js";
@@ -49,7 +50,7 @@ export class BrandLockMisconfiguredError extends Data.TaggedError("BrandLockMisc
  * describe the same rejection differently. Returns null for anything it does not own, letting the
  * caller's own `toHttpError` chain continue.
  */
-export function brandSplitHttpError(error: unknown): [string, number] | null {
+export function brandSplitHttpError(error: unknown): [string, ContentfulStatusCode] | null {
     if (error instanceof BrandNotSuppliedError) {
         return [`supplier ${error.supplierId} does not deal in brand ${error.brandId}`, 422]
     }

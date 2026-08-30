@@ -22,8 +22,10 @@ import { brandSplitHttpError } from "../../../infrastructure/brand-split.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
 import { InsufficientStockError } from "../../inventory/port/inventories.port.js";
 import type { WholeBuyStatus } from "../../../infrastructure/db/schema/wholesale-buy.schema.js";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { unhandledError } from "../../../infrastructure/http/errors.js";
 
-function toHttpError(error: unknown): [string, number] {
+function toHttpError(error: unknown): [string, ContentfulStatusCode] {
     // the brand-split rejections are shared with wholesale-sell — one wording for both domains
     const brandSplitError = brandSplitHttpError(error)
     if (brandSplitError) return brandSplitError
@@ -45,7 +47,7 @@ function toHttpError(error: unknown): [string, number] {
     }
     if (error instanceof PurityNotFoundError) return [`purity ${error.purityId} not found`, 422]
     if (error instanceof NoConversionRateError) return [`no conversion rate available`, 503]
-    return [JSON.stringify(error), 500]
+    return unhandledError(error, "wholesale-buy")
 }
 
 const listQuerySchema = z.object({
@@ -65,13 +67,13 @@ export const wholesaleBuyRoutes = new Hono()
         const req = c.req.valid("json")
         const result = await runEffect(createTransaction({ ...req, recordedBy: currentUsername(c) }))
         if (result.result === "success") return c.json({ data: result.data }, 201)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .get("/", zValidator("query", listQuerySchema), async (c) => {
         const req = c.req.valid("query")
         const result = await runEffect(listTransactions({ ...req, currentStatus: req.currentStatus as WholeBuyStatus | undefined }))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     // Bulk confirm — everything still CREATED. Declared before /:id so the path is never read as
     // a transaction id.
@@ -85,12 +87,12 @@ export const wholesaleBuyRoutes = new Hono()
         const manual = c.req.valid("query").manual === "true"
         const result = await runEffect(confirmAllCreated(manual ? currentUsername(c) : undefined))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .get("/:id", async (c) => {
         const result = await runEffect(getTransaction(c.req.param("id")))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .patch("/:id", zValidator("json", updateWholeBuySchema), async (c) => {
         const req = c.req.valid("json")
@@ -98,7 +100,7 @@ export const wholesaleBuyRoutes = new Hono()
             transactionId: c.req.param("id"), ...req, updatedBy: currentUsername(c),
         }))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .post("/:id/status", zValidator("json", advanceWholeBuyStatusSchema), async (c) => {
         const req = c.req.valid("json")
@@ -110,7 +112,7 @@ export const wholesaleBuyRoutes = new Hono()
             updatedBy: currentUsername(c),
         }))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     // receive + stock as one operator action; both status entries are still logged. No weight —
     // a delivery that did not match its document was refused at the door and never gets here.
@@ -120,5 +122,5 @@ export const wholesaleBuyRoutes = new Hono()
             transactionId: c.req.param("id"), ...req, updatedBy: currentUsername(c),
         }))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })

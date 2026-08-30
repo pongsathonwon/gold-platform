@@ -12,6 +12,8 @@ import { PurityNotFoundError, NoConversionRateError } from "../../../infrastruct
 import {
     getInventoryVolume, stockGain, stockLoss, productSwitch, getInventoryMovements,
 } from "../application/inventory.usecase.js";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { unhandledError } from "../../../infrastructure/http/errors.js";
 
 const movementsQuerySchema = z.object({
     purityId: z.string().optional(),
@@ -26,7 +28,7 @@ const movementsQuerySchema = z.object({
     to: businessDaySchema.optional(),
 })
 
-function toHttpError(error: unknown): [string, number] {
+function toHttpError(error: unknown): [string, ContentfulStatusCode] {
     if (error instanceof ProtectedOriginError) {
         return ["ปรับสต๊อกด้วยตนเองกับทองในไม่ได้ — ทองในสร้างจากการหลอมและตัดออกด้วยการแปรสภาพเท่านั้น", 422]
     }
@@ -45,7 +47,7 @@ function toHttpError(error: unknown): [string, number] {
     if (error instanceof NoConversionRateError) {
         return [`No conversion rate available`, 503]
     }
-    return [JSON.stringify(error), 500]
+    return unhandledError(error, "inventory")
 }
 
 /**
@@ -64,29 +66,29 @@ export const inventoriesRoutes = new Hono()
     .get("/volume", async (c) => {
         const result = await runEffect(getInventoryVolume())
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .post("/gain", adjustments, zValidator("json", stockGainSchema), async (c) => {
         const req = c.req.valid("json")
         const result = await runEffect(stockGain(req, currentUsername(c)))
         if (result.result === "success") return c.json({ data: result.data }, 201)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .post("/loss", adjustments, zValidator("json", stockLossSchema), async (c) => {
         const req = c.req.valid("json")
         const result = await runEffect(stockLoss(req, currentUsername(c)))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .get("/movements", zValidator("query", movementsQuerySchema), async (c) => {
         const req = c.req.valid("query")
         const result = await runEffect(getInventoryMovements(req))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .post("/product-switch", adjustments, zValidator("json", productSwitchSchema), async (c) => {
         const req = c.req.valid("json")
         const result = await runEffect(productSwitch(req, currentUsername(c)))
         if (result.result === "success") return c.json({ data: result.data }, 201)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })

@@ -11,8 +11,10 @@ import { InvalidTransitionError, NoteRequiredError, TransactionNotFoundError } f
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
 import { InvalidQuantityError, ProductTypePurityNotFoundError, quantityErrorMessage } from "../../../infrastructure/quantity.js";
 import { RetailBuyStatus } from "../../../infrastructure/db/schema/retail-buy.schema.js";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { unhandledError } from "../../../infrastructure/http/errors.js";
 
-function toHttpError(error: unknown): [string, number] {
+function toHttpError(error: unknown): [string, ContentfulStatusCode] {
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
     if (error instanceof NoteRequiredError) return [`a note is required when moving to ${error.status}`, 422]
@@ -20,7 +22,7 @@ function toHttpError(error: unknown): [string, number] {
     if (error instanceof InvalidQuantityError) return [quantityErrorMessage(error), 422]
     if (error instanceof PurityNotFoundError) return [`purity ${error.purityId} not found`, 422]
     if (error instanceof NoConversionRateError) return [`no conversion rate available`, 503]
-    return [JSON.stringify(error), 500]
+    return unhandledError(error, "retail-buy")
 }
 
 const listQuerySchema = z.object({
@@ -48,18 +50,18 @@ export const retailBuyRoutes = new Hono()
         const req = c.req.valid("json")
         const result = await runEffect(createTransaction({ ...req, recordedBy: currentUsername(c) }))
         if (result.result === "success") return c.json({ data: result.data }, 201)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .get("/", zValidator("query", listQuerySchema), async (c) => {
         const req = c.req.valid("query")
         const result = await runEffect(listTransactions({ ...req, currentStatus: req.currentStatus as RetailBuyStatus | undefined }))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .get("/:id", async (c) => {
         const result = await runEffect(getTransaction(c.req.param("id")))
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
     .post("/:id/status", zValidator("json", advanceRetailBuyStatusSchema), async (c) => {
         const req = c.req.valid("json")
@@ -71,5 +73,5 @@ export const retailBuyRoutes = new Hono()
         }))
         // returns the status actually reached, so the UI can say so rather than assume
         if (result.result === "success") return c.json({ data: result.data }, 200)
-        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status as any)
+        const [msg, status] = toHttpError(result.error); return c.json({ error: msg }, status)
     })
