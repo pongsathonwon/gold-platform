@@ -375,6 +375,26 @@ curl -i -X POST https://YOUR-API/auth/register     # 404 — self-registration i
 Then log in as the admin, create the operator accounts, and confirm an operator gets 403 on
 `POST /inventory/loss`.
 
+### Rate limiting on login
+
+`POST /auth/login` counts failed attempts in two buckets, both fifteen-minute windows: **8 per
+username** and **40 per address**. Only failures count and a success clears the username's bucket,
+so ordinary use — including a run of typos — never approaches either.
+
+The username bucket is the one that protects an account, because a caller cannot lie about which
+account they are guessing at. The address bucket catches spraying across many usernames, and is
+deliberately loose: a branch behind one NAT shares an address, and locking out a whole shop because
+two people mistyped is a worse outage than the attack.
+
+Counted in process, not in the database. At `--max-instances=2` the real budget is therefore up to
+twice the configured one — a factor of two against an attacker who would otherwise have no ceiling,
+bought without a database write on every login. If a global limit is ever wanted, that is Cloud
+Armor on a load balancer (~$18/month), not a rewrite here.
+
+An infrastructure failure does **not** count against anyone: only `InvalidCredentialsError` does.
+Counting every non-success would let an unreachable database burn through every user's allowance,
+leaving the shop locked out for fifteen minutes after the database came back.
+
 ### Known gaps at this deployment
 
 These were identified in review and are **not** fixed in this pass:
@@ -384,7 +404,6 @@ These were identified in review and are **not** fixed in this pass:
   such route is behind `authMiddleware`, so this is disclosure to a signed-in operator rather than
   to the internet. `handleExit` in `infrastructure/http/errors.ts` is *not* affected: it maps every
   error to a fixed generic message, and is the shape the domain routers should adopt.
-- **No rate limiting on `POST /auth/login`.** Consider Cloud Armor on the load balancer.
 - **The SPA bundle is one 700 KB chunk.** Fine over a LAN, worth code-splitting before any
   branch uses it over mobile data.
 - **`POST /wholesale-*/:id/status` and the retail/receive routes have no role restriction.** They
