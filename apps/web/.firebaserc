@@ -1,0 +1,6 @@
+{
+  "//": "Pinned because the Firebase CLI's 'current' project is machine-global state, not repo state. This account can see two projects, and the one it defaults to (gold-platform-e70a3) is NOT the one holding the goldoffice site -- a deploy from a fresh shell fails with 'could not find site goldoffice', or worse, would target the wrong project if a site of that name existed there. The site id itself is in firebase.json.",
+  "projects": {
+    "default": "project-6ae60f7c-b11d-492a-bf9"
+  }
+}
