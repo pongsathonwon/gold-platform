@@ -1,4 +1,10 @@
 import { z } from "zod";
+import { roundMoney, roundTo, roundWeight, WEIGHT_SCALE } from "./decimal.js";
+
+export {
+  FACTOR_SCALE, MONEY_SCALE, WEIGHT_SCALE,
+  roundMoney, roundTo, roundWeight,
+} from "./decimal.js";
 // mock
 // User schemas — shared between API validation and web form validation
 export const createUserSchema = z.object({
@@ -325,7 +331,7 @@ export type BrandSplit = z.infer<typeof brandSplitSchema>
 export const brandSplitRemainder = (total: number, entries: BrandSplit) => {
   const named = entries.reduce((sum, e) => sum + (Number.isFinite(e.weight) ? e.weight : 0), 0)
   // strip binary floating-point residue so 12 - 8 - 4 reads as 0, not 1e-15
-  return Math.round((total - named) * 1e6) / 1e6
+  return roundWeight(total - named)
 }
 
 // Why a shipment went back to the party that sent it. A column rather than free text in the note,
@@ -450,7 +456,7 @@ export const WHOLE_BUY_EXCLUDED_FROM_TOTALS: readonly WholeBuyStatusValue[] =
 export const PURITY_RATIO_999_TO_965 = 99.9 / 96.5
 
 export const derivePricePerGb999 = (pricePerGb965: number) =>
-  Math.round(pricePerGb965 * PURITY_RATIO_999_TO_965 * 100) / 100
+  roundMoney(pricePerGb965 * PURITY_RATIO_999_TO_965)
 
 // No brand here. What stamp the gold carries is not known when the order is placed — it is what
 // physically turns up, and it can be a mix. Brand is recorded on the transition that moves stock
