@@ -21,7 +21,7 @@ import { isActive } from "../domain/user.entity.js";
  * It is only evaluated when the target is an active admin, so deactivating an operator never pays
  * for the count.
  */
-export const makeDeactivateUserUseCase = (id: number, actorId: number) =>
+export const makeDeactivateUserUseCase = (id: string, actorId: string) =>
   Effect.gen(function* () {
     const repo = yield* UserRepository;
 
@@ -42,13 +42,13 @@ export const makeDeactivateUserUseCase = (id: number, actorId: number) =>
   });
 
 /** Lets a deactivated account sign in again. Restoring is always safe — it only adds access. */
-export const makeRestoreUserUseCase = (id: number) =>
+export const makeRestoreUserUseCase = (id: string) =>
   Effect.gen(function* () {
     const repo = yield* UserRepository;
     return yield* repo.restoreById(id);
   });
 
-export const makeFindUserByIdCase = (id: number) =>
+export const makeFindUserByIdCase = (id: string) =>
   Effect.gen(function* () {
     const repo = yield* UserRepository;
     const result = yield* repo.findById(id);
@@ -79,7 +79,7 @@ export class UserManagementUseCase {
     )
   }
 
-  findUserById(id: number) {
+  findUserById(id: string) {
     return this.runtime.runPromiseExit(
       makeFindUserByIdCase(id)
         .pipe(
@@ -88,7 +88,7 @@ export class UserManagementUseCase {
     )
   }
 
-  deactivateUserById(id: number, actorId: number) {
+  deactivateUserById(id: string, actorId: string) {
     return this.runtime.runPromiseExit(
       makeDeactivateUserUseCase(id, actorId)
         .pipe(
@@ -97,7 +97,7 @@ export class UserManagementUseCase {
     )
   }
 
-  restoreUserById(id: number) {
+  restoreUserById(id: string) {
     return this.runtime.runPromiseExit(
       makeRestoreUserUseCase(id)
         .pipe(

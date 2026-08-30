@@ -3,7 +3,7 @@ import type { RegisterInput, UserRoleValue } from "@gold-platform/types";
 import { assertOk, client } from "../api/client";
 
 export interface AdminUser {
-  id: number;
+  id: string;
   name: string;
   username: string;
   role: UserRoleValue;
@@ -62,8 +62,8 @@ export function useCreateUser() {
 export function useDeactivateUser() {
   const invalidate = useInvalidateUsers();
   return useMutation({
-    mutationFn: async (id: number) => {
-      const res = await client.users[":id"].$delete({ param: { id: String(id) } });
+    mutationFn: async (id: string) => {
+      const res = await client.users[":id"].$delete({ param: { id } });
       await assertOk(res, "ปิดใช้งานผู้ใช้ไม่สำเร็จ");
       return res.json();
     },
@@ -74,8 +74,8 @@ export function useDeactivateUser() {
 export function useRestoreUser() {
   const invalidate = useInvalidateUsers();
   return useMutation({
-    mutationFn: async (id: number) => {
-      const res = await client.users[":id"].restore.$post({ param: { id: String(id) } });
+    mutationFn: async (id: string) => {
+      const res = await client.users[":id"].restore.$post({ param: { id } });
       await assertOk(res, "เปิดใช้งานผู้ใช้ไม่สำเร็จ");
       return res.json();
     },

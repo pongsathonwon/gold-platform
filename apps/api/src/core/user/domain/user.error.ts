@@ -1,6 +1,6 @@
 import { Data } from "effect";
 
-export class UserNotFoundError extends Data.TaggedError("UserNotFoundError")<{ id: number }> {}
+export class UserNotFoundError extends Data.TaggedError("UserNotFoundError")<{ id: string }> {}
 
 /**
  * Refuses to deactivate the account making the request.
@@ -10,7 +10,7 @@ export class UserNotFoundError extends Data.TaggedError("UserNotFoundError")<{ i
  * deactivating yourself is almost always a misclick on the wrong row.
  */
 export class CannotDeactivateSelfError extends Data.TaggedError("CannotDeactivateSelfError")<{
-    id: number;
+    id: string;
 }> {}
 
 /**
@@ -21,4 +21,4 @@ export class CannotDeactivateSelfError extends Data.TaggedError("CannotDeactivat
  * check is on the *active* count, which is why it belongs behind the same transaction-shaped read
  * as the deactivation itself rather than in the UI.
  */
-export class LastAdminError extends Data.TaggedError("LastAdminError")<{ id: number }> {}
+export class LastAdminError extends Data.TaggedError("LastAdminError")<{ id: string }> {}

@@ -17,13 +17,39 @@ if (!secret || secret.length < 32) {
 }
 
 export interface AuthClaims {
-  sub: number;
+  sub: string;
   username: string;
   role: UserRole;
 }
 
+const verifySignature = jwt({ secret, alg: "HS256" });
+
 export const authMiddleware = createMiddleware(async (c, next) => {
-  return jwt({ secret, alg: "HS256" })(c, next);
+  // Hono's jwt middleware verifies the signature and populates `jwtPayload`, throwing an
+  // HTTPException if the token is bad. Handing it a no-op `next` lets it return control here once
+  // verification passes, so the claim check below runs before the route does.
+  await verifySignature(c, async () => {});
+
+  {
+    /**
+     * A token minted before `users.id` became a uuid carries a *number* in `sub`.
+     *
+     * Its signature is still valid, so nothing else would reject it — and the damage is quiet
+     * rather than loud. `deactivateUserById` compares the target id against this claim to refuse
+     * self-deactivation; a number never equals a uuid string, so the guard would silently stop
+     * guarding and an admin could switch off their own account.
+     *
+     * Refused rather than coerced, on the same reasoning as the missing `role` claim below: a
+     * claim that cannot be read must never be waved through, and the holder logs in again. Every
+     * token expires within the hour anyway, so this is a one-off at deploy.
+     */
+    const sub = (c.get("jwtPayload") as { sub?: unknown } | undefined)?.sub;
+    if (typeof sub !== "string") {
+      return c.json({ error: "กรุณาเข้าสู่ระบบใหม่", code: "STALE_TOKEN" }, 401);
+    }
+  }
+
+  await next();
 });
 
 /** The verified claims of the current request. Only valid downstream of `authMiddleware`. */

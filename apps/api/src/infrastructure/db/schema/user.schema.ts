@@ -1,4 +1,4 @@
-import { pgEnum, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 /**
  * What a login is allowed to do.
@@ -16,7 +16,18 @@ import { pgEnum, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
 export const userRoleEnum = pgEnum('user_role', ['ADMIN', 'OPERATOR'])
 
 export const users = pgTable("users", {
-  id: serial("id").primaryKey(),
+  /**
+   * A uuid, like every other table's key. This was `serial` — the last integer key in the schema.
+   *
+   * Nothing referenced it: `recordedBy`, `movedBy`, `auditedBy` and `createdBy` all store a
+   * *username string* (see `deletedAt` below), so there were no foreign keys to rewrite and the
+   * change is confined to code. Doing it before anything did point at it is the whole reason to do
+   * it now — a key type is cheap to change while it is unreferenced and expensive afterwards.
+   *
+   * A sequential id also says how many accounts exist and in what order they were issued, to
+   * anyone who can see one. That matters little on an admin-only surface and is free to remove.
+   */
+  id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),

@@ -30,7 +30,7 @@ export const usersRouter = new Hono()
     const result = await userManager.findAllUser();
     return handleExit(c, result, (users) => c.json({ data: users.map(toPublicUser) }, 200));
   })
-  .get("/:id", zValidator("param", z.object({ id: z.coerce.number() })), async (c) => {
+  .get("/:id", zValidator("param", z.object({ id: z.string().uuid() })), async (c) => {
     const result = await userManager.findUserById(c.req.valid("param").id);
     return handleExit(c, result, (user) => c.json({ data: toPublicUser(user) }, 200), userDomainErrors);
   })
@@ -41,12 +41,12 @@ export const usersRouter = new Hono()
    * The actor comes from the verified token, never from the request, so the self-deactivation guard
    * cannot be talked out of by the caller it applies to.
    */
-  .delete("/:id", zValidator("param", z.object({ id: z.coerce.number() })), async (c) => {
+  .delete("/:id", zValidator("param", z.object({ id: z.string().uuid() })), async (c) => {
     const result = await userManager.deactivateUserById(c.req.valid("param").id, currentUser(c).sub);
     return handleExit(c, result, (user) => c.json({ data: toPublicUser(user) }, 200), userDomainErrors);
   })
   /** Undoes a deactivation. Its own verb because restoring is not deleting less. */
-  .post("/:id/restore", zValidator("param", z.object({ id: z.coerce.number() })), async (c) => {
+  .post("/:id/restore", zValidator("param", z.object({ id: z.string().uuid() })), async (c) => {
     const result = await userManager.restoreUserById(c.req.valid("param").id);
     return handleExit(c, result, (user) => c.json({ data: toPublicUser(user) }, 200), userDomainErrors);
   });

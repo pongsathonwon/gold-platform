@@ -5,9 +5,14 @@ import { makeDeactivateUserUseCase, makeRestoreUserUseCase } from './user.usecas
 import type { User } from '../domain/user.entity.js'
 import type { UserRole } from '../../../infrastructure/db/schema/user.schema.js'
 
-const user = (over: Partial<User> & { id: number }): User => ({
+/** Fixed uuids, so the tests still read as "the caller" and "someone else". */
+const CALLER = '11111111-1111-4111-8111-111111111111'
+const OTHER = '22222222-2222-4222-8222-222222222222'
+const MISSING = '99999999-9999-4999-8999-999999999999'
+
+const user = (over: Partial<User> & { id: string }): User => ({
     name: 'Somchai',
-    username: `user${over.id}`,
+    username: `user-${over.id.slice(0, 8)}`,
     passwordHash: 'hash',
     role: 'OPERATOR' as UserRole,
     createdAt: new Date('2026-01-01T00:00:00Z'),
@@ -17,13 +22,13 @@ const user = (over: Partial<User> & { id: number }): User => ({
 
 /** A repository whose reads are fixed and whose writes are spies. */
 const fakeRepo = (over: Partial<ForUserRepository> = {}) => {
-    const deactivateById = vi.fn((id: number) =>
+    const deactivateById = vi.fn((id: string) =>
         Effect.succeed(user({ id, deletedAt: new Date() })),
     )
-    const restoreById = vi.fn((id: number) => Effect.succeed(user({ id, deletedAt: null })))
+    const restoreById = vi.fn((id: string) => Effect.succeed(user({ id, deletedAt: null })))
     const repo = {
         findAll: () => Effect.succeed([]),
-        findById: (id: number) => Effect.succeed(Option.some(user({ id }))),
+        findById: (id: string) => Effect.succeed(Option.some(user({ id }))),
         findByUsername: () => Effect.succeed(Option.none()),
         createUser: () => Effect.die('not used'),
         deactivateById,
@@ -43,16 +48,16 @@ const failureTag = (exit: Awaited<ReturnType<typeof run>>) =>
 describe('deactivating a user', () => {
     it('sets the tombstone on someone else', async () => {
         const { repo, deactivateById } = fakeRepo()
-        const exit = await run(makeDeactivateUserUseCase(2, 1), repo)
+        const exit = await run(makeDeactivateUserUseCase(OTHER, CALLER), repo)
         expect(exit._tag).toBe('Success')
-        expect(deactivateById).toHaveBeenCalledWith(2)
+        expect(deactivateById).toHaveBeenCalledWith(OTHER)
     })
 
     it('refuses to deactivate the caller', async () => {
         // The issued token stays valid for the rest of its hour, so this would not even fail
         // usefully — the caller keeps working and is locked out later with no cause on screen.
         const { repo, deactivateById } = fakeRepo()
-        const exit = await run(makeDeactivateUserUseCase(1, 1), repo)
+        const exit = await run(makeDeactivateUserUseCase(CALLER, CALLER), repo)
         expect(failureTag(exit)).toBe('CannotDeactivateSelfError')
         expect(deactivateById).not.toHaveBeenCalled()
     })
@@ -61,22 +66,22 @@ describe('deactivating a user', () => {
         // Creating accounts, restoring them and adjusting stock are all ADMIN-only, so an
         // installation with no active admin cannot appoint one. Recovery is a manual UPDATE.
         const { repo, deactivateById } = fakeRepo({
-            findById: (id: number) => Effect.succeed(Option.some(user({ id, role: 'ADMIN' }))),
+            findById: (id: string) => Effect.succeed(Option.some(user({ id, role: 'ADMIN' }))),
             countActiveAdmins: () => Effect.succeed(1),
         })
-        const exit = await run(makeDeactivateUserUseCase(2, 1), repo)
+        const exit = await run(makeDeactivateUserUseCase(OTHER, CALLER), repo)
         expect(failureTag(exit)).toBe('LastAdminError')
         expect(deactivateById).not.toHaveBeenCalled()
     })
 
     it('allows an admin out while another remains', async () => {
         const { repo, deactivateById } = fakeRepo({
-            findById: (id: number) => Effect.succeed(Option.some(user({ id, role: 'ADMIN' }))),
+            findById: (id: string) => Effect.succeed(Option.some(user({ id, role: 'ADMIN' }))),
             countActiveAdmins: () => Effect.succeed(2),
         })
-        const exit = await run(makeDeactivateUserUseCase(2, 1), repo)
+        const exit = await run(makeDeactivateUserUseCase(OTHER, CALLER), repo)
         expect(exit._tag).toBe('Success')
-        expect(deactivateById).toHaveBeenCalledWith(2)
+        expect(deactivateById).toHaveBeenCalledWith(OTHER)
     })
 
     it('does not count admins when the target is an operator', async () => {
@@ -84,7 +89,7 @@ describe('deactivating a user', () => {
         // worth not making.
         const countActiveAdmins = vi.fn(() => Effect.succeed(1))
         const { repo } = fakeRepo({ countActiveAdmins })
-        const exit = await run(makeDeactivateUserUseCase(2, 1), repo)
+        const exit = await run(makeDeactivateUserUseCase(OTHER, CALLER), repo)
         expect(exit._tag).toBe('Success')
         expect(countActiveAdmins).not.toHaveBeenCalled()
     })
@@ -94,18 +99,18 @@ describe('deactivating a user', () => {
         // cannot be the move that locks everyone out.
         const countActiveAdmins = vi.fn(() => Effect.succeed(1))
         const { repo } = fakeRepo({
-            findById: (id: number) =>
+            findById: (id: string) =>
                 Effect.succeed(Option.some(user({ id, role: 'ADMIN', deletedAt: new Date() }))),
             countActiveAdmins,
         })
-        const exit = await run(makeDeactivateUserUseCase(2, 1), repo)
+        const exit = await run(makeDeactivateUserUseCase(OTHER, CALLER), repo)
         expect(exit._tag).toBe('Success')
         expect(countActiveAdmins).not.toHaveBeenCalled()
     })
 
     it('reports a missing user rather than deactivating nothing', async () => {
         const { repo } = fakeRepo({ findById: () => Effect.succeed(Option.none()) })
-        const exit = await run(makeDeactivateUserUseCase(99, 1), repo)
+        const exit = await run(makeDeactivateUserUseCase(MISSING, CALLER), repo)
         expect(failureTag(exit)).toBe('UserNotFoundError')
     })
 })
@@ -114,8 +119,8 @@ describe('restoring a user', () => {
     it('clears the tombstone with no guard', async () => {
         // Restoring only ever adds access, so there is nothing to protect against here.
         const { repo, restoreById } = fakeRepo()
-        const exit = await run(makeRestoreUserUseCase(2), repo)
+        const exit = await run(makeRestoreUserUseCase(OTHER), repo)
         expect(exit._tag).toBe('Success')
-        expect(restoreById).toHaveBeenCalledWith(2)
+        expect(restoreById).toHaveBeenCalledWith(OTHER)
     })
 })

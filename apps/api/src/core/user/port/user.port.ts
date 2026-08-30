@@ -23,7 +23,7 @@ export type CreateUserReq = {
 //driven port
 export interface ForUserRepository {
   findAll: () => Effect.Effect<User[], RepositoryError>;
-  findById: (id: number) => Effect.Effect<Option<User>, RepositoryError>;
+  findById: (id: string) => Effect.Effect<Option<User>, RepositoryError>;
   /**
    * Looks a username up **including deactivated accounts**, deliberately.
    *
@@ -37,9 +37,9 @@ export interface ForUserRepository {
   findByUsername: (username: string) => Effect.Effect<Option<User>, RepositoryError>;
   createUser: (data: CreateUserReq) => Effect.Effect<User, RepositoryError>;
   /** Sets the tombstone. Already-deactivated is not an error — the caller asked for a state. */
-  deactivateById: (id: number) => Effect.Effect<User, UserNotFoundError | RepositoryError>;
+  deactivateById: (id: string) => Effect.Effect<User, UserNotFoundError | RepositoryError>;
   /** Clears the tombstone, letting the account sign in again. */
-  restoreById: (id: number) => Effect.Effect<User, UserNotFoundError | RepositoryError>;
+  restoreById: (id: string) => Effect.Effect<User, UserNotFoundError | RepositoryError>;
   /** How many administrators can still sign in — the number `LastAdminError` guards. */
   countActiveAdmins: () => Effect.Effect<number, RepositoryError>;
 }

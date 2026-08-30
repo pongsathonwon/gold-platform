@@ -30,7 +30,7 @@ export const makeUserRepository = Effect.gen(function* () {
       catch: mapRepositoryError,
     });
 
-  const findById = (id: number) =>
+  const findById = (id: string) =>
     Effect.tryPromise({
       try: async () => {
         const result = await db.select().from(users).where(eq(users.id, id));
@@ -60,7 +60,7 @@ export const makeUserRepository = Effect.gen(function* () {
 
   // Deactivation and restoration are the same UPDATE with a different value, so they share one
   // implementation — the tombstone is the whole of the state.
-  const setDeletedAt = (id: number, deletedAt: Date | null) =>
+  const setDeletedAt = (id: string, deletedAt: Date | null) =>
     Effect.tryPromise({
       try: () => db.update(users).set({ deletedAt }).where(eq(users.id, id)).returning(),
       catch: mapRepositoryError,
@@ -72,9 +72,9 @@ export const makeUserRepository = Effect.gen(function* () {
       ),
     );
 
-  const deactivateById = (id: number) => setDeletedAt(id, new Date());
+  const deactivateById = (id: string) => setDeletedAt(id, new Date());
 
-  const restoreById = (id: number) => setDeletedAt(id, null);
+  const restoreById = (id: string) => setDeletedAt(id, null);
 
   const countActiveAdmins = () =>
     Effect.tryPromise({

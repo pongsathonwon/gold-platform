@@ -1,7 +1,7 @@
 import type { UserRole } from "../../../infrastructure/db/schema/user.schema.js";
 
 export type User = {
-  id: number;
+  id: string;
   name: string;
   username: string;
   passwordHash: string;

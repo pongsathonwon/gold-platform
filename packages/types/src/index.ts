@@ -59,7 +59,7 @@ export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 
 export const publicUserSchema = z.object({
-  id: z.number(),
+  id: z.string().uuid(),
   name: z.string().min(1),
   username: z.string().min(1),
   role: userRoleSchema,
