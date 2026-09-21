@@ -8,6 +8,7 @@ import { runEffect } from "../../../infrastructure/runtime.js";
 import { authMiddleware, currentUsername } from "../../../infrastructure/http/middleware/auth.middleware.js";
 import { createTransaction, advanceStatus, getTransaction, listTransactions } from "../application/retail-buy.usecase.js";
 import { InvalidTransitionError, NoteRequiredError, TransactionNotFoundError } from "../port/retail-buy.port.js";
+import { brandSplitHttpError } from "../../../infrastructure/brand-split.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
 import { InvalidQuantityError, ProductTypePurityNotFoundError, quantityErrorMessage } from "../../../infrastructure/quantity.js";
 import { RetailBuyStatus } from "../../../infrastructure/db/schema/retail-buy.schema.js";
@@ -15,6 +16,9 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { unhandledError } from "../../../infrastructure/http/errors.js";
 
 function toHttpError(error: unknown): [string, ContentfulStatusCode] {
+    // the brand-split rejections are shared with the wholesale routers — one wording everywhere
+    const brandSplitError = brandSplitHttpError(error)
+    if (brandSplitError) return brandSplitError
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
     if (error instanceof NoteRequiredError) return [`a note is required when moving to ${error.status}`, 422]

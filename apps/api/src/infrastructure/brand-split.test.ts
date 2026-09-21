@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { apportionCost, divideWeight, type DivideWeightReq } from "./brand-split.js";
+import { apportionCost, brandSplitHttpError, divideWeight, type DivideWeightReq } from "./brand-split.js";
 
 /**
  * `divideWeight` is the whole brand rule with the database lifted out of it, so these tests are
@@ -186,5 +186,46 @@ describe("one pool, one line", () => {
             const brands = split.map((s) => s.brandId);
             expect(new Set(brands).size).toBe(brands.length);
         }
+    });
+});
+
+/**
+ * Retail runs the same rule with no counterparty: `supplierId` is null, `brandLock` is never set,
+ * and `registered` is every active brand in the master data rather than a supplier's list. What has
+ * to hold is unchanged — the lines reconstruct the transaction — plus one thing of its own: a
+ * rejection must not blame a supplier that does not exist.
+ */
+describe("a retail split, which has no supplier", () => {
+    const retail: DivideWeightReq = { ...base, supplierId: null, weightGb: 20, weightGm: 304 };
+
+    it("books 20 baht as 10 of the stamped brand and 10 to the fungible pool", () => {
+        const split = expectReconstructs({ ...retail, requested: [{ brandId: "HUA_GOLD", weight: 10 }] });
+        expect(split).toEqual([
+            { brandId: "HUA_GOLD", weightGb: 10, weightGm: 152 },
+            { brandId: "NA", weightGb: 10, weightGm: 152 },
+        ]);
+    });
+
+    it("sends everything to the fungible pool when nothing is named", () => {
+        expect(expectReconstructs(retail)).toEqual([{ brandId: "NA", weightGb: 20, weightGm: 304 }]);
+    });
+
+    it("refuses 21 out of 20 rather than clamping it", () => {
+        const result = divideWeight({ ...retail, requested: [{ brandId: "HUA_GOLD", weight: 21 }] });
+        expect(result).toMatchObject({ ok: false, error: { _tag: "BrandSplitExceedsWeightError", named: 21, total: 20 } });
+    });
+
+    it("refuses a brand the master data does not carry, without naming a supplier", () => {
+        const result = divideWeight({ ...retail, requested: [{ brandId: "AURORA", weight: 5 }] });
+        if (result.ok) throw new Error("expected a refusal");
+        expect(result.error).toMatchObject({ _tag: "BrandNotSuppliedError", supplierId: null, brandId: "AURORA" });
+        expect(brandSplitHttpError(result.error)).toEqual(["brand AURORA is not an active brand", 422]);
+    });
+
+    it("still refuses any split on 99.9%", () => {
+        const result = divideWeight({
+            ...retail, keyedByOrigin: true, requested: [{ brandId: "HUA_GOLD", weight: 10 }],
+        });
+        expect(result).toMatchObject({ ok: false, error: { _tag: "BrandSplitNotApplicableError" } });
     });
 });

@@ -7,16 +7,23 @@ import {
 
 /**
  * These helpers are what the pages render buttons and totals from, so the properties worth pinning
- * are the ones a future change could quietly break: that the UI offers exactly one move, that the
- * move it offers demands a reason, and that a voided trade leaves the totals.
+ * are the ones a future change could quietly break: that the UI offers exactly two moves from a
+ * confirmed record, that only the void demands a reason, that the stock-moving step is a dead end,
+ * and that a voided trade leaves the totals.
  */
 
 describe("what a write-up can do next", () => {
-  it("offers voiding, and only voiding, on a confirmed record", () => {
-    // The whole status machine, from the operator's side. Anything more would be a state a counter
-    // trade does not pass through.
-    expect(buyNextStatuses("CONFIRMED")).toEqual(["CANCELLED"]);
-    expect(sellNextStatuses("CONFIRMED")).toEqual(["CANCELLED"]);
+  it("offers putting the gold on the books, or voiding, on a confirmed record", () => {
+    // The whole status machine, from the operator's side: one stock-moving step and the void.
+    expect(buyNextStatuses("CONFIRMED")).toEqual(["STOCKED", "CANCELLED"]);
+    expect(sellNextStatuses("CONFIRMED")).toEqual(["PACKED", "CANCELLED"]);
+  });
+
+  it("offers nothing once the gold has moved", () => {
+    // A stocked buy is corrected through a manual stock loss, as a checked wholesale delivery is.
+    // A packed sale waits for the hand-over states, which are not built — and neither is a return.
+    expect(buyNextStatuses("STOCKED")).toEqual([]);
+    expect(sellNextStatuses("PACKED")).toEqual([]);
   });
 
   it("offers nothing on a cancelled record", () => {
@@ -25,9 +32,10 @@ describe("what a write-up can do next", () => {
   });
 
   it("does not offer shipping on a retail sell", () => {
-    // SHIPPED survives in the database enum so restoring it needs no migration, but it is reachable
+    // SHIPPED survives in the database enum so building it needs no migration, but it is reachable
     // from nothing — and the API refuses the move, so offering the button would be a dead end.
     expect(sellNextStatuses("CONFIRMED")).not.toContain("SHIPPED");
+    expect(sellNextStatuses("PACKED")).not.toContain("SHIPPED");
     expect(sellNextStatuses("SHIPPED")).toEqual([]);
   });
 
@@ -44,16 +52,21 @@ describe("when a reason is demanded", () => {
     expect(sellRequiresNote("CANCELLED")).toBe(true);
   });
 
-  it("requires none to record a trade", () => {
+  it("requires none to record a trade or move the gold", () => {
     expect(buyRequiresNote("CONFIRMED")).toBe(false);
     expect(sellRequiresNote("CONFIRMED")).toBe(false);
+    expect(buyRequiresNote("STOCKED")).toBe(false);
+    expect(sellRequiresNote("PACKED")).toBe(false);
   });
 });
 
 describe("what counts toward a list total", () => {
-  it("counts a confirmed trade", () => {
+  it("counts a confirmed trade, whether or not the gold has moved yet", () => {
+    // the trade happened either way; whether the metal is on the books is an inventory fact
     expect(buyCountsTowardTotal("CONFIRMED")).toBe(true);
     expect(sellCountsTowardTotal("CONFIRMED")).toBe(true);
+    expect(buyCountsTowardTotal("STOCKED")).toBe(true);
+    expect(sellCountsTowardTotal("PACKED")).toBe(true);
   });
 
   it("excludes a cancelled one", () => {
@@ -71,8 +84,8 @@ describe("what counts toward a list total", () => {
   });
 
   it("reads the same on both sides", () => {
-    // Unlike wholesale, where the rule inverts because the gold moves the other way, retail books
-    // no stock at all — so there is nothing for the two domains to disagree about.
+    // Unlike wholesale, where the rule inverts because a written-off balance reads differently by
+    // direction, retail has no failure branch after the stock move — so nothing to disagree about.
     for (const status of ["DRAFT", "CONFIRMED", "CANCELLED"]) {
       expect(buyCountsTowardTotal(status)).toBe(sellCountsTowardTotal(status));
     }
@@ -82,6 +95,8 @@ describe("what counts toward a list total", () => {
 describe("labels and colours", () => {
   it("renders Thai labels", () => {
     expect(buyStatusLabel("CONFIRMED")).toBe("ยืนยันแล้ว");
+    expect(buyStatusLabel("STOCKED")).toBe("เข้าสต๊อกแล้ว");
+    expect(sellStatusLabel("PACKED")).toBe("เบิกทองออกจากสต๊อก");
     expect(sellStatusLabel("CANCELLED")).toBe("ยกเลิก");
   });
 
@@ -91,9 +106,11 @@ describe("labels and colours", () => {
     expect(statusColor("NOT_A_STATUS")).toBe("default");
   });
 
-  it("reads a confirmed write-up as finished, not in flight", () => {
-    // wholesale saves green for gold that reached the vault; a retail record has no later milestone
-    expect(statusColor("CONFIRMED")).toBe("success");
+  it("saves green for gold that reached the vault, as wholesale does", () => {
+    // a confirmed write-up is now a step on the way: the trade is recorded, the metal has not moved
+    expect(statusColor("CONFIRMED")).toBe("info");
+    expect(statusColor("STOCKED")).toBe("success");
+    expect(statusColor("PACKED")).toBe("info");
     expect(statusColor("CANCELLED")).toBe("error");
   });
 });

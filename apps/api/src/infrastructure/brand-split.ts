@@ -20,9 +20,10 @@ import { brands, purities, supplierBrands, suppliers } from "./db/schema/master.
  * silently trimming their number would book a split they did not ask for.
  */
 
-// a caller named a brand this supplier is not registered to deal in
+// a caller named a brand this supplier is not registered to deal in — or, on a retail split where
+// there is no supplier, a brand the master data does not carry as active
 export class BrandNotSuppliedError extends Data.TaggedError("BrandNotSuppliedError")<{
-    supplierId: string
+    supplierId: string | null
     brandId: string
 }> {}
 
@@ -52,7 +53,9 @@ export class BrandLockMisconfiguredError extends Data.TaggedError("BrandLockMisc
  */
 export function brandSplitHttpError(error: unknown): [string, ContentfulStatusCode] | null {
     if (error instanceof BrandNotSuppliedError) {
-        return [`supplier ${error.supplierId} does not deal in brand ${error.brandId}`, 422]
+        return error.supplierId === null
+            ? [`brand ${error.brandId} is not an active brand`, 422]
+            : [`supplier ${error.supplierId} does not deal in brand ${error.brandId}`, 422]
     }
     if (error instanceof BrandSplitExceedsWeightError) {
         return [`brand split totals ${error.named} GB, more than the transaction's ${error.total} GB`, 422]
@@ -137,7 +140,9 @@ export type DivideResult =
     | { ok: true; split: ResolvedBrandWeight[] }
     | { ok: false; error: BrandSplitError }
 
-export interface DivideWeightReq extends ResolveBrandSplitReq {
+export interface DivideWeightReq extends Omit<ResolveBrandSplitReq, 'supplierId'> {
+    // null on a retail split, which has no counterparty to register brands against
+    supplierId: string | null
     // 99.9%: pools are keyed by origin, so brand never varies within one
     keyedByOrigin: boolean
     brandLock: boolean
@@ -174,7 +179,7 @@ export function divideWeight(req: DivideWeightReq): DivideResult {
             return {
                 ok: false,
                 error: new BrandLockMisconfiguredError({
-                    supplierId: req.supplierId, registered: req.registered.length,
+                    supplierId: req.supplierId ?? '', registered: req.registered.length,
                 }),
             }
         }
@@ -250,6 +255,44 @@ export const resolveBrandSplit = (req: ResolveBrandSplitReq) =>
             ...req,
             keyedByOrigin,
             brandLock: supplier?.brandLock ?? false,
+            registered,
+        })
+        if (!result.ok) return yield* Effect.fail(result.error)
+        return result.split
+    })
+
+/** Every active brand except the fungible sentinel — what a retail split may name. */
+const findActiveBrandIds = () =>
+    Effect.gen(function* () {
+        const db = yield* DrizzleClient
+        const rows = yield* Effect.tryPromise({
+            try: () => db.select({ id: brands.id }).from(brands).where(eq(brands.active, true)).execute(),
+            catch: () => new RepositoryError({ message: `cannot look up active brands` }),
+        })
+        return rows.map((r) => r.id).filter((id) => id !== NA_BRAND)
+    })
+
+export type ResolveRetailBrandSplitReq = Omit<ResolveBrandSplitReq, 'supplierId'>
+
+/**
+ * The retail form of the same rule: a walk-in customer has no supplier row to register brands
+ * against, so the enterable lines are every active brand in the master data instead. Nothing
+ * else changes — named brands divide the transaction weight, the residual falls to `NA`, and
+ * 99.9% takes no split at all. With one stamped brand on the books today that is exactly
+ * "ฮั่วเซ่งเฮง + อื่นๆ"; registering another stamp is a brand row, not a code change.
+ */
+export const resolveRetailBrandSplit = (req: ResolveRetailBrandSplitReq) =>
+    Effect.gen(function* () {
+        const [keyedByOrigin, registered] = yield* Effect.all([
+            isKeyedByOrigin(req.purityId),
+            findActiveBrandIds(),
+        ])
+
+        const result = divideWeight({
+            ...req,
+            supplierId: null,
+            keyedByOrigin,
+            brandLock: false,
             registered,
         })
         if (!result.ok) return yield* Effect.fail(result.error)

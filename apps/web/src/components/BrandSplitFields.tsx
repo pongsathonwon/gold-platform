@@ -1,6 +1,6 @@
 import { Alert, Box, Stack, TextField, Typography } from "@mui/material";
 import { NA_BRAND, brandSplitRemainder, type BrandSplit } from "@gold-platform/types";
-import { useSupplierBrands, useSuppliers } from "../hooks/useMasterData";
+import { useBrands, useSupplierBrands, useSuppliers } from "../hooks/useMasterData";
 import { formatWeight } from "../utils/format";
 
 /**
@@ -14,6 +14,11 @@ import { formatWeight } from "../utils/format";
  *
  * A brandLock supplier ships one stamp, so there is nothing to enter and the component says so
  * rather than offering a field whose only legal value is already known.
+ *
+ * Two sources for the enterable lines, matching the two resolvers on the server. With a
+ * `supplierId` they are that supplier's registered brands (wholesale). Without one — a walk-in
+ * customer has no supplier row — they are every active brand in the master data (retail), which
+ * with one stamped brand on the books reads "ฮั่วเซ่งเฮง + อื่นๆ".
  */
 
 // brandId → weight as typed, so a half-entered "1." stays on screen while the operator types
@@ -27,7 +32,8 @@ export function toBrandSplit(draft: BrandSplitDraft): BrandSplit {
 }
 
 interface Props {
-  supplierId: string;
+  /** the counterparty whose registered brands are the lines; omit for retail, where every active brand is */
+  supplierId?: string;
   /** the transaction weight, in the unit it was entered in */
   totalWeight: number;
   unitLabel: string;
@@ -41,12 +47,18 @@ export function BrandSplitFields({
   supplierId, totalWeight, unitLabel, applicable, value, onChange,
 }: Props) {
   const { data: suppliersRes } = useSuppliers();
-  const { data: brandsRes, isPending } = useSupplierBrands(applicable ? supplierId : "");
+  const { data: supplierBrandsRes, isPending: supplierBrandsPending } =
+    useSupplierBrands(applicable && supplierId ? supplierId : "");
+  const { data: allBrandsRes, isPending: allBrandsPending } = useBrands();
 
   if (!applicable) return null;
 
-  const supplier = suppliersRes?.data.find((s) => s.id === supplierId);
-  const brands = (brandsRes?.data ?? []).filter((b) => b.id !== NA_BRAND);
+  const supplier = supplierId ? suppliersRes?.data.find((s) => s.id === supplierId) : undefined;
+  const brands = (supplierId
+    ? supplierBrandsRes?.data ?? []
+    : (allBrandsRes?.data ?? []).filter((b) => b.active)
+  ).filter((b) => b.id !== NA_BRAND);
+  const isPending = supplierId ? supplierBrandsPending : allBrandsPending;
 
   if (supplier?.brandLock) {
     const only = brands[0];
