@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Box, Container, Tab, Tabs, TextField, Typography, Alert, CircularProgress } from "@mui/material";
+import { Box, Container, Tab, Tabs, Typography, Alert, CircularProgress } from "@mui/material";
 import { Link as RouterLink, Outlet, useLocation, useOutletContext } from "react-router-dom";
 import { shiftBusinessDate, todayBusinessDate } from "@gold-platform/types";
+import { BusinessDatePicker } from "../../components/BusinessDatePicker";
 import { useTrading } from "../../hooks/useTrading";
 import type { TradingRow } from "../../utils/trading";
 import { formatBusinessDate } from "../../utils/format";
@@ -66,21 +67,17 @@ export function TradingLayout() {
 
       <Box sx={{ display: "flex", gap: 2, mb: 3, flexWrap: "wrap" }}>
         {/* One window for all three views. Clearing an end opens the range up, as on the lists. */}
-        <TextField
-          type="date"
+        <BusinessDatePicker
           label="ตั้งแต่วันที่"
           value={from}
-          onChange={(e) => setFrom(e.target.value)}
-          slotProps={{ inputLabel: { shrink: true } }}
-          sx={{ minWidth: 170 }}
+          onChange={setFrom}
+          sx={{ minWidth: 190 }}
         />
-        <TextField
-          type="date"
+        <BusinessDatePicker
           label="ถึงวันที่"
           value={to}
-          onChange={(e) => setTo(e.target.value)}
-          slotProps={{ inputLabel: { shrink: true } }}
-          sx={{ minWidth: 170 }}
+          onChange={setTo}
+          sx={{ minWidth: 190 }}
         />
       </Box>
 

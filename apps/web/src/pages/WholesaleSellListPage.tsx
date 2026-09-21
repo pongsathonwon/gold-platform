@@ -6,6 +6,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
 } from "@mui/material";
 import { WHOLE_SELL_STATUSES, shiftBusinessDate, todayBusinessDate } from "@gold-platform/types";
+import { BusinessDatePicker } from "../components/BusinessDatePicker";
 import { useWholesaleSellList, type WholeSellTransaction } from "../hooks/useWholesaleSell";
 import { useConfirmAllWholesaleSell } from "../hooks/useWholesaleSellMutations";
 import { useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterData";
@@ -283,21 +284,17 @@ export function WholesaleSellListPage() {
         {/* a day window over วันที่ทำรายการ, both ends inclusive. Clearing a field drops that end
             of the window rather than falling back to the default — an operator chasing an old
             deal should be able to open the range up. */}
-        <TextField
-          type="date"
+        <BusinessDatePicker
           label="ตั้งแต่วันที่"
           value={from}
-          onChange={(e) => setFrom(e.target.value)}
-          slotProps={{ inputLabel: { shrink: true } }}
-          sx={{ minWidth: 170 }}
+          onChange={setFrom}
+          sx={{ minWidth: 190 }}
         />
-        <TextField
-          type="date"
+        <BusinessDatePicker
           label="ถึงวันที่"
           value={to}
-          onChange={(e) => setTo(e.target.value)}
-          slotProps={{ inputLabel: { shrink: true } }}
-          sx={{ minWidth: 170 }}
+          onChange={setTo}
+          sx={{ minWidth: 190 }}
         />
         <TextField
           select
