@@ -14,7 +14,10 @@ export interface RetailTransaction {
   branchCode: string;
   purityId: string;
   productTypeId: string;
-  /** Always null today: retail moves no stock, so there is no pool for a brand to key. */
+  /**
+   * Always null. Brand is recorded on the stock-moving step as a split across pools and read back
+   * as `brandSplit` on the detail — a single column could not hold "10 ฮั่วเซ่งเฮง + 10 อื่นๆ".
+   */
   brandId: string | null;
   weightGb: number;
   weightGm: number;
@@ -45,6 +48,19 @@ export interface RetailStatusEntry {
   note: string | null;
   createdBy: string;
   createdAt: string;
+}
+
+/** One pool's share of the stock move, read off the movement ledger. Empty until the gold moves. */
+export interface BrandSplitLine {
+  brandId: string;
+  weightGb: number;
+  weightGm: number;
+}
+
+export interface RetailDetail {
+  transaction: RetailTransaction;
+  statuses: RetailStatusEntry[];
+  brandSplit: BrandSplitLine[];
 }
 
 export interface RetailFilter {
@@ -82,10 +98,7 @@ export function useRetailBuyDetail(id: string) {
     enabled: !!id,
     queryFn: async () => {
       const res = await client["retail-buy"][":id"].$get({ param: { id } });
-      return unwrap<{ transaction: RetailTransaction; statuses: RetailStatusEntry[] }>(
-        res,
-        "โหลดรายการไม่สำเร็จ",
-      );
+      return unwrap<RetailDetail>(res, "โหลดรายการไม่สำเร็จ");
     },
   });
 }
@@ -106,10 +119,7 @@ export function useRetailSellDetail(id: string) {
     enabled: !!id,
     queryFn: async () => {
       const res = await client["retail-sell"][":id"].$get({ param: { id } });
-      return unwrap<{ transaction: RetailTransaction; statuses: RetailStatusEntry[] }>(
-        res,
-        "โหลดรายการไม่สำเร็จ",
-      );
+      return unwrap<RetailDetail>(res, "โหลดรายการไม่สำเร็จ");
     },
   });
 }

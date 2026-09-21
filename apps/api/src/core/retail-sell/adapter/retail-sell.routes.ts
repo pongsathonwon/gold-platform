@@ -8,6 +8,8 @@ import { runEffect } from "../../../infrastructure/runtime.js";
 import { authMiddleware, currentUsername } from "../../../infrastructure/http/middleware/auth.middleware.js";
 import { createTransaction, advanceStatus, getTransaction, listTransactions } from "../application/retail-sell.usecase.js";
 import { InvalidTransitionError, NoteRequiredError, TransactionNotFoundError } from "../port/retail-sell.port.js";
+import { InsufficientStockError } from "../../inventory/port/inventories.port.js";
+import { brandSplitHttpError } from "../../../infrastructure/brand-split.js";
 import { NoConversionRateError, PurityNotFoundError } from "../../../infrastructure/weight.js";
 import { InvalidQuantityError, ProductTypePurityNotFoundError, quantityErrorMessage } from "../../../infrastructure/quantity.js";
 import { RetailSellStatus } from "../../../infrastructure/db/schema/retail-sell.schema.js";
@@ -15,11 +17,18 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { unhandledError } from "../../../infrastructure/http/errors.js";
 
 function toHttpError(error: unknown): [string, ContentfulStatusCode] {
+    // the brand-split rejections are shared with the wholesale routers — one wording everywhere
+    const brandSplitError = brandSplitHttpError(error)
+    if (brandSplitError) return brandSplitError
     if (error instanceof TransactionNotFoundError) return [`transaction ${error.id} not found`, 404]
     if (error instanceof InvalidTransitionError) return [`invalid transition from ${error.from} to ${error.to}`, 422]
     if (error instanceof NoteRequiredError) return [`a note is required when moving to ${error.status}`, 422]
     if (error instanceof ProductTypePurityNotFoundError) return [`ไม่พบการจับคู่ประเภทสินค้ากับความบริสุทธิ์`, 422]
     if (error instanceof InvalidQuantityError) return [quantityErrorMessage(error), 422]
+    // the pool is short — nothing left stock and the sale stayed CONFIRMED
+    if (error instanceof InsufficientStockError) {
+        return [`insufficient stock — requested ${error.requested} GB, available ${error.available} GB`, 422]
+    }
     if (error instanceof PurityNotFoundError) return [`purity ${error.purityId} not found`, 422]
     if (error instanceof NoConversionRateError) return [`no conversion rate available`, 503]
     return unhandledError(error, "retail-sell")

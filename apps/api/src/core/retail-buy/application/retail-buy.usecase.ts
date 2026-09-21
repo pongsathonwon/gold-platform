@@ -1,22 +1,30 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { roundMoney, RETAIL_BUY_NOTE_REQUIRED, todayBusinessDate } from "@gold-platform/types";
+import { roundMoney, BrandSplit, RETAIL_BUY_NOTE_REQUIRED, todayBusinessDate } from "@gold-platform/types";
 import {
-    AdvanceStatusReq, allowedTransitions, CreateTransactionReq,
-    InvalidTransitionError, ListFilter, NoteRequiredError, RetailBuyRepository,
+    AdvanceStatusReq, allowedTransitions, CreateTransactionReq, INVENTORY_STATUS,
+    InvalidTransitionError, ListFilter, NoteRequiredError, REFERENCE_TYPE, RetailBuyRepository,
 } from "../port/retail-buy.port.js";
 import { makeRetailBuyRepository } from "../adapter/retail-buy.repository.js";
+import { RetailBuyTransactionShape } from "../../../infrastructure/db/schema/retail-buy.schema.js";
+import { findBrandSplitByReference, incrementSplit } from "../../inventory/application/inventory.usecase.js";
 import { resolveMeasuredQuantity } from "../../../infrastructure/quantity.js";
+import { apportionCost, resolveRetailBrandSplit } from "../../../infrastructure/brand-split.js";
 import { resolveSettlementPeriodOn } from "../../../infrastructure/settlement.js";
 
 const retailBuyLive = Layer.effect(RetailBuyRepository, makeRetailBuyRepository);
 
+// a customer's gold never enters the domestic pool, whatever the purity — only smelting makes
+// domestic stock
+const ORIGIN = 'foreign' as const
+
 /**
  * A retail buy is the shop taking gold off a customer at the counter, written up after the fact.
  *
- * It moves no inventory. Stock is adjusted manually through /inventory/gain|loss, so this domain
- * records the *trade* only — what was paid, for how much metal, on which day. That is everything
- * the buy-versus-sell price comparison needs and nothing else.
+ * The write-up records the *trade* — what was paid, for how much metal, on which day — and moves
+ * nothing. The gold enters stock on the one move that follows, `STOCKED`, at this transaction's own
+ * cost. Keeping the two apart is what lets a whole afternoon of backdated write-ups be entered
+ * first and put on the books second, and what makes a void before stocking a pure log entry.
  */
 export const createTransaction = (req: CreateTransactionReq) =>
     Effect.gen(function* () {
@@ -40,6 +48,7 @@ export const createTransaction = (req: CreateTransactionReq) =>
             branchCode: req.branchCode,
             purityId: req.purityId,
             productTypeId: req.productTypeId,
+            // brand is recorded when the gold is put away, as a split across pools in the ledger
             brandId: null,
             weightGb,
             weightGm,
@@ -74,9 +83,55 @@ export const createTransaction = (req: CreateTransactionReq) =>
     }).pipe(Effect.provide(retailBuyLive))
 
 /**
- * The only move a confirmed write-up has is being voided, and voiding has to say why: the row
- * already counted toward a week's figures, and "why is this week's average different" is not
- * answerable from a status alone.
+ * Puts the customer's gold on the books.
+ *
+ * **What enters is the transaction's weight, at the transaction's cost.** `totalAmount` — gold
+ * value only, the fee stays out — follows the metal into the pools, apportioned by weight with the
+ * last line absorbing the rounding so the pools reconcile to the write-up exactly. This is what
+ * replaces the pooled manual gain that used to stand in for a day's counter buys: each trade now
+ * carries its own price into the average.
+ *
+ * **It takes the brand split**, and this is the only place a buy records brand at all. The
+ * operator names how much carried each stamp — with one stamped brand on the books that is
+ * "ฮั่วเซ่งเฮง + อื่นๆ" — and the fungible pool takes whatever they do not name, by subtraction. A
+ * split can decide which pools move and never how much does: 20 baht can book 10 + 10 or 5 + 15,
+ * and cannot book 21.
+ *
+ * Runs before the status row is written, so a refused split leaves the write-up `CONFIRMED` rather
+ * than logging a move that never happened.
+ */
+const stockGoods = (
+    transaction: RetailBuyTransactionShape,
+    actor: string,
+    brandSplit: BrandSplit | undefined,
+) =>
+    Effect.gen(function* () {
+        const split = yield* resolveRetailBrandSplit({
+            purityId: transaction.purityId,
+            conversionFactor: transaction.conversionFactor,
+            weightGb: transaction.weightGb,
+            weightGm: transaction.weightGm,
+            requested: brandSplit ?? [],
+        });
+
+        yield* incrementSplit({
+            purityId: transaction.purityId,
+            origin: ORIGIN,
+            productTypeId: transaction.productTypeId,
+            brands: apportionCost(split, transaction.totalAmount, transaction.weightGb),
+            referenceType: REFERENCE_TYPE,
+            referenceId: transaction.id,
+            movedBy: actor,
+        });
+    })
+
+/**
+ * Two moves from a confirmed write-up: put the gold away, or void it.
+ *
+ * Voiding has to say why — the row already counted toward a week's figures, and "why is this
+ * week's average different" is not answerable from a status alone. It is possible only until the
+ * gold is on the books: `STOCKED` has no exit, and a stocked write-up that turns out wrong is
+ * corrected through a manual stock loss, as a checked wholesale delivery is.
  */
 export const advanceStatus = (req: AdvanceStatusReq) =>
     Effect.gen(function* () {
@@ -95,7 +150,12 @@ export const advanceStatus = (req: AdvanceStatusReq) =>
             return yield* Effect.fail(new NoteRequiredError({ status: req.toStatus }));
         }
 
-        // No inventory hook on either side of this call — retail touches no pool.
+        // the one move that touches stock, and it runs first: a movement that fails leaves the
+        // write-up where it was rather than recording a step the vault never saw
+        if (req.toStatus === INVENTORY_STATUS) {
+            yield* stockGoods(transaction, req.updatedBy, req.brandSplit);
+        }
+
         yield* repo.updateCurrentStatus(transaction.id, req.toStatus);
         yield* repo.createStatus({
             id: randomUUID(),
@@ -109,14 +169,18 @@ export const advanceStatus = (req: AdvanceStatusReq) =>
         return { currentStatus: req.toStatus };
     }).pipe(Effect.provide(retailBuyLive))
 
+// The brand split comes off the movement ledger rather than a column, because that is where it
+// was written — before STOCKED there is nothing to report, and after it the ledger and the
+// balances are the same rows.
 export const getTransaction = (id: string) =>
     Effect.gen(function* () {
         const repo = yield* RetailBuyRepository;
-        const [transaction, statuses] = yield* Effect.all([
+        const [transaction, statuses, brandSplit] = yield* Effect.all([
             repo.findTransactionById(id),
             repo.listStatuses(id),
+            findBrandSplitByReference(REFERENCE_TYPE, id),
         ]);
-        return { transaction, statuses };
+        return { transaction, statuses, brandSplit };
     }).pipe(Effect.provide(retailBuyLive))
 
 export const listTransactions = (req: ListFilter) =>

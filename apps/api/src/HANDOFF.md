@@ -58,9 +58,13 @@ Shop selling gold back to a supplier. Inventory decrements when gold physically 
 ### Retail Buy (`/retail-buy`)
 
 Customer selling gold to the shop at the counter — a manual write-up of a trade that already
-happened, recorded to answer whether the price was a good one. **No inventory coupling.**
+happened, recorded to answer whether the price was a good one.
 
-**Status flow:** created at `CONFIRMED`; `CONFIRMED → CANCELLED` (note required)
+**Status flow:** created at `CONFIRMED`; `CONFIRMED → STOCKED` (terminal) | `CANCELLED` (note required)
+
+**Inventory:** `incrementSplit` on entering `STOCKED` — the transaction weight at the transaction's
+own cost (`totalAmount`, fee excluded), split across brand pools by an optional `brandSplit`
+(named brands + `NA` residual, always summing to the transaction weight).
 
 **List filters:** `currentStatus`, `settlementPeriod`, `branchCode`, `from`/`to`
 
@@ -75,11 +79,12 @@ See `core/retail-buy/retail-buy.md` — it is the fuller of the two and the sell
 
 Shop selling gold to a customer at the counter. The mirror of retail-buy, and near-identical to it.
 
-**Status flow:** created at `CONFIRMED`; `CONFIRMED → CANCELLED` (note required)
+**Status flow:** created at `CONFIRMED`; `CONFIRMED → PACKED` (dead end for now) | `CANCELLED` (note required)
 
-**Inventory: none.** The old `CONFIRMED → SHIPPED` decrement was **removed** — shipping is deferred,
-which had left live code moving gold down an unreachable path. `SHIPPED` survives in the enum,
-reachable from nothing, so restoring it needs no migration.
+**Inventory:** `decrementSplit` on entering `PACKED`, costed at each pool's live WAC, with the same
+optional `brandSplit`. A short pool is a 422 and the sale stays `CONFIRMED`. No reversal yet.
+`SHIPPED` survives in the enum, reachable from nothing, for the hand-over state that will follow
+`PACKED` — it must move no stock when it arrives.
 
 **List filters:** `currentStatus`, `settlementPeriod`, `branchCode`, `from`/`to`
 

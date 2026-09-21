@@ -277,3 +277,40 @@ ledger footer now splits on both axes. Pinned by `trading.test.ts` → *"the two
   as a second way to read the same week.
 - No export on this page. Each of the four list pages still exports its own workbook.
 - No settlement summary endpoint; everything is computed client-side from the four list endpoints.
+
+---
+
+# Retail Buy / Sell Move Inventory (2026-09-21)
+
+Plan and decisions: [PLAN-retail-inventory-binding.md](PLAN-retail-inventory-binding.md). Retail
+write-ups used to touch no pool, with counter buys reaching the balance as one pooled manual gain at
+goods receipt. Each trade now books its own movement.
+
+**Decisions taken with the operator:** a separate status step on the buy side (`STOCKED`), terminal
+as in wholesale-buy; a new `PACKED` on the sell side as in wholesale-sell, a dead end for now with no
+reversal; both sides enter a mix of ฮั่วเซ่งเฮง and อื่นๆ that must sum to the transaction weight.
+
+- [x] **1. packages/types** — `STOCKED` / `PACKED` statuses, transitions, `RETAIL_{BUY,SELL}_INVENTORY_STATUS`,
+  `brandSplit` on both advance schemas.
+- [x] **2. Schema + migration** — `drizzle/0005_retail_inventory_statuses.sql`, two `ALTER TYPE … ADD VALUE`.
+  **Generated, not applied** — local Postgres was down. Run `pnpm db:migrate`.
+- [x] **3. brand-split.ts** — `resolveRetailBrandSplit()`: `divideWeight()` with every active brand except
+  `NA` standing in for `suppler_brands`, no `brandLock`. `BrandNotSuppliedError.supplierId` is nullable.
+- [x] **4. retail-buy** — `incrementSplit` on `STOCKED`, cost = `totalAmount` via `apportionCost`, before the
+  status row; `getTransaction` returns `brandSplit`.
+- [x] **5. retail-sell** — `decrementSplit` on `PACKED` at live WAC; `InsufficientStockError` → 422 with the
+  sale still `CONFIRMED`; `getTransaction` returns `brandSplit`.
+- [x] **6. Web** — `<BrandSplitFields>` takes an optional `supplierId` (omitted = all active brands); retail
+  detail dialog collects the split on `config.inventoryStatus`, shows the recorded split on a `ยี่ห้อ`
+  row; chips recoloured (`CONFIRMED` info, `STOCKED` success); advance hooks invalidate `["inventory"]`.
+- [x] **7. Tests** — both retail usecase suites rewritten: they asserted *no* inventory call on any path.
+- [x] **8. Docs** — both domain specs, `CONTEXT.md` rule 7, both `CLAUDE.md` files, `HANDOFF.md`.
+- [x] **9. Live verification** — on a throwaway Postgres (all migrations from scratch, then seed), API and
+  web driven end to end. Buy 20 GB @ 49,000 with a 500 fee → `STOCKED` with 10 ฮั่วเซ่งเฮง → pools 10 / 10
+  at 490,000 each (fee excluded), two `RETAIL_BUY` ledger rows, detail reads the split back. Refused:
+  a split of 21 on 20, an unknown brand, a void after `STOCKED`, any move out of `PACKED`, a split on
+  99.9%. Sell 12 GB → `PACKED` 8 + 4, costed at the pools' 49,000 WAC rather than the 51,000 sale
+  price. Sell 5 GB all from a pool holding 2 → 422, sale still `CONFIRMED`, pools untouched. Void
+  before packing moved nothing. Playwright: the dialog clamps 25 → 20 on a 20 GB trade, shows the
+  derived residual, and the `ยี่ห้อ` row fills in after confirm; no console errors.
+  _The dev database has **not** been migrated — Postgres was down. Run `pnpm db:migrate`._

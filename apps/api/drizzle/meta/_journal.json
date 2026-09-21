@@ -36,6 +36,13 @@
       "when": 1788072493299,
       "tag": "0004_user_uuid_key",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789984635287,
+      "tag": "0005_retail_inventory_statuses",
+      "breakpoints": true
     }
   ]
 }

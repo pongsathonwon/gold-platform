@@ -379,6 +379,10 @@ sell dialog on `เบิกทองแพ็คแล้ว` — the two momen
   transaction weight.
 - 99.9% passes `applicable={false}` and the component renders nothing: those pools are keyed by
   origin, so brand is not a dimension of them.
+- **`supplierId` is optional, and omitting it is the retail mode.** A walk-in customer has no
+  supplier row, so the lines come from `useBrands()` — every active brand except `NA` — matching
+  `resolveRetailBrandSplit()` on the server. There is no `brandLock` case without a supplier.
+  The retail detail dialog renders it on `STOCKED` (buy) and `PACKED` (sell); see §9g.
 
 Both detail pages show the **recorded** split on the `ยี่ห้อ` row, read from `data.brandSplit`,
 which the API derives from the inventory movements booked under the transaction rather than from
@@ -501,12 +505,12 @@ the retail pair is written once and takes a config:
 | `pages/retail/retailUi.ts` | `RETAIL_BUY_UI` / `RETAIL_SELL_UI` — labels, report config, status helpers and the four hooks |
 | `pages/retail/RetailListPage.tsx` | purity-split table, date-window/status/branch filters, export |
 | `pages/retail/RetailCreatePage.tsx` | `useDynamicForm` create form |
-| `pages/retail/RetailDetailPage.tsx` | summary, status history, void dialog |
+| `pages/retail/RetailDetailPage.tsx` | summary, recorded brand split, status history, the stock-move / void dialog |
 | `utils/retailStatus.ts` | both domains' chip colours, Thai labels, `nextStatuses()`, `requiresNote()`, `countsTowardTotal()` |
 | `hooks/useRetail.ts` / `useRetailMutations.ts` | both domains' queries and mutations |
 
 **The sharing goes further than wholesale's because the domains are more alike.** A retail buy and a
-retail sell are one record read in two directions — same columns, same two-status machine, same
+retail sell are one record read in two directions — same columns, same three-status machine, same
 rules — so a `RetailBuyTransaction` and a `RetailSellTransaction` interface would be the same fields
 typed twice, and two status utils would be one file typed twice.
 
@@ -518,8 +522,19 @@ typed twice, and two status utils would be one file typed twice.
 - **The config's hooks are typed by what the pages read**, not as `typeof useRetailBuyList`.
   Borrowing the buy hooks' exact types does not compile — the two status unions differ by `SHIPPED`,
   so the sell hooks are not assignable to the buy ones.
-- **No brand field, and for a different reason than wholesale's.** There brand is unknowable until
-  the metal arrives; here it is simply not a dimension of anything, because retail touches no pool.
+- **No brand field on the create form, for wholesale's reason.** Brand is entered on the move that
+  touches stock — `config.inventoryStatus`, which is `RETAIL_BUY_INVENTORY_STATUS` (`STOCKED`) or
+  `RETAIL_SELL_INVENTORY_STATUS` (`PACKED`) from the shared types, so the dialog collects the split
+  on exactly the move the server reads it on. `<BrandSplitFields>` runs in its supplier-less mode
+  (§9d): ฮั่วเซ่งเฮง is typed, `อื่นๆ (ที่เหลือ)` is derived, and an unequal split cannot be entered —
+  a 20-baht buy can be 10 + 10 and never 21. Hidden entirely on 99.9%.
+- **The detail page shows the recorded split on a `ยี่ห้อ` row**, read from `data.brandSplit` (the
+  ledger, not a column). Before the stock move it reads `config.splitPending`, because there is
+  genuinely no answer yet.
+- **The advance mutations invalidate `["inventory"]` as well as their own key**, as the wholesale
+  hooks do, since `STOCKED` / `PACKED` book movements.
+- **`STOCKED` and `PACKED` offer no further buttons.** The transition map has no exit from either,
+  so `nextStatuses()` is empty and the action row does not render.
 - **Weight is always a free number.** The wholesale forms offer a select when the pairing has
   `allowedValues` and show min/step helper text; retail shows neither, because those rules describe
   what can be ordered and a counter weight is whatever the scale read.
@@ -530,8 +545,11 @@ typed twice, and two status utils would be one file typed twice.
 - **The branch dropdown on the create form filters through `liveBranches()`**; the list's branch
   *filter* does not. Filing a new record against a closed branch is wrong, but filtering history by
   one is exactly when someone would want to.
-- **`CONFIRMED` is `success`-coloured**, where wholesale reserves green for gold that reached the
-  vault. A retail write-up has no later milestone to save it for.
+- **`CONFIRMED` is `info`, `STOCKED` is `success`, `PACKED` is `info`** — wholesale's rule that green
+  is for gold that reached the vault. `CONFIRMED` rows are the "still to be put away / pulled"
+  worklist; `PACKED` stays in-flight because the hand-over states that would close a sale are not
+  built. `CONFIRMED` used to be `success`, on the reasoning that a write-up had no later milestone.
+  It has one now.
 - The void dialog requires a reason and disables its confirm button until one is typed — the API
   rejects a blank note, so this saves the round trip and says why beforehand.
 

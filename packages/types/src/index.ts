@@ -688,20 +688,28 @@ export type AdvanceWholeSellStatusReq = z.infer<typeof advanceWholeSellStatusSch
 //
 // Two things follow from that, and they are what make retail differ from wholesale:
 //
-//   1. **No status machine to speak of.** A write-up is a fact. `createTransaction` lands directly
-//      on CONFIRMED and the only move left is voiding it. Wholesale's states exist because a
-//      supplier order genuinely passes through them over days; a counter trade does not.
-//   2. **No inventory coupling on either side.** Stock is adjusted manually through
-//      /inventory/gain|loss. That is why neither domain carries a brand: brand keys a pool, and
-//      there is no pool to key.
+//   1. **A short status machine.** A write-up is a fact. `createTransaction` lands directly on
+//      CONFIRMED; from there the trade is either put on the books — one stock-moving step — or
+//      voided. Wholesale's states exist because a supplier order genuinely passes through them
+//      over days; a counter trade has one moment left after the write-up, which is the metal
+//      entering or leaving the vault.
+//   2. **Inventory moves on that one step, per transaction, and brand is entered there.** A buy
+//      increments on STOCKED at the transaction's own cost; a sell decrements on PACKED at the
+//      pool's live WAC. Neither table carries a brand column: as with wholesale, the split is
+//      supplied on the stock-moving move and read back off the movement ledger. Named brands
+//      divide the transaction weight and the residual falls to the fungible pool, so a 20-baht
+//      buy can book 10 ฮั่วเซ่งเฮง + 10 อื่นๆ and never anything other than 20.
 //
 // DRAFT (both) and SHIPPED (sell) survive as enum values so a later POS feed and a later shipping
-// flow re-enter without a migration. They are simply not reachable from CONFIRMED today.
+// flow re-enter without a migration. They are simply not reachable today.
 
 export const RETAIL_BUY_STATUSES = [
   // Unreachable via createTransaction — kept for a POS feed, which does have a pending state.
   { value: 'DRAFT', label: 'ร่าง', kind: 'happy', terminal: false },
   { value: 'CONFIRMED', label: 'ยืนยันแล้ว', kind: 'happy', terminal: false },
+  // The customer's gold is put away: the one move that increments stock. Terminal, as wholesale-
+  // buy's CHECKED is — a correction after this point is a manual stock loss, not a reversal.
+  { value: 'STOCKED', label: 'เข้าสต๊อกแล้ว', kind: 'happy', terminal: true },
   // The void. A manual entry cannot be edited into shape — cancel it, with a reason, and re-enter.
   { value: 'CANCELLED', label: 'ยกเลิก', kind: 'bad', terminal: true },
 ] as const
@@ -709,11 +717,23 @@ export const RETAIL_BUY_STATUSES = [
 export const RETAIL_SELL_STATUSES = [
   { value: 'DRAFT', label: 'ร่าง', kind: 'happy', terminal: false },
   { value: 'CONFIRMED', label: 'ยืนยันแล้ว', kind: 'happy', terminal: false },
+  // The gold is pulled from the vault for the customer: the one move that decrements stock, the
+  // same edge wholesale-sell counts. The end of the line for now — hand-over and payment states
+  // come later, which is why it is not marked terminal even though nothing leaves it yet.
+  { value: 'PACKED', label: 'เบิกทองออกจากสต๊อก', kind: 'happy', terminal: false },
   // Reachable from nothing and leading nowhere until shipping is built. It is listed so historical
   // rows and dropdowns can still resolve a label for it.
   { value: 'SHIPPED', label: 'ส่งมอบแล้ว', kind: 'happy', terminal: true },
   { value: 'CANCELLED', label: 'ยกเลิก', kind: 'bad', terminal: true },
 ] as const
+
+export type RetailBuyStatusValue = (typeof RETAIL_BUY_STATUSES)[number]['value']
+export type RetailSellStatusValue = (typeof RETAIL_SELL_STATUSES)[number]['value']
+
+// The one status on each side that moves stock, and therefore the one whose transition carries a
+// brand split. Named so the UI shows the split fields on the same move the server reads them on.
+export const RETAIL_BUY_INVENTORY_STATUS = 'STOCKED' satisfies RetailBuyStatusValue
+export const RETAIL_SELL_INVENTORY_STATUS = 'PACKED' satisfies RetailSellStatusValue
 
 export const retailBuyStatusSchema = z.enum(
   RETAIL_BUY_STATUSES.map((s) => s.value) as [string, ...string[]]
@@ -723,9 +743,6 @@ export const retailSellStatusSchema = z.enum(
   RETAIL_SELL_STATUSES.map((s) => s.value) as [string, ...string[]]
 )
 
-export type RetailBuyStatusValue = (typeof RETAIL_BUY_STATUSES)[number]['value']
-export type RetailSellStatusValue = (typeof RETAIL_SELL_STATUSES)[number]['value']
-
 export const retailBuyStatusLabel = (value: string) =>
   RETAIL_BUY_STATUSES.find((s) => s.value === value)?.label ?? value
 
@@ -733,7 +750,7 @@ export const retailSellStatusLabel = (value: string) =>
   RETAIL_SELL_STATUSES.find((s) => s.value === value)?.label ?? value
 
 // Voiding a record that already counted toward a week's figures has to say why. It is the only
-// transition either domain has, so it is also the only thing the status log ever explains.
+// failure branch either domain has, so it is also the only thing the status log ever explains.
 export const RETAIL_BUY_NOTE_REQUIRED: readonly string[] = RETAIL_BUY_STATUSES
   .filter((s) => s.kind === 'bad')
   .map((s) => s.value)
@@ -749,14 +766,20 @@ export const RETAIL_SELL_NOTE_REQUIRED: readonly string[] = RETAIL_SELL_STATUSES
 // not a hole in this map.
 export const RETAIL_BUY_TRANSITIONS: Record<RetailBuyStatusValue, RetailBuyStatusValue[]> = {
   DRAFT: ['CONFIRMED', 'CANCELLED'],
-  CONFIRMED: ['CANCELLED'],
+  // Voiding is possible until the gold is on the books, and not after: STOCKED has no exit, so a
+  // stocked write-up that turns out wrong is corrected through a manual stock loss.
+  CONFIRMED: ['STOCKED', 'CANCELLED'],
+  STOCKED: [],
   CANCELLED: [],
 }
 
 export const RETAIL_SELL_TRANSITIONS: Record<RetailSellStatusValue, RetailSellStatusValue[]> = {
   DRAFT: ['CONFIRMED', 'CANCELLED'],
-  // No SHIPPED. Wiring it back means adding it here and restoring the decrement — nothing else.
-  CONFIRMED: ['CANCELLED'],
+  // Voiding is possible until the gold leaves the vault, and not after. PACKED is a dead end
+  // until the hand-over states are built; a mistaken pack is corrected by a manual stock gain.
+  CONFIRMED: ['PACKED', 'CANCELLED'],
+  PACKED: [],
+  // No SHIPPED yet. It will follow PACKED once shipping is built.
   SHIPPED: [],
   CANCELLED: [],
 }
@@ -818,16 +841,19 @@ export const updateRetailSellSchema = createRetailSellSchema.partial()
 export type UpdateRetailBuyReq = z.infer<typeof updateRetailBuySchema>
 export type UpdateRetailSellReq = z.infer<typeof updateRetailSellSchema>
 
-// No actualWeight, settledAmount, returnReason or brandSplit: there is no second measurement, no
-// settlement, no counterparty to blame and no pool to draw from.
+// No actualWeight, settledAmount or returnReason: there is no second measurement, no settlement
+// and no counterparty to blame. The brand split rides on the stock-moving move only — sent on
+// any other move, or on 99.9%, the server refuses it exactly as wholesale does.
 export const advanceRetailBuyStatusSchema = z.object({
   toStatus: retailBuyStatusSchema,
   note: z.string().optional(),
+  brandSplit: brandSplitSchema.optional(),
 })
 
 export const advanceRetailSellStatusSchema = z.object({
   toStatus: retailSellStatusSchema,
   note: z.string().optional(),
+  brandSplit: brandSplitSchema.optional(),
 })
 
 export type AdvanceRetailBuyStatusReq = z.infer<typeof advanceRetailBuyStatusSchema>

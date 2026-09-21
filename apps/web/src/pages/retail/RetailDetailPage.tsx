@@ -2,12 +2,14 @@ import { useState, type ReactNode } from "react";
 import { Link as RouterLink, useParams } from "react-router-dom";
 import {
   Container, Typography, Card, CardContent, Table, TableBody, TableCell, TableRow,
-  Chip, Box, Button, Alert, CircularProgress, TextField,
+  Chip, Box, Button, Alert, CircularProgress, TextField, Divider,
   Dialog, DialogTitle, DialogContent, DialogActions,
 } from "@mui/material";
 import { businessDateOf } from "@gold-platform/types";
-import { useBranches, useProductTypes, usePurities } from "../../hooks/useMasterData";
+import { useBranches, useBrands, useProductTypes, usePurities } from "../../hooks/useMasterData";
 import { useToast } from "../../components/ToastContext";
+import { BrandSplitFields, toBrandSplit, type BrandSplitDraft } from "../../components/BrandSplitFields";
+import { displayWeight, isInvestmentGrade, weightUnitLabel } from "../../utils/purityDisplay";
 import {
   formatBusinessDate, formatNumber, formatWeight, statusColor,
 } from "../../utils/retailStatus";
@@ -22,9 +24,11 @@ function RetailDetailPage({ config }: { config: RetailUiConfig }) {
   const { data: branchesRes } = useBranches();
   const { data: productTypesRes } = useProductTypes();
   const { data: puritiesRes } = usePurities();
+  const { data: brandsRes } = useBrands();
 
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  const [brandSplit, setBrandSplit] = useState<BrandSplitDraft>({});
 
   if (isPending) {
     return (
@@ -46,27 +50,39 @@ function RetailDetailPage({ config }: { config: RetailUiConfig }) {
   const branch = branchesRes?.data.find((b) => b.branchCode === t.branchCode);
   const productType = productTypesRes?.data.find((p) => p.id === t.productTypeId);
 
-  // 99.9% is dealt in kilograms; showing its gold-baht equivalent would print a number nobody typed
-  const isKg = purity?.percent === 99.9;
+  // 99.9% is dealt in kilograms; showing its gold-baht equivalent would print a number nobody typed.
+  // Which purity this is comes from master data, never from the id.
+  const isKg = isInvestmentGrade(purity);
   const weightText = isKg
     ? `${formatWeight(t.weightGm / 1000)} กก.`
     : `${formatWeight(t.weightGb)} บาททอง`;
+  const brandName = (brandId: string) => brandsRes?.data.find((b) => b.id === brandId)?.brand ?? brandId;
 
   // the two dates agreeing is the ordinary case and deserves no chrome; a gap between them is the
   // thing worth pointing at
   const backdated = businessDateOf(new Date(t.recordedAt)) !== t.transactionDate;
 
   const noteRequired = pendingStatus !== null && config.requiresNote(pendingStatus);
+  // brand is recorded on the one move that puts gold on the books or takes it off — the same move
+  // the server reads the split on, named once in the shared types so the two cannot drift
+  const collectsBrandSplit = pendingStatus === config.inventoryStatus;
 
   function closeDialog() {
     setPendingStatus(null);
     setNote("");
+    setBrandSplit({});
   }
 
   function handleAdvance() {
     if (!pendingStatus) return;
+    // only the named lines travel — the fungible residual is the server's subtraction
+    const split = toBrandSplit(brandSplit);
     advance.mutate(
-      { toStatus: pendingStatus, note: note.trim() || undefined },
+      {
+        toStatus: pendingStatus,
+        note: note.trim() || undefined,
+        ...(collectsBrandSplit && !isKg && split.length > 0 ? { brandSplit: split } : {}),
+      },
       {
         onSuccess: () => {
           showToast(`เปลี่ยนสถานะเป็น ${config.statusLabel(pendingStatus)} แล้ว`);
@@ -82,6 +98,16 @@ function RetailDetailPage({ config }: { config: RetailUiConfig }) {
     ["สาขา", branch?.branchName ?? t.branchCode],
     ["ประเภททอง", productType?.productType ?? t.productTypeId],
     ["% ทอง", purity?.label ?? t.purityId],
+    // Read off the movement ledger, not a column: known only once the gold has moved, so before
+    // that there is genuinely no answer to show.
+    [
+      "ยี่ห้อ",
+      data.brandSplit.length === 0
+        ? config.splitPending
+        : data.brandSplit
+            .map((line) => `${brandName(line.brandId)} ${formatWeight(displayWeight(isKg, line))} ${weightUnitLabel(isKg)}`)
+            .join(" · "),
+    ],
     ["น้ำหนัก", weightText],
     ["ราคา/บาททอง", formatNumber(t.pricePerGb)],
     // labelled so the relationship is on screen rather than assumed — this is the figure every
@@ -142,7 +168,7 @@ function RetailDetailPage({ config }: { config: RetailUiConfig }) {
           </Table>
 
           {/* Buttons come from the shared transition map, so the UI cannot offer a move the API
-              will refuse. On a confirmed write-up that is exactly one: voiding it. */}
+              will refuse. On a confirmed write-up that is two: moving the gold, or voiding. */}
           {nextStatuses.length > 0 && (
             <Box sx={{ display: "flex", gap: 1, mt: 3, flexWrap: "wrap" }}>
               {nextStatuses.map((s) => (
@@ -183,6 +209,24 @@ function RetailDetailPage({ config }: { config: RetailUiConfig }) {
           {pendingStatus ? config.statusLabel(pendingStatus) : ""}
         </DialogTitle>
         <DialogContent>
+          {/* The only place a retail trade records brand. The stamps divide the transaction weight
+              and the residual falls to อื่นๆ, so this cannot change how much moves — 20 baht can be
+              10 + 10 or 5 + 15, never 21. 99.9% renders nothing: its pools are keyed by origin. */}
+          {collectsBrandSplit && !isKg && (
+            <Box sx={{ pt: 1, mb: 2 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                {config.splitHelper}
+              </Typography>
+              <BrandSplitFields
+                totalWeight={t.weightGb}
+                unitLabel="บาท"
+                applicable
+                value={brandSplit}
+                onChange={setBrandSplit}
+              />
+              <Divider sx={{ mt: 2 }} />
+            </Box>
+          )}
           {noteRequired && (
             <Alert severity="warning" sx={{ mb: 2 }}>
               รายการนี้ถูกนับในยอดของงวดไปแล้ว — ต้องระบุเหตุผลในการยกเลิก
