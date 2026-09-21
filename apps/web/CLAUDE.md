@@ -226,9 +226,9 @@ Recording something and it happening are two events. On day one the operator is 
 operations that already took place, so every create form — both wholesale ones, plus stock gain
 and stock loss — opens with a **วันที่ทำรายการ** field defaulting to today.
 
-- `kind: "date"` in `DynamicFormField` renders a native day picker capped at `todayBusinessDate()`.
-  A day, not a datetime: all the picked date decides is which Fri–Thu settlement period the record
-  lands in, and that boundary falls on a day.
+- `kind: "date"` in `DynamicFormField` renders a `<BusinessDatePicker>` capped at
+  `todayBusinessDate()`. A day, not a datetime: all the picked date decides is which Fri–Thu
+  settlement period the record lands in, and that boundary falls on a day.
 - `todayBusinessDate()` from `@gold-platform/types` is **Bangkok's** today, not the browser's. Use
   `businessDateOf(date)` to ask which business day an insert timestamp fell on — never
   `recordedAt.slice(0, 10)`, which answers in UTC.
@@ -252,6 +252,34 @@ and stock loss — opens with a **วันที่ทำรายการ** f
 - The movements page sends plain `from`/`to` days and shows each row's `movementDate`. It opens
   on yesterday–today, not today alone: an empty ledger first thing in the morning reads as a
   broken page rather than a quiet one.
+
+## 9a-i. Every date field is `<BusinessDatePicker>` — `components/BusinessDatePicker.tsx`
+
+MUI X `DatePicker`, `dd/MM/yyyy`, Thai months, **พ.ศ. year**. It replaced `<input type="date">`
+everywhere — both create forms via `DynamicFormField`, both wholesale lists, the retail lists, the
+movements ledger and the `/trading` window.
+
+- **It reads and writes plain `YYYY-MM-DD` in ค.ศ.**, so no call site touches `Dayjs` or the era,
+  and nothing downstream — `businessDateSchema`, the export builders, the query keys — changed.
+- **Either era can be typed.** `AdapterDayjsBuddhist` (`utils/buddhistAdapter.ts`) shifts by 543 at
+  the two string boundaries only: `parse` reads a year ≥ 2400 as พ.ศ. and anything below it as
+  ค.ศ., `formatByString` always writes พ.ศ.. The dates the pickers hold internally stay ค.ศ., which
+  is what keeps their arithmetic, their `minDate`/`maxDate` and `isSameYear` working untouched.
+  2400 พ.ศ. is 1857 ค.ศ., so the two ranges cannot collide in practice.
+- **The era is substituted into the format string, never added to the date.** Shifting a date 543
+  years forward lands 29 February on a year without one, and dayjs would quietly print the 28th.
+  Pinned in `buddhistAdapter.test.ts`.
+- **`LocalizationProvider` lives inside the component, not in `App.tsx`**, against §7. Mounting it
+  at the root put MUI X, dayjs and the Thai locale in the eager bundle — measured **+8.8 KB gzipped
+  on cold load**, paid by the login screen, the one route everybody loads and the only one with no
+  date on it. Inside the component it rides in a chunk that is already lazy; cold load came back to
+  within 162 bytes of where it was.
+- **A half-typed date is swallowed; an out-of-range one is not.** Partial input would make a list
+  filter re-query on `21/09/2`. A date past `maxDate` turns the field red *and* still reaches the
+  parent, so `businessDateSchema` refuses it on submit with its own message — swallowing it would
+  let someone see red, submit anyway and save the previous date without being told.
+- **Both ends of every list window stay clearable**, which is what the list pages document as the
+  way to open a range up.
 
 ## 9b. Wholesale Buy UI
 
@@ -524,6 +552,12 @@ Three renderings of one window, offered side by side because BU has not chosen b
 they cannot disagree, so they read one normalised array. It also means the window survives a tab
 change — someone who has framed an interesting week should not lose it by looking at it a second way.
 
+- **It opens month-to-date**, `startOfBusinessMonth(todayBusinessDate())` through today, and it is
+  the only window in the app that is not the last seven days. The list pages are worklists, where
+  someone is looking for a deal they handled this week; these three views answer "how is the
+  business trading", which is asked against the month people are measured on. A rolling week
+  answers it about a period nobody reports on. Still not snapped to the Fri–Thu งวด, for the same
+  reason as before: on a Friday morning it would show almost nothing.
 - **`utils/trading.ts` is where every domain rule lands.** Which weight counts, which amount counts
   and whether a row counts at all differ per domain — a wholesale buy reports what was delivered
   (`actualX ?? x`), a wholesale sell what was agreed, retail what was measured. The rules come from

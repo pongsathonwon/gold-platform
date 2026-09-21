@@ -15,7 +15,6 @@ import {
   Alert,
   Button,
   Chip,
-  TextField,
 } from "@mui/material";
 import { useInventoryMovements } from "../hooks/useInventory";
 import { usePurities, useBrands, useProductTypes } from "../hooks/useMasterData";
@@ -25,6 +24,7 @@ import {
 } from "../utils/inventoryExport";
 import { useAuth } from "../auth/AuthContext";
 import { useToast } from "../components/ToastContext";
+import { BusinessDatePicker } from "../components/BusinessDatePicker";
 import { formatBusinessDate, formatNumber, formatWeight } from "../utils/format";
 import { originLabel, shiftBusinessDate, todayBusinessDate, TRANSACTION_TYPES } from "@gold-platform/types";
 
@@ -262,21 +262,17 @@ export function InventoryMovementPage() {
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 3, gap: 2, flexWrap: "wrap" }}>
         <Typography variant="h2">ความเคลื่อนไหวทองแท่ง</Typography>
         <Box sx={{ display: "flex", gap: 2 }}>
-          <TextField
+          <BusinessDatePicker
             label="ตั้งแต่วันที่"
-            type="date"
             size="small"
             value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
-            slotProps={{inputLabel: {shrink: true}}}
+            onChange={setFromDate}
           />
-          <TextField
+          <BusinessDatePicker
             label="ถึงวันที่"
-            type="date"
             size="small"
             value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
-            slotProps={{inputLabel: {shrink: true}}}
+            onChange={setToDate}
           />
           {/* Waits for the window's data — a file written from a half-loaded ledger would carry a
               cumulative column that does not add up. */}

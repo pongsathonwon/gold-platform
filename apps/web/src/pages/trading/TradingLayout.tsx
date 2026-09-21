@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Box, Container, Tab, Tabs, TextField, Typography, Alert, CircularProgress } from "@mui/material";
+import { Box, Container, Tab, Tabs, Typography, Alert, CircularProgress } from "@mui/material";
 import { Link as RouterLink, Outlet, useLocation, useOutletContext } from "react-router-dom";
-import { shiftBusinessDate, todayBusinessDate } from "@gold-platform/types";
+import { startOfBusinessMonth, todayBusinessDate } from "@gold-platform/types";
+import { BusinessDatePicker } from "../../components/BusinessDatePicker";
 import { useTrading } from "../../hooks/useTrading";
 import type { TradingRow } from "../../utils/trading";
 import { formatBusinessDate } from "../../utils/format";
@@ -24,11 +25,19 @@ const tabs = [
   { label: "รายการทั้งหมด", to: "/trading/ledger" },
 ];
 
-// Opens on the last seven days, matching every list page in the app. Deliberately not snapped to
-// the Fri–Thu งวด: that bucket is a management convention, and anchoring to it would show almost
-// nothing on a Friday morning. The สรุปรายงวด tab buckets whatever the window contains, so widening
-// the range is how you see more weeks.
-const DEFAULT_WINDOW_DAYS = 7;
+// Opens month-to-date: the 1st of the current month through today.
+//
+// This is the one window in the app that is not the last seven days, and the reader is why. The
+// list pages are worklists — an operator is looking for a deal they handled this week. These three
+// views answer "how is the business trading", which is a question asked against the month someone
+// is being measured on, and a rolling week answers it about a period nobody reports on.
+//
+// Still deliberately not snapped to the Fri–Thu งวด: that bucket is a management convention, and
+// anchoring to it would show almost nothing on a Friday morning. The สรุปรายงวด tab buckets
+// whatever the window contains, so widening the range is how you see more weeks.
+//
+// A window that starts on the 1st is short on the 1st — that is the honest state of the month, and
+// both ends stay editable for anyone who wants a longer run.
 
 export interface TradingContext {
   rows: TradingRow[];
@@ -43,9 +52,7 @@ export const useTradingContext = () => useOutletContext<TradingContext>();
 
 export function TradingLayout() {
   const { pathname } = useLocation();
-  const [from, setFrom] = useState(() =>
-    shiftBusinessDate(todayBusinessDate(), -(DEFAULT_WINDOW_DAYS - 1)),
-  );
+  const [from, setFrom] = useState(() => startOfBusinessMonth(todayBusinessDate()));
   const [to, setTo] = useState(() => todayBusinessDate());
 
   const { rows, productTypeName, isNineNineNine, isPending, isError, error } = useTrading({ from, to });
@@ -66,21 +73,17 @@ export function TradingLayout() {
 
       <Box sx={{ display: "flex", gap: 2, mb: 3, flexWrap: "wrap" }}>
         {/* One window for all three views. Clearing an end opens the range up, as on the lists. */}
-        <TextField
-          type="date"
+        <BusinessDatePicker
           label="ตั้งแต่วันที่"
           value={from}
-          onChange={(e) => setFrom(e.target.value)}
-          slotProps={{ inputLabel: { shrink: true } }}
-          sx={{ minWidth: 170 }}
+          onChange={setFrom}
+          sx={{ minWidth: 190 }}
         />
-        <TextField
-          type="date"
+        <BusinessDatePicker
           label="ถึงวันที่"
           value={to}
-          onChange={(e) => setTo(e.target.value)}
-          slotProps={{ inputLabel: { shrink: true } }}
-          sx={{ minWidth: 170 }}
+          onChange={setTo}
+          sx={{ minWidth: 190 }}
         />
       </Box>
 

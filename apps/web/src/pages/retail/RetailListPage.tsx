@@ -5,6 +5,7 @@ import {
   TableHead, TableRow, Paper, Chip, Box, TextField, MenuItem, Button, Alert, CircularProgress,
 } from "@mui/material";
 import { shiftBusinessDate, todayBusinessDate } from "@gold-platform/types";
+import { BusinessDatePicker } from "../../components/BusinessDatePicker";
 import type { RetailTransaction } from "../../hooks/useRetail";
 import { useBranches, useProductTypes, usePurities } from "../../hooks/useMasterData";
 import { useToast } from "../../components/ToastContext";
@@ -258,21 +259,17 @@ function RetailListPage({ config }: { config: RetailUiConfig }) {
         {/* a day window over วันที่ทำรายการ, both ends inclusive. Clearing a field drops that end
             of the window rather than falling back to the default — someone chasing an old trade
             should be able to open the range up. */}
-        <TextField
-          type="date"
+        <BusinessDatePicker
           label="ตั้งแต่วันที่"
           value={from}
-          onChange={(e) => setFrom(e.target.value)}
-          slotProps={{ inputLabel: { shrink: true } }}
-          sx={{ minWidth: 170 }}
+          onChange={setFrom}
+          sx={{ minWidth: 190 }}
         />
-        <TextField
-          type="date"
+        <BusinessDatePicker
           label="ถึงวันที่"
           value={to}
-          onChange={(e) => setTo(e.target.value)}
-          slotProps={{ inputLabel: { shrink: true } }}
-          sx={{ minWidth: 170 }}
+          onChange={setTo}
+          sx={{ minWidth: 190 }}
         />
         <TextField
           select

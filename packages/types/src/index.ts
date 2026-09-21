@@ -155,6 +155,21 @@ export function shiftBusinessDate(day: string, delta: number): string {
   return at.toISOString().slice(0, 10)
 }
 
+/**
+ * The first day of the month `day` falls in — `startOfBusinessMonth('2026-09-21') === '2026-09-01'`.
+ *
+ * A slice rather than date arithmetic, and that is the whole point: `YYYY-MM-DD` already carries
+ * the month in its first seven characters, so there is no `Date` to construct, no timezone to
+ * apply to a value that has no instant behind it, and no month-length table to get wrong. It
+ * cannot land on the wrong day the way `setDate(1)` on a browser-local date can.
+ *
+ * This anchors month-to-date windows — `/trading` opens on `startOfBusinessMonth(todayBusinessDate())`
+ * through today.
+ */
+export function startOfBusinessMonth(day: string): string {
+  return `${day.slice(0, 7)}-01`
+}
+
 // A floor no real record predates, so a mistyped year (0226, 1026) is rejected as input rather
 // than silently filed 1,800 years back. It cannot catch a plausible-looking wrong year, and is
 // not meant to — the not-future rule is the one that carries weight.
