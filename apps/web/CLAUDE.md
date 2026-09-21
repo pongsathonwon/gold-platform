@@ -552,6 +552,12 @@ Three renderings of one window, offered side by side because BU has not chosen b
 they cannot disagree, so they read one normalised array. It also means the window survives a tab
 change — someone who has framed an interesting week should not lose it by looking at it a second way.
 
+- **It opens month-to-date**, `startOfBusinessMonth(todayBusinessDate())` through today, and it is
+  the only window in the app that is not the last seven days. The list pages are worklists, where
+  someone is looking for a deal they handled this week; these three views answer "how is the
+  business trading", which is asked against the month people are measured on. A rolling week
+  answers it about a period nobody reports on. Still not snapped to the Fri–Thu งวด, for the same
+  reason as before: on a Friday morning it would show almost nothing.
 - **`utils/trading.ts` is where every domain rule lands.** Which weight counts, which amount counts
   and whether a row counts at all differ per domain — a wholesale buy reports what was delivered
   (`actualX ?? x`), a wholesale sell what was agreed, retail what was measured. The rules come from
