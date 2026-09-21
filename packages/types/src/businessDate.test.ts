@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { shiftBusinessDate, startOfBusinessMonth, todayBusinessDate } from './index'
+import { describe, expect, it } from "vitest"
+import { shiftBusinessDate, startOfBusinessMonth, todayBusinessDate } from "./index.js"
 
 describe('startOfBusinessMonth', () => {
   it('walks back to the first of the month', () => {
