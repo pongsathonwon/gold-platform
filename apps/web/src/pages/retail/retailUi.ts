@@ -1,9 +1,9 @@
 import {
   createRetailBuySchema, createRetailSellSchema,
-  RETAIL_BUY_STATUSES, RETAIL_SELL_STATUSES,
-  type CreateRetailBuyReq,
+  RETAIL_BUY_INVENTORY_STATUS, RETAIL_BUY_STATUSES, RETAIL_SELL_INVENTORY_STATUS, RETAIL_SELL_STATUSES,
+  type BrandSplit, type CreateRetailBuyReq,
 } from "@gold-platform/types";
-import type { RetailFilter, RetailStatusEntry, RetailTransaction } from "../../hooks/useRetail";
+import type { RetailDetail, RetailFilter, RetailTransaction } from "../../hooks/useRetail";
 import {
   RETAIL_BUY_REPORT, RETAIL_SELL_REPORT, type TransactionReportConfig,
 } from "../../utils/transactionExport";
@@ -44,6 +44,15 @@ export interface RetailUiConfig {
   priceLabel: string;
   feeLabel: string;
   feeHelper: string;
+  /**
+   * The one move that touches stock — the buy's `STOCKED`, the sell's `PACKED`. The dialog shows
+   * the brand split fields on exactly this move, because it is the move the server reads them on.
+   */
+  inventoryStatus: string;
+  /** What the split dialog says the operator is dividing: gold coming in, or gold going out. */
+  splitHelper: string;
+  /** The `ยี่ห้อ` row before the stock move, when there genuinely is no answer yet. */
+  splitPending: string;
   statuses: readonly { value: string; label: string }[];
   report: TransactionReportConfig;
   statusLabel: (status: string) => string;
@@ -54,7 +63,7 @@ export interface RetailUiConfig {
   useList: (filter: RetailFilter) => QueryLike<RetailTransaction[]>;
   useDetail: (id: string) => QueryLike<RetailDetail>;
   useCreate: () => MutationLike<CreateRetailBuyReq>;
-  useAdvance: (id: string) => MutationLike<{ toStatus: string; note?: string }>;
+  useAdvance: (id: string) => MutationLike<{ toStatus: string; note?: string; brandSplit?: BrandSplit }>;
 }
 
 /**
@@ -80,8 +89,6 @@ interface MutationLike<TVars> {
   isPending: boolean;
 }
 
-type RetailDetail = { transaction: RetailTransaction; statuses: RetailStatusEntry[] };
-
 export const RETAIL_BUY_UI: RetailUiConfig = {
   key: "retail-buy",
   basePath: "/retail-buy",
@@ -93,6 +100,9 @@ export const RETAIL_BUY_UI: RetailUiConfig = {
   priceLabel: "ราคารับซื้อต่อบาททอง",
   feeLabel: "ค่าดำเนินการ (บาท)",
   feeHelper: "ไม่รวมอยู่ในยอดรวม — ยอดรวมคือมูลค่าทองอย่างเดียว",
+  inventoryStatus: RETAIL_BUY_INVENTORY_STATUS,
+  splitHelper: "ระบุน้ำหนักตามยี่ห้อที่รับมาจากลูกค้า — ส่วนที่ไม่ระบุจะเข้าคลังอื่นๆ ต้นทุนคิดจากราคารับซื้อของรายการนี้",
+  splitPending: "— (บันทึกเมื่อเข้าสต๊อก)",
   statuses: RETAIL_BUY_STATUSES,
   report: RETAIL_BUY_REPORT,
   statusLabel: buyStatusLabel,
@@ -117,6 +127,9 @@ export const RETAIL_SELL_UI: RetailUiConfig = {
   priceLabel: "ราคาขายต่อบาททอง",
   feeLabel: "ค่าดำเนินการ (บาท)",
   feeHelper: "เช่น ค่าบล็อค — ไม่รวมอยู่ในยอดรวม",
+  inventoryStatus: RETAIL_SELL_INVENTORY_STATUS,
+  splitHelper: "ระบุน้ำหนักตามยี่ห้อที่เบิกออกจากคลัง — ส่วนที่ไม่ระบุจะเบิกจากคลังอื่นๆ",
+  splitPending: "— (บันทึกเมื่อเบิกทองออกจากสต๊อก)",
   statuses: RETAIL_SELL_STATUSES,
   report: RETAIL_SELL_REPORT,
   statusLabel: sellStatusLabel,

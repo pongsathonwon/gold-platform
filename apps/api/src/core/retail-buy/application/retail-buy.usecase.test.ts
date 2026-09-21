@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Effect } from "effect";
 import { todayBusinessDate } from "@gold-platform/types";
 import {
     expectFailure, expectSuccess, loggedStatuses, makeFakeRetailBuyRepo, retailBuyTransaction,
@@ -6,7 +7,8 @@ import {
 import { resolveSettlementPeriodOn } from "../../../infrastructure/settlement.js";
 import type { RetailBuyTransactionShape } from "../../../infrastructure/db/schema/retail-buy.schema.js";
 
-// Two seams, one fewer than wholesale needs: retail has no brand split to stub out.
+// Three seams, the same three wholesale needs: the repository, the inventory usecases, and the
+// brand-split resolver (which reads purity and brand rows).
 //
 // The repository holder has to be `vi.hoisted` and read **lazily**: `retailBuyLive` is built once
 // at module load, so a factory returning `Effect.succeed(holder.repo)` would capture whatever the
@@ -18,8 +20,7 @@ vi.mock("../adapter/retail-buy.repository.js", async () => {
     return { makeRetailBuyRepository: Effect.sync(() => holder.repo) };
 });
 
-// Mocked so the suite can assert retail calls *none* of it. That is the property that keeps the
-// balance honest: stock is adjusted by hand, and a retail write-up must never move a pool.
+// Spies, so the suite can assert exactly one move touches stock — STOCKED — and nothing else does.
 vi.mock("../../inventory/application/inventory.usecase.js", async () => {
     const { Effect } = await import("effect");
     return {
@@ -29,6 +30,19 @@ vi.mock("../../inventory/application/inventory.usecase.js", async () => {
         decrementSplit: vi.fn(() => Effect.void),
         reverseDecrement: vi.fn(() => Effect.void),
         findBrandSplitByReference: vi.fn(() => Effect.succeed([])),
+    };
+});
+
+// The retail split resolver reads purity and brand rows. Its own rules live in
+// infrastructure/brand-split.test.ts; here it is a pass-through so the transitions are what's
+// under test.
+vi.mock("../../../infrastructure/brand-split.js", async () => {
+    const actual = await import("../../../infrastructure/brand-split.js");
+    const { Effect } = await import("effect");
+    return {
+        ...actual,
+        resolveRetailBrandSplit: vi.fn((req: { weightGb: number; weightGm: number }) =>
+            Effect.succeed([{ brandId: "NA", weightGb: req.weightGb, weightGm: req.weightGm }])),
     };
 });
 
@@ -52,8 +66,10 @@ vi.mock("../../../infrastructure/quantity.js", async () => {
 let repoState: ReturnType<typeof makeFakeRetailBuyRepo>["state"];
 
 const inventory = await import("../../inventory/application/inventory.usecase.js");
+const { incrementSplit } = inventory;
+const { resolveRetailBrandSplit } = await import("../../../infrastructure/brand-split.js");
 const { resolveMeasuredQuantity, resolveQuantity } = await import("../../../infrastructure/quantity.js");
-const { advanceStatus, createTransaction } = await import("./retail-buy.usecase.js");
+const { advanceStatus, createTransaction, getTransaction } = await import("./retail-buy.usecase.js");
 
 function given(overrides: Partial<RetailBuyTransactionShape> = {}) {
     const transaction = retailBuyTransaction(overrides);
@@ -74,8 +90,10 @@ const create = (req: Partial<Parameters<typeof createTransaction>[0]> = {}) =>
         ...req,
     } as never);
 
-const move = (id: string, req: { toStatus: string; note?: string }) =>
-    advanceStatus({ transactionId: id, updatedBy: "tester", ...req } as never);
+const move = (
+    id: string,
+    req: { toStatus: string; note?: string; brandSplit?: { brandId: string; weight: number }[] },
+) => advanceStatus({ transactionId: id, updatedBy: "tester", ...req } as never);
 
 beforeEach(() => {
     vi.clearAllMocks();
@@ -122,10 +140,11 @@ describe("creating a write-up", () => {
         expect(resolveQuantity).not.toHaveBeenCalled();
     });
 
-    it("records no brand", async () => {
+    it("records no brand on the row", async () => {
         const created = await expectSuccess(create());
 
-        // Brand keys an inventory pool and retail touches none, so there is nothing for it to mean.
+        // Brand is entered when the gold is put away, as a split across pools that lives in the
+        // movement ledger — a single column could not hold "10 ฮั่วเซ่งเฮง + 10 อื่นๆ" anyway.
         expect(created.brandId).toBeNull();
     });
 
@@ -191,12 +210,42 @@ describe("transitions", () => {
         expect(error).toMatchObject({ _tag: "RetailBuyNoteRequiredError" });
     });
 
+    it("puts a confirmed write-up into stock", async () => {
+        const t = given({ currentStatus: "CONFIRMED" });
+
+        const result = await expectSuccess(move(t.id, { toStatus: "STOCKED" }));
+
+        expect(result.currentStatus).toBe("STOCKED");
+        expect(repoState.transaction.currentStatus).toBe("STOCKED");
+        expect(loggedStatuses(repoState.statuses)).toEqual(["STOCKED"]);
+    });
+
+    it("refuses to void once the gold is on the books", async () => {
+        // Nothing reverses an increment here. A stocked write-up that turns out wrong is corrected
+        // through a manual stock loss, exactly as a checked wholesale delivery is.
+        const t = given({ currentStatus: "STOCKED" });
+
+        const error = await expectFailure(move(t.id, { toStatus: "CANCELLED", note: "คีย์ผิด" }));
+
+        expect(error).toMatchObject({ _tag: "RetailBuyInvalidTransitionError" });
+        expect(repoState.transaction.currentStatus).toBe("STOCKED");
+    });
+
     it("refuses to reopen a cancelled write-up", async () => {
         const t = given({ currentStatus: "CANCELLED" });
 
         const error = await expectFailure(move(t.id, { toStatus: "CONFIRMED" }));
 
         expect(error).toMatchObject({ _tag: "RetailBuyInvalidTransitionError" });
+    });
+
+    it("refuses to stock a cancelled write-up", async () => {
+        const t = given({ currentStatus: "CANCELLED" });
+
+        const error = await expectFailure(move(t.id, { toStatus: "STOCKED" }));
+
+        expect(error).toMatchObject({ _tag: "RetailBuyInvalidTransitionError" });
+        expect(incrementSplit).not.toHaveBeenCalled();
     });
 
     it("refuses to re-confirm an already confirmed write-up", async () => {
@@ -228,8 +277,109 @@ describe("inventory", () => {
 
         await expectSuccess(move(t.id, { toStatus: "CANCELLED", note: "คีย์ผิด" }));
 
-        // Nothing to unwind, because nothing was ever booked. Stock is corrected through
-        // /inventory/gain|loss, where a human signs for it.
+        // Nothing to unwind, because nothing was ever booked — the gold enters on STOCKED, and a
+        // void is only reachable before it.
         for (const fn of Object.values(inventory)) expect(fn).not.toHaveBeenCalled();
+    });
+
+    it("increments the transaction's weight at the transaction's cost on STOCKED", async () => {
+        const t = given({
+            currentStatus: "CONFIRMED", weightGb: 20, weightGm: 304, totalAmount: 980_000, operationFee: 500,
+        });
+
+        await expectSuccess(move(t.id, { toStatus: "STOCKED" }));
+
+        expect(incrementSplit).toHaveBeenCalledTimes(1);
+        const req = vi.mocked(incrementSplit).mock.calls[0][0];
+        expect(req).toMatchObject({
+            purityId: t.purityId,
+            productTypeId: t.productTypeId,
+            // a customer's gold never enters the domestic pool — only smelting makes domestic stock
+            origin: "foreign",
+            referenceType: "RETAIL_BUY",
+            referenceId: t.id,
+            movedBy: "tester",
+        });
+        // what was paid for the gold follows it into the pool — and only that: the fee is not
+        // part of the cost of the metal and stays out of the average
+        expect(req.brands).toEqual([{ brandId: "NA", weightGb: 20, weightGm: 304, totalCost: 980_000 }]);
+    });
+
+    it("books one movement per brand, with the cost apportioned by weight", async () => {
+        // 20 baht as 10 ฮั่วเซ่งเฮง + 10 อื่นๆ — the case the whole feature was asked for
+        vi.mocked(resolveRetailBrandSplit).mockReturnValueOnce(
+            Effect.succeed([
+                { brandId: "HUA_GOLD", weightGb: 10, weightGm: 152 },
+                { brandId: "NA", weightGb: 10, weightGm: 152 },
+            ]) as never,
+        );
+        const t = given({ currentStatus: "CONFIRMED", weightGb: 20, weightGm: 304, totalAmount: 980_000 });
+
+        await expectSuccess(move(t.id, { toStatus: "STOCKED", brandSplit: [{ brandId: "HUA_GOLD", weight: 10 }] }));
+
+        // the split resolver is handed the transaction's own figures and the operator's lines
+        expect(resolveRetailBrandSplit).toHaveBeenCalledWith({
+            purityId: t.purityId,
+            conversionFactor: t.conversionFactor,
+            weightGb: 20,
+            weightGm: 304,
+            requested: [{ brandId: "HUA_GOLD", weight: 10 }],
+        });
+        const { brands } = vi.mocked(incrementSplit).mock.calls[0][0];
+        expect(brands).toEqual([
+            { brandId: "HUA_GOLD", weightGb: 10, weightGm: 152, totalCost: 490_000 },
+            { brandId: "NA", weightGb: 10, weightGm: 152, totalCost: 490_000 },
+        ]);
+        // the pools reconstruct the write-up exactly
+        expect(brands.reduce((sum, b) => sum + b.weightGb, 0)).toBe(20);
+        expect(brands.reduce((sum, b) => sum + b.totalCost, 0)).toBe(980_000);
+    });
+
+    it("hands the whole weight to the fungible pool when no split is given", async () => {
+        const t = given({ currentStatus: "CONFIRMED", weightGb: 5, weightGm: 76 });
+
+        await expectSuccess(move(t.id, { toStatus: "STOCKED" }));
+
+        expect(resolveRetailBrandSplit).toHaveBeenCalledWith(expect.objectContaining({ requested: [] }));
+    });
+
+    it("runs the increment before the status row, so a refused split logs nothing", async () => {
+        const { BrandSplitExceedsWeightError } = await import("../../../infrastructure/brand-split.js");
+        vi.mocked(resolveRetailBrandSplit).mockReturnValueOnce(
+            Effect.fail(new BrandSplitExceedsWeightError({ named: 21, total: 20 })) as never,
+        );
+        const t = given({ currentStatus: "CONFIRMED", weightGb: 20, weightGm: 304 });
+
+        const error = await expectFailure(move(t.id, { toStatus: "STOCKED", brandSplit: [{ brandId: "HUA_GOLD", weight: 21 }] }));
+
+        expect(error).toMatchObject({ _tag: "BrandSplitExceedsWeightError" });
+        expect(incrementSplit).not.toHaveBeenCalled();
+        expect(repoState.transaction.currentStatus).toBe("CONFIRMED");
+        expect(repoState.statuses).toHaveLength(0);
+    });
+
+    it("leaves the write-up CONFIRMED when the increment itself fails", async () => {
+        const { RepositoryError } = await import("../../../infrastructure/db/client.js");
+        vi.mocked(incrementSplit).mockReturnValueOnce(
+            Effect.fail(new RepositoryError({ message: "db down" })) as never,
+        );
+        const t = given({ currentStatus: "CONFIRMED" });
+
+        await expectFailure(move(t.id, { toStatus: "STOCKED" }));
+
+        expect(repoState.transaction.currentStatus).toBe("CONFIRMED");
+        expect(repoState.statuses).toHaveLength(0);
+    });
+
+    it("reads the recorded split back off the ledger on the detail", async () => {
+        const t = given({ currentStatus: "STOCKED" });
+        vi.mocked(inventory.findBrandSplitByReference).mockReturnValueOnce(
+            Effect.succeed([{ brandId: "HUA_GOLD", weightGb: 10, weightGm: 152 }]) as never,
+        );
+
+        const detail = await expectSuccess(getTransaction(t.id));
+
+        expect(inventory.findBrandSplitByReference).toHaveBeenCalledWith("RETAIL_BUY", t.id);
+        expect(detail.brandSplit).toEqual([{ brandId: "HUA_GOLD", weightGb: 10, weightGm: 152 }]);
     });
 });

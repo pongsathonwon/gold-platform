@@ -8,21 +8,26 @@ import {
  * Status helpers for both retail domains.
  *
  * One file rather than the `wholeBuyStatus.ts` / `wholeSellStatus.ts` pair, because unlike wholesale
- * the two retail domains have nothing to disagree about. Their status sets differ by one unreachable
- * value, both exclude exactly `CANCELLED` from totals, and neither has a failure branch to colour
- * differently. Two files here would be one file typed twice.
+ * the two retail domains have nothing to disagree about. Their status sets differ only in the name
+ * of the stock-moving step (and sell's unreachable `SHIPPED`), both exclude exactly `CANCELLED`
+ * from totals, and neither has a failure branch to colour differently. Two files here would be one
+ * file typed twice.
  */
 
 type ChipColor = "default" | "info" | "success" | "warning" | "error";
 
 /**
- * A confirmed write-up is `success`, not `info`: it is the finished state, not a step on the way to
- * one. Wholesale reserves green for gold that reached the vault, but a retail record has no later
- * milestone to save it for — the trade was over before the form was opened.
+ * The same rule wholesale uses: green is for gold that reached the vault. A confirmed write-up is
+ * now a step on the way — the trade is recorded but the metal has not moved — so it reads as in
+ * flight, and `CONFIRMED` rows are the "still to be put away / pulled" worklist. `STOCKED` is the
+ * buy's finished state. `PACKED` stays `info` as on the wholesale side: the gold has left, but
+ * the hand-over states that would close the sale are not built yet.
  */
 const STATUS_COLORS: Record<string, ChipColor> = {
   DRAFT: "default",
-  CONFIRMED: "success",
+  CONFIRMED: "info",
+  STOCKED: "success",
+  PACKED: "info",
   SHIPPED: "info",
   CANCELLED: "error",
 };
@@ -42,7 +47,7 @@ export const buyIsTerminal = (status: string) => buyStatusMeta(status)?.terminal
 export const buyNextStatuses = (status: string): RetailBuyStatusValue[] =>
   RETAIL_BUY_TRANSITIONS[status as RetailBuyStatusValue] ?? [];
 
-/** The API rejects a void without a note, so the UI must collect one. */
+/** The API rejects a void without a note, so the UI must collect one. Stocking needs none. */
 export const buyRequiresNote = (status: string) => buyStatusMeta(status)?.kind === "bad";
 
 /**
@@ -53,7 +58,8 @@ export const buyRequiresNote = (status: string) => buyStatusMeta(status)?.kind =
  * the footer. A total that quietly drops rows is not auditable.
  *
  * Retail needs none of the care the wholesale version documents: there is one excluded status, no
- * reversal to reason about, and no direction-dependent reading of a written-off balance.
+ * reversal to reason about, and no direction-dependent reading of a written-off balance. Whether
+ * the gold has moved yet does not enter into it — the trade happened either way.
  */
 export const buyCountsTowardTotal = (status: string) => {
   if (!buyStatusMeta(status)) return false;

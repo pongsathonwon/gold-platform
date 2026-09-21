@@ -130,8 +130,8 @@ All domains share the same status-log pattern: two tables (`*_transactions` + `*
 |--------|-------------|----------------|
 | wholesale-buy | `CREATED → CONFIRMED → PAID → RECEIVED → STOCKED`, plus the failure branches below | `increment` on entering `STOCKED` |
 | wholesale-sell | `CREATED → CONFIRMED → PACKED → SHIPPED → PAID`, plus the failure branches below | `decrement` on entering `PACKED`, reversed on `RETURNED` |
-| retail-buy | created at `CONFIRMED`; `CONFIRMED → CANCELLED` | **none** |
-| retail-sell | created at `CONFIRMED`; `CONFIRMED → CANCELLED` | **none** |
+| retail-buy | created at `CONFIRMED`; `CONFIRMED → STOCKED` \| `CANCELLED` | `incrementSplit` on entering `STOCKED`, at the transaction's own cost |
+| retail-sell | created at `CONFIRMED`; `CONFIRMED → PACKED` \| `CANCELLED` | `decrementSplit` on entering `PACKED`; a dead end for now, no reversal |
 | receive | `RECEIVED → CONFIRMED` \| `RECEIVED → CANCELLED` (grace period only) | `increment` at `RECEIVED → CONFIRMED` |
 | smelting | `DRAFT → CONFIRMED` \| `DRAFT → CANCELLED` (grace period only) | `increment` at `DRAFT → CONFIRMED` |
 | convert-out | `DRAFT → CONFIRMED` \| `DRAFT → CANCELLED` (grace period only) | `decrement` at `DRAFT → CONFIRMED` |
@@ -276,15 +276,27 @@ Manual write-ups of counter trades, built to answer one question: *was the price
 one?* Full detail in `core/retail-buy/retail-buy.md`; the sell side is its mirror and documents only
 what differs.
 
-They are near-identical rather than merely symmetric — same row shape, same two-status machine, same
-rules — so the web app renders both from one set of pages and one config, and `@gold-platform/types`
-carries one create shape for both.
+They are near-identical rather than merely symmetric — same row shape, same three-status machine,
+same rules — so the web app renders both from one set of pages and one config, and
+`@gold-platform/types` carries one create shape for both.
 
-- **Neither moves inventory.** Stock is adjusted by hand through `/inventory/gain|loss`. The shop
-  cannot trace which physical gold came from which customer, so coupling a pool to a counter trade
-  would assert a link that does not exist. Retail-sell's old `CONFIRMED → SHIPPED` decrement was
-  **removed**: shipping is deferred, which had left live code moving gold down an unreachable path.
-  Both usecase suites assert no inventory usecase is called.
+- **The write-up moves no stock; one further step does.** A buy increments on `CONFIRMED → STOCKED`,
+  per transaction, with `totalAmount` (gold value, fee excluded) as the cost entering the pools via
+  `apportionCost`. A sell decrements on `CONFIRMED → PACKED` at each pool's live WAC, and a short
+  pool is a 422 with the sale still `CONFIRMED`. This replaced a pooled manual gain at goods
+  receipt, which had no link to the trades it stood for. Both hooks run **before** the status row.
+- **Both take a `brandSplit` on that move**, resolved by `resolveRetailBrandSplit()`: the same pure
+  `divideWeight()` as wholesale, but the enterable brands are every **active** brand except `NA`,
+  because a walk-in customer has no `suppler_brands` row. Named portions plus the `NA` residual
+  always sum to the transaction weight — 20 GB can book 10 ฮั่วเซ่งเฮง + 10 อื่นๆ, never 21. 99.9%
+  refuses a split. `getTransaction` reads the recorded split back off the ledger.
+- **`STOCKED` is terminal and `PACKED` is a dead end for now.** No reversal on either side: a wrong
+  stock move is corrected through `/inventory/gain|loss` with the domain's `referenceType`, as after
+  wholesale-buy's `STOCKED`. `PACKED` is not marked `terminal` because hand-over and payment states
+  will follow it; `SHIPPED` stays in the enum for that and must move no stock when it arrives.
+  Voiding is possible only from `CONFIRMED`, so a void never has anything to unwind. Both usecase
+  suites assert that create and void call no inventory usecase, and that the stock move calls
+  exactly one.
 - **Created at `CONFIRMED`, with one status row.** There was never a draft — the trade happened
   before the form was opened — and logging one would record an event nobody performed. `DRAFT` (both)
   and `SHIPPED` (sell) survive in the enums, unreachable, so a POS feed and shipping return without a
@@ -301,7 +313,8 @@ carries one create shape for both.
   so the price-per-gold-baht average reads spread rather than fee. Blending them is unrecoverable
   after the fact, which is why the column exists before anything reads it. Consumers needing all-in
   cash sum the two.
-- **No brand.** `brandId` is nullable and unread: brand keys an inventory pool and there is none.
+- **No brand column in use.** `brandId` is nullable and unread: brand is the split recorded on the
+  stock move and lives in the movement ledger, exactly as on the wholesale tables.
 - **`source`** marks how a row arrived (`MANUAL` today), so a later POS feed stays distinguishable.
   Migration 0017 dropped the six sync-only columns — `buyNumb`/`saleNumb`, `custCode`, `emplCode`,
   `brandText`, `sizeText`, `goldPriceSnapshot` — the tables being empty at the time.
@@ -313,7 +326,9 @@ carries one create shape for both.
 property of the metal, and it is only known when the metal is in front of you — a supplier that is
 not `brandLock` routinely ships a mix of stamps. So brand is supplied on the transition that moves
 stock (buy: `STOCKED` via `/status` or `/receive-stock`; sell: `PACKED`) as a `brandSplit`, and
-lands as one inventory movement per pool.
+lands as one inventory movement per pool. **The retail pair follows the same rule on its own
+`STOCKED` / `PACKED`**, through `resolveRetailBrandSplit()` — no supplier, so no `brandLock` case
+and the brand master stands in for `suppler_brands`.
 
 | Supplier | What the caller sends |
 |---|---|
@@ -428,11 +443,11 @@ that brand comes from the brand split recorded at the stock-moving transition, n
 
 | Function | Caller | Effect |
 |----------|--------|--------|
-| `incrementSplit(req)` | wholesale-buy at `STOCKED` | upsert balance `+delta` + movement **per branded pool**, all in one DB transaction |
-| `decrementSplit(req)` | wholesale-sell at `PACKED` | per pool: lock, check, cost at that pool's live WAC, movement `-delta` — one DB transaction, so one short pool fails the lot with nothing written |
+| `incrementSplit(req)` | wholesale-buy at `STOCKED`, retail-buy at `STOCKED` | upsert balance `+delta` + movement **per branded pool**, all in one DB transaction |
+| `decrementSplit(req)` | wholesale-sell at `PACKED`, retail-sell at `PACKED` | per pool: lock, check, cost at that pool's live WAC, movement `-delta` — one DB transaction, so one short pool fails the lot with nothing written |
 | `increment(req)` | receive at `CONFIRMED`, smelting at `CONFIRMED` | the single-brand case, delegating to `incrementSplit` |
-| `decrement(req)` | retail-sell at `SHIPPED`, convert-out at `CONFIRMED` | the single-brand case, delegating to `decrementSplit`. Fails `InsufficientStockError` if the balance is short. |
-| `findBrandSplitByReference(type, id)` | wholesale-buy/sell `getTransaction` | reads a transaction's recorded brand split back off the movement ledger — there is no allocation table |
+| `decrement(req)` | convert-out at `CONFIRMED` | the single-brand case, delegating to `decrementSplit`. Fails `InsufficientStockError` if the balance is short. |
+| `findBrandSplitByReference(type, id)` | all four transaction domains' `getTransaction` | reads a transaction's recorded brand split back off the movement ledger — there is no allocation table |
 | `reverseDecrement(req)` | wholesale-sell at `RETURNED` | find movements by reference → restore every pool and book the opposite movements, **one transaction** (`applyReversal`) |
 | `productSwitch(req)` | `POST /inventory/product-switch` (ADMIN) | decrement `fromBrandId` pool at its live WAC (`fromCostDelta`) → increment `toBrandId` pool with the same value (`toCostDelta = fromCostDelta`, cost conserved). Either direction — `NA → HUA_GOLD` as readily as the reverse; the two brands must differ (422 from the schema). Same purity + productType only. Atomic. |
 | `stockGain(req)` | `POST /inventory/gain` (ADMIN) | operator enters `pricePerGb`; `totalCost = pricePerGb × weightGb`. Adjustment record + balance `+delta` + movement, **one transaction** (`applyStockGain`) |

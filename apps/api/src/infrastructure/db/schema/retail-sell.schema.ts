@@ -4,13 +4,15 @@ import { branches, brands, productTypes, purities } from "./master.schema.js";
 
 /**
  * `DRAFT` and `SHIPPED` are retained as values but are unreachable through `RETAIL_SELL_TRANSITIONS`.
- * A manual write-up lands on `CONFIRMED`, and shipping — along with the inventory decrement that
- * used to hang off it — is deferred: retail moves no stock today. Both come back by adding the
- * transition, with no migration.
+ * A manual write-up lands on `CONFIRMED`; `PACKED` is the gold pulled from the vault for the
+ * customer — the one status that decrements inventory, the same edge wholesale-sell counts — and
+ * is the end of the line until the hand-over states are built. `SHIPPED` will follow it then, with
+ * no migration.
  */
 export const retailSellStatusEnum = pgEnum('retail_sell_status', [
     'DRAFT',
     'CONFIRMED',
+    'PACKED',
     'SHIPPED',
     'CANCELLED',
 ])
@@ -23,9 +25,10 @@ export const retailSellTransactions = pgTable('retail_sell_transactions', {
     purityId: varchar().notNull().references(() => purities.id),
     productTypeId: varchar().notNull().references(() => productTypes.id),
     /**
-     * Nullable, and unread. Retail moves no stock — inventory is adjusted manually — so there is no
-     * pool for a brand to key. It stays on the table because the metal does carry a stamp and a
-     * later inventory coupling would want it; nothing today may depend on it being present.
+     * Nullable, and unread. Brand is recorded when the gold is pulled from the vault, not when the
+     * sale is written up, and — exactly as on the wholesale tables — it lives in the movement ledger
+     * as a split across pools rather than in a column that could hold only one stamp. The column
+     * stays because dropping it is a migration for no gain; nothing may depend on it being present.
      */
     brandId: varchar().references(() => brands.id),
 

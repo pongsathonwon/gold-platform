@@ -6,20 +6,25 @@ import type {
 import { assertOk, client } from "../api/client";
 
 /**
- * Retail mutations invalidate their own domain and **nothing else**.
- *
- * The wholesale hooks also invalidate `["inventory"]`, because their status moves book stock
- * movements. Retail books none — the balance is maintained by hand through the gain/loss forms — so
- * refetching it here would suggest a coupling that does not exist.
+ * Retail mutations invalidate their own domain and the inventory queries, as the wholesale hooks
+ * do: a status move into `STOCKED` or `PACKED` books stock movements, so a balance page open in
+ * another tab has to refetch. Creating or voiding moves nothing, but invalidating on every
+ * mutation is cheaper than teaching each hook which one did.
  */
 function useInvalidateRetailBuy() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: ["retail-buy"] });
+  return () => {
+    queryClient.invalidateQueries({ queryKey: ["retail-buy"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory"] });
+  };
 }
 
 function useInvalidateRetailSell() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: ["retail-sell"] });
+  return () => {
+    queryClient.invalidateQueries({ queryKey: ["retail-sell"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory"] });
+  };
 }
 
 export function useCreateRetailBuy() {
@@ -34,7 +39,7 @@ export function useCreateRetailBuy() {
   });
 }
 
-/** The only move a confirmed write-up has. The API refuses it without a note. */
+/** Stock the gold (with its brand split) or void the write-up — the API refuses a void without a note. */
 export function useAdvanceRetailBuyStatus(id: string) {
   const invalidate = useInvalidateRetailBuy();
   return useMutation({

@@ -77,7 +77,7 @@ pnpm docker:down    # docker compose down
 | ② | Manual adjustments (stock gain, stock loss, product switch) | In progress |
 | ③ | wholesale-buy | **Complete** — full status machine incl. failure branches, API + UI |
 | ③ | wholesale-sell | **Complete** — mirror of wholesale-buy, decrement at `DELIVERED`, API + UI |
-| ③ | retail-buy, retail-sell | **Complete** — manual write-up layer, no inventory coupling, API + UI |
+| ③ | retail-buy, retail-sell | **Complete** — manual write-up layer; increment at `STOCKED` / decrement at `PACKED` with a brand split, API + UI |
 | ③ | receive | Deferred to Sprint 2 |
 | ③ | smelting, convert-out | Deferred to Sprint 3 |
 | ④ | Position / Period Net | Deferred |
@@ -232,7 +232,7 @@ One immutable row per Fri–Thu period. Rows never auto-sum. Each row shows Net 
 5. **Inventory cost is WAC via daily opening snapshot.** At day-open, `snapshotRate = totalCost / totalWeightGb` per pool is frozen. All outbound cost attribution uses `weight × snapshotRate`. No outbound movement is permitted before the snapshot is computed for today.
 6. **Domestic pool is protected.** Only `convert_out` can decrement domestic-origin stock. All other outbound domains are hardcoded to `foreign` and cannot touch the domestic pool.
 6. **Bar sizes are interchangeable within the same brand.** Two 5 GB = one 10 GB. Brand segregation still applies.
-7. **Inventory and position are decoupled.** Retail feeds position (period net) and touches no inventory *on either side* — a retail-sell no longer decrements. The shop cannot trace which physical gold came from which customer, so stock is corrected by hand through `/inventory/gain|loss`.
+7. **A retail write-up feeds position; one further step moves inventory.** Creating a retail trade touches no stock. A buy then increments on `STOCKED`, per transaction, at the transaction's own cost (`totalAmount`, fee excluded); a sell decrements on `PACKED` at the pool's live WAC. Both take a brand split on that move — named brands plus the fungible residual, always summing to exactly the transaction weight, so 20 GB can book 10 ฮั่วเซ่งเฮง + 10 อื่นๆ. This replaced the pooled manual gain at goods receipt, which carried no link to the trades behind it. `STOCKED` is terminal and `PACKED` is a dead end for now; corrections after either go through `/inventory/gain|loss`.
 8. **Period assignment is immutable.** Transactions cannot be reassigned after posting. It is derived from `transactionDate` — the picked business day — and correcting that date is accepted only while the transaction is still `CREATED`; confirmation is the lock.
 9. **Internal transfers are excluded from period net.** They are inventory-only events.
 10. **`conversionFactor` is snapshotted at creation.** Historical records stay accurate if the master rate changes.
