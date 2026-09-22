@@ -4,7 +4,7 @@ import {
   WHOLE_SELL_STATUSES, WHOLE_SELL_TRANSITIONS,
 } from "@gold-platform/types";
 import {
-  countsTowardTotal, isTerminal, nextStatuses, requiresNote, statusLabel, statusMeta,
+  countsTowardTotal, happyNext, isTerminal, nextStatuses, requiresNote, statusLabel, statusMeta,
 } from "./wholeSellStatus";
 
 describe("whole sell status machine", () => {
@@ -148,5 +148,21 @@ describe("list totals", () => {
 
   it("excludes an unknown status rather than guessing", () => {
     expect(countsTowardTotal("NOT_A_STATUS")).toBe(false);
+  });
+});
+
+describe("the list's quick advance", () => {
+  it("walks the happy path one step at a time, to PAID and no further", () => {
+    expect(happyNext("CREATED")).toBe("CONFIRMED");
+    expect(happyNext("CONFIRMED")).toBe("PACKED");
+    expect(happyNext("PACKED")).toBe("SHIPPED");
+    expect(happyNext("SHIPPED")).toBe("PAID");
+    expect(happyNext("PAID")).toBeNull();
+  });
+
+  it("offers nothing from a failure branch, recoverable or not", () => {
+    for (const status of WHOLE_SELL_STATUSES.filter((s) => s.kind === "bad")) {
+      expect(happyNext(status.value)).toBeNull();
+    }
   });
 });

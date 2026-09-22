@@ -314,3 +314,32 @@ reversal; both sides enter a mix of ฮั่วเซ่งเฮง and อื
   before packing moved nothing. Playwright: the dialog clamps 25 → 20 on a 20 GB trade, shows the
   derived residual, and the `ยี่ห้อ` row fills in after confirm; no console errors.
   _The dev database has **not** been migrated — Postgres was down. Run `pnpm db:migrate`._
+
+---
+
+# Quick Status Advance on the Lists (2026-09-22)
+
+Branch `enchance/retail-transaction-quick`. Every row on the four transaction lists gets one button
+for its happy-path next step, so the worklist moves without opening the detail page. Design in
+`apps/web/CLAUDE.md` §9i.
+
+- [x] **1. `utils/happyPath.ts`** — `happyNextStatus()`: the row must be on the happy path, and the step is
+  the first `happy` move the shared transition map allows. Failure branches and the void are never
+  quick; they stay on the detail page with their note field.
+- [x] **2. Status utils** — `happyNext()` on both wholesale utils, `buyHappyNext()` / `sellHappyNext()` on
+  retail; the walk pinned per domain in the existing status tests.
+- [x] **3. Mutations** — `useQuick*()` variants with the row id in the variables, sharing the request
+  function with the per-id hooks the detail pages use.
+- [x] **4. `components/QuickStockMoveDialog.tsx`** — the modal for the stock-moving step: `<BrandSplitFields>`
+  (supplier mode on wholesale, all-brands on retail) plus a note; a refusal stays in the dialog;
+  keyed by row.
+- [x] **5. List pages** — button beside `ดู` on all four. One click for confirm / pay / ship; the modal for
+  retail `STOCKED` / `PACKED`, wholesale `STOCKED` / `PACKED`, and buy's combined รับของและเข้าสต๊อก from
+  `PAID`.
+- [x] **6. Verification** — root `pnpm type-check` green; 219 web tests pass (23 new). Driven live against the
+  dev database (migration `0005` applied to it as part of this) with Playwright: all four lists show the
+  step per row; every stock-move modal opens with the split and the derived residual; a one-click
+  `CREATED → CONFIRMED` on a wholesale buy re-rendered the row with `ชำระเงินแล้ว`; a retail buy stocked
+  from the list as 10 ฮั่วเซ่งเฮง + 10 อื่นๆ booked two `RETAIL_BUY` ledger rows at 489,000 each and the
+  detail page read the split back. No console errors. The demo rows (`notes: screenshot demo`) and the
+  `screenshot-bot` operator login are still in the dev database.

@@ -8,8 +8,8 @@ import {
   RETAIL_BUY_REPORT, RETAIL_SELL_REPORT, type TransactionReportConfig,
 } from "../../utils/transactionExport";
 import {
-  buyCountsTowardTotal, buyNextStatuses, buyRequiresNote, buyStatusLabel,
-  sellCountsTowardTotal, sellNextStatuses, sellRequiresNote, sellStatusLabel,
+  buyCountsTowardTotal, buyHappyNext, buyNextStatuses, buyRequiresNote, buyStatusLabel,
+  sellCountsTowardTotal, sellHappyNext, sellNextStatuses, sellRequiresNote, sellStatusLabel,
 } from "../../utils/retailStatus";
 import {
   useRetailBuyDetail, useRetailBuyList, useRetailSellDetail, useRetailSellList,
@@ -17,6 +17,7 @@ import {
 import {
   useAdvanceRetailBuyStatus, useAdvanceRetailSellStatus,
   useCreateRetailBuy, useCreateRetailSell,
+  useQuickAdvanceRetailBuyStatus, useQuickAdvanceRetailSellStatus,
 } from "../../hooks/useRetailMutations";
 
 /**
@@ -59,11 +60,15 @@ export interface RetailUiConfig {
   countsTowardTotal: (status: string) => boolean;
   nextStatuses: (status: string) => string[];
   requiresNote: (status: string) => boolean;
+  /** The list's one-step quick advance, or null when the row has no happy-path step left. */
+  happyNext: (status: string) => string | null;
   createSchema: typeof createRetailBuySchema;
   useList: (filter: RetailFilter) => QueryLike<RetailTransaction[]>;
   useDetail: (id: string) => QueryLike<RetailDetail>;
   useCreate: () => MutationLike<CreateRetailBuyReq>;
   useAdvance: (id: string) => MutationLike<{ toStatus: string; note?: string; brandSplit?: BrandSplit }>;
+  /** The same move with the row in the variables, for the list, where the row is not known until the click. */
+  useQuickAdvance: () => MutationLike<{ id: string; toStatus: string; note?: string; brandSplit?: BrandSplit }>;
 }
 
 /**
@@ -109,11 +114,13 @@ export const RETAIL_BUY_UI: RetailUiConfig = {
   countsTowardTotal: buyCountsTowardTotal,
   nextStatuses: buyNextStatuses,
   requiresNote: buyRequiresNote,
+  happyNext: buyHappyNext,
   createSchema: createRetailBuySchema,
   useList: useRetailBuyList,
   useDetail: useRetailBuyDetail,
   useCreate: useCreateRetailBuy,
   useAdvance: useAdvanceRetailBuyStatus,
+  useQuickAdvance: useQuickAdvanceRetailBuyStatus,
 };
 
 export const RETAIL_SELL_UI: RetailUiConfig = {
@@ -136,9 +143,11 @@ export const RETAIL_SELL_UI: RetailUiConfig = {
   countsTowardTotal: sellCountsTowardTotal,
   nextStatuses: sellNextStatuses,
   requiresNote: sellRequiresNote,
+  happyNext: sellHappyNext,
   createSchema: createRetailSellSchema,
   useList: useRetailSellList,
   useDetail: useRetailSellDetail,
   useCreate: useCreateRetailSell,
   useAdvance: useAdvanceRetailSellStatus,
+  useQuickAdvance: useQuickAdvanceRetailSellStatus,
 };

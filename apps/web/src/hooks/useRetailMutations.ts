@@ -39,15 +39,29 @@ export function useCreateRetailBuy() {
   });
 }
 
+async function postBuyStatus(id: string, req: AdvanceRetailBuyStatusReq) {
+  const res = await client["retail-buy"][":id"].status.$post({ param: { id }, json: req });
+  await assertOk(res, "ทำรายการไม่สำเร็จ");
+  return res.json();
+}
+
 /** Stock the gold (with its brand split) or void the write-up — the API refuses a void without a note. */
 export function useAdvanceRetailBuyStatus(id: string) {
   const invalidate = useInvalidateRetailBuy();
   return useMutation({
-    mutationFn: async (req: AdvanceRetailBuyStatusReq) => {
-      const res = await client["retail-buy"][":id"].status.$post({ param: { id }, json: req });
-      await assertOk(res, "ทำรายการไม่สำเร็จ");
-      return res.json();
-    },
+    mutationFn: (req: AdvanceRetailBuyStatusReq) => postBuyStatus(id, req),
+    onSuccess: invalidate,
+  });
+}
+
+/**
+ * The same move with the row in the variables. The list's quick advance does not know which row
+ * until the click, and a hook cannot be called per row, so one mutation serves the whole table.
+ */
+export function useQuickAdvanceRetailBuyStatus() {
+  const invalidate = useInvalidateRetailBuy();
+  return useMutation({
+    mutationFn: ({ id, ...req }: { id: string } & AdvanceRetailBuyStatusReq) => postBuyStatus(id, req),
     onSuccess: invalidate,
   });
 }
@@ -64,14 +78,24 @@ export function useCreateRetailSell() {
   });
 }
 
+async function postSellStatus(id: string, req: AdvanceRetailSellStatusReq) {
+  const res = await client["retail-sell"][":id"].status.$post({ param: { id }, json: req });
+  await assertOk(res, "ทำรายการไม่สำเร็จ");
+  return res.json();
+}
+
 export function useAdvanceRetailSellStatus(id: string) {
   const invalidate = useInvalidateRetailSell();
   return useMutation({
-    mutationFn: async (req: AdvanceRetailSellStatusReq) => {
-      const res = await client["retail-sell"][":id"].status.$post({ param: { id }, json: req });
-      await assertOk(res, "ทำรายการไม่สำเร็จ");
-      return res.json();
-    },
+    mutationFn: (req: AdvanceRetailSellStatusReq) => postSellStatus(id, req),
+    onSuccess: invalidate,
+  });
+}
+
+export function useQuickAdvanceRetailSellStatus() {
+  const invalidate = useInvalidateRetailSell();
+  return useMutation({
+    mutationFn: ({ id, ...req }: { id: string } & AdvanceRetailSellStatusReq) => postSellStatus(id, req),
     onSuccess: invalidate,
   });
 }
