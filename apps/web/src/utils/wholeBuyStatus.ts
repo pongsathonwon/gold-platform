@@ -2,6 +2,7 @@ import {
   WHOLE_BUY_EXCLUDED_FROM_TOTALS, WHOLE_BUY_STATUSES,
   WHOLE_BUY_TRANSITIONS, type WholeBuyStatusValue,
 } from "@gold-platform/types";
+import { happyNextStatus } from "./happyPath";
 
 type ChipColor = "default" | "info" | "success" | "warning" | "error";
 
@@ -42,6 +43,15 @@ export const nextStatuses = (status: string): WholeBuyStatusValue[] =>
 
 /** A failure-branch move: the API rejects it without a note, so the UI must collect one. */
 export const requiresNote = (status: string) => statusMeta(status)?.kind === "bad";
+
+/**
+ * The list's one-step quick advance: CREATED → CONFIRMED → PAID → RECEIVED → STOCKED. Null once
+ * stocked and on every failure branch, which are worked from the detail page. The list turns
+ * `RECEIVED` into the combined รับของและเข้าสต๊อก, since receiving and stocking are one moment on
+ * the floor (§9b).
+ */
+export const happyNext = (status: string) =>
+  happyNextStatus(WHOLE_BUY_STATUSES, WHOLE_BUY_TRANSITIONS, status);
 
 /**
  * Whether a transaction belongs in a list total. Cancelled, rejected, returned and refunded

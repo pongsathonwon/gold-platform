@@ -2,6 +2,7 @@ import {
   WHOLE_SELL_EXCLUDED_FROM_TOTALS, WHOLE_SELL_STATUSES,
   WHOLE_SELL_TRANSITIONS, type WholeSellStatusValue,
 } from "@gold-platform/types";
+import { happyNextStatus } from "./happyPath";
 
 type ChipColor = "default" | "info" | "success" | "warning" | "error";
 
@@ -37,6 +38,13 @@ export const nextStatuses = (status: string): WholeSellStatusValue[] =>
 
 /** A failure-branch move: the API rejects it without a note, so the UI must collect one. */
 export const requiresNote = (status: string) => statusMeta(status)?.kind === "bad";
+
+/**
+ * The list's one-step quick advance: CREATED → CONFIRMED → PACKED → SHIPPED → PAID. Null once
+ * paid and on every failure branch, which are worked from the detail page.
+ */
+export const happyNext = (status: string) =>
+  happyNextStatus(WHOLE_SELL_STATUSES, WHOLE_SELL_TRANSITIONS, status);
 
 /**
  * Whether a transaction belongs in a list total. The test is simply **did the gold end up gone**.

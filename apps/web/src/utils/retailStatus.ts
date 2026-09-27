@@ -3,6 +3,7 @@ import {
   RETAIL_SELL_EXCLUDED_FROM_TOTALS, RETAIL_SELL_STATUSES, RETAIL_SELL_TRANSITIONS,
   type RetailBuyStatusValue, type RetailSellStatusValue,
 } from "@gold-platform/types";
+import { happyNextStatus } from "./happyPath";
 
 /**
  * Status helpers for both retail domains.
@@ -50,6 +51,10 @@ export const buyNextStatuses = (status: string): RetailBuyStatusValue[] =>
 /** The API rejects a void without a note, so the UI must collect one. Stocking needs none. */
 export const buyRequiresNote = (status: string) => buyStatusMeta(status)?.kind === "bad";
 
+/** The list's one-step quick advance — on a confirmed write-up, putting the gold on the books. */
+export const buyHappyNext = (status: string) =>
+  happyNextStatus(RETAIL_BUY_STATUSES, RETAIL_BUY_TRANSITIONS, status);
+
 /**
  * Whether a write-up belongs in a list total.
  *
@@ -79,6 +84,10 @@ export const sellNextStatuses = (status: string): RetailSellStatusValue[] =>
   RETAIL_SELL_TRANSITIONS[status as RetailSellStatusValue] ?? [];
 
 export const sellRequiresNote = (status: string) => sellStatusMeta(status)?.kind === "bad";
+
+/** The list's one-step quick advance — on a confirmed sale, pulling the gold from the vault. */
+export const sellHappyNext = (status: string) =>
+  happyNextStatus(RETAIL_SELL_STATUSES, RETAIL_SELL_TRANSITIONS, status);
 
 export const sellCountsTowardTotal = (status: string) => {
   if (!sellStatusMeta(status)) return false;

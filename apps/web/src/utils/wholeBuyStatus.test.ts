@@ -4,7 +4,8 @@ import {
   WHOLE_BUY_TRANSITIONS, derivePricePerGb999,
 } from "@gold-platform/types";
 import {
-  countsTowardTotal, formatWeight, isTerminal, nextStatuses, requiresNote, statusLabel, statusMeta,
+  countsTowardTotal, formatWeight, happyNext, isTerminal, nextStatuses, requiresNote, statusLabel,
+  statusMeta,
 } from "./wholeBuyStatus";
 
 describe("whole buy status machine", () => {
@@ -204,5 +205,25 @@ describe("purity price derivation", () => {
 
   it("always quotes 99.9% above 96.5%", () => {
     expect(derivePricePerGb999(40000)).toBeGreaterThan(40000);
+  });
+});
+
+describe("the list's quick advance", () => {
+  it("walks the happy path one step at a time, to STOCKED and no further", () => {
+    // pinned as a walk rather than per status: the rule picks the first happy move in the map,
+    // so reordering a map entry would silently change the step — this is what catches it
+    expect(happyNext("CREATED")).toBe("CONFIRMED");
+    expect(happyNext("CONFIRMED")).toBe("PAID");
+    expect(happyNext("PAID")).toBe("RECEIVED");
+    expect(happyNext("RECEIVED")).toBe("STOCKED");
+    expect(happyNext("STOCKED")).toBeNull();
+  });
+
+  it("offers nothing from a failure branch, recoverable or not", () => {
+    // PAYMENT_FAILED can go back to PAID and RETURNED to RECEIVED, but each is a decision with a
+    // reason behind it, and the detail page is where every exit is offered with its note field
+    for (const status of WHOLE_BUY_STATUSES.filter((s) => s.kind === "bad")) {
+      expect(happyNext(status.value)).toBeNull();
+    }
   });
 });

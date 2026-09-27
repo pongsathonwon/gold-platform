@@ -38,14 +38,28 @@ export function useUpdateWholesaleSell(id: string) {
   });
 }
 
+async function postStatus(id: string, req: AdvanceWholeSellStatusReq) {
+  const res = await client["wholesale-sell"][":id"].status.$post({ param: { id }, json: req });
+  await assertOk(res, "ทำรายการไม่สำเร็จ");
+  return res.json();
+}
+
 export function useAdvanceWholesaleSellStatus(id: string) {
   const invalidate = useInvalidateWholesaleSell();
   return useMutation({
-    mutationFn: async (req: AdvanceWholeSellStatusReq) => {
-      const res = await client["wholesale-sell"][":id"].status.$post({ param: { id }, json: req });
-      await assertOk(res, "ทำรายการไม่สำเร็จ");
-      return res.json();
-    },
+    mutationFn: (req: AdvanceWholeSellStatusReq) => postStatus(id, req),
+    onSuccess: invalidate,
+  });
+}
+
+/**
+ * The same move with the row in the variables. The list's quick advance does not know which row
+ * until the click, and a hook cannot be called per row, so one mutation serves the whole table.
+ */
+export function useQuickAdvanceWholesaleSellStatus() {
+  const invalidate = useInvalidateWholesaleSell();
+  return useMutation({
+    mutationFn: ({ id, ...req }: { id: string } & AdvanceWholeSellStatusReq) => postStatus(id, req),
     onSuccess: invalidate,
   });
 }
