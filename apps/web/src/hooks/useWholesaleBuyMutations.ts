@@ -39,14 +39,28 @@ export function useUpdateWholesaleBuy(id: string) {
   });
 }
 
+async function postStatus(id: string, req: AdvanceWholeBuyStatusReq) {
+  const res = await client["wholesale-buy"][":id"].status.$post({ param: { id }, json: req });
+  await assertOk(res, "ทำรายการไม่สำเร็จ");
+  return res.json();
+}
+
 export function useAdvanceWholesaleBuyStatus(id: string) {
   const invalidate = useInvalidateWholesaleBuy();
   return useMutation({
-    mutationFn: async (req: AdvanceWholeBuyStatusReq) => {
-      const res = await client["wholesale-buy"][":id"].status.$post({ param: { id }, json: req });
-      await assertOk(res, "ทำรายการไม่สำเร็จ");
-      return res.json();
-    },
+    mutationFn: (req: AdvanceWholeBuyStatusReq) => postStatus(id, req),
+    onSuccess: invalidate,
+  });
+}
+
+/**
+ * The same move with the row in the variables. The list's quick advance does not know which row
+ * until the click, and a hook cannot be called per row, so one mutation serves the whole table.
+ */
+export function useQuickAdvanceWholesaleBuyStatus() {
+  const invalidate = useInvalidateWholesaleBuy();
+  return useMutation({
+    mutationFn: ({ id, ...req }: { id: string } & AdvanceWholeBuyStatusReq) => postStatus(id, req),
     onSuccess: invalidate,
   });
 }
@@ -71,16 +85,27 @@ export function useConfirmAllWholesaleBuy() {
 // Receive + stock in one action — the two status entries are still recorded server-side.
 // It carries no weight: accepting means the delivery matched its document, and one that did not
 // was refused at the door before custody transferred.
+async function postReceiveStock(id: string, req: ReceiveStockWholeBuyReq) {
+  const res = await client["wholesale-buy"][":id"]["receive-stock"].$post({
+    param: { id }, json: req,
+  });
+  await assertOk(res, "ทำรายการไม่สำเร็จ");
+  return res.json();
+}
+
 export function useReceiveStockWholesaleBuy(id: string) {
   const invalidate = useInvalidateWholesaleBuy();
   return useMutation({
-    mutationFn: async (req: ReceiveStockWholeBuyReq) => {
-      const res = await client["wholesale-buy"][":id"]["receive-stock"].$post({
-        param: { id }, json: req,
-      });
-      await assertOk(res, "ทำรายการไม่สำเร็จ");
-      return res.json();
-    },
+    mutationFn: (req: ReceiveStockWholeBuyReq) => postReceiveStock(id, req),
+    onSuccess: invalidate,
+  });
+}
+
+/** Receive + stock with the row in the variables, for the list's quick advance from PAID. */
+export function useQuickReceiveStockWholesaleBuy() {
+  const invalidate = useInvalidateWholesaleBuy();
+  return useMutation({
+    mutationFn: ({ id, ...req }: { id: string } & ReceiveStockWholeBuyReq) => postReceiveStock(id, req),
     onSuccess: invalidate,
   });
 }

@@ -10,7 +10,9 @@ import type { RetailTransaction } from "../../hooks/useRetail";
 import { useBranches, useProductTypes, usePurities } from "../../hooks/useMasterData";
 import { useToast } from "../../components/ToastContext";
 import { useAuth } from "../../auth/AuthContext";
+import { QuickStockMoveDialog, type QuickStockMoveInput } from "../../components/QuickStockMoveDialog";
 import { splitByPurity } from "../../utils/inventoryVolume";
+import { displayWeight, isInvestmentGrade, weightUnitLabel } from "../../utils/purityDisplay";
 import { downloadWorkbook } from "../../utils/excel";
 import {
   buildTransactionWorkbook, transactionFileName, type TransactionExportRow,
@@ -51,6 +53,10 @@ function RetailListPage({ config }: { config: RetailUiConfig }) {
   };
 
   const { data, isPending, isError, error } = config.useList(filter);
+  const quickAdvance = config.useQuickAdvance();
+  // the row whose stock-moving step is open in the modal; null when it is closed
+  const [stockMove, setStockMove] = useState<RetailTransaction | null>(null);
+  const [stockMoveError, setStockMoveError] = useState<string | null>(null);
   const { showToast } = useToast();
   const { user } = useAuth();
   const { data: branchesRes } = useBranches();
@@ -82,6 +88,44 @@ function RetailListPage({ config }: { config: RetailUiConfig }) {
   );
 
   const windowLabel = `${formatBusinessDate(from)} – ${formatBusinessDate(to)}`;
+
+  /**
+   * The row's one-step advance. On retail that is one move — `STOCKED` or `PACKED`, the step that
+   * moves the gold — and it is the one that needs the brand split, so it opens the modal rather
+   * than firing. Anything else (only `DRAFT → CONFIRMED`, unreachable today) is a click.
+   */
+  function handleQuick(t: RetailTransaction, next: string) {
+    if (next === config.inventoryStatus) {
+      setStockMoveError(null);
+      setStockMove(t);
+      return;
+    }
+    quickAdvance.mutate(
+      { id: t.id, toStatus: next },
+      {
+        onSuccess: () => showToast(`เปลี่ยนสถานะเป็น ${config.statusLabel(next)} แล้ว`),
+        onError: (err) => showToast(err instanceof Error ? err.message : "ทำรายการไม่สำเร็จ", "error"),
+      },
+    );
+  }
+
+  // a refusal — a pool short of stock, say — stays in the dialog so the split can be corrected
+  function submitStockMove(input: QuickStockMoveInput) {
+    if (!stockMove) return;
+    setStockMoveError(null);
+    quickAdvance.mutate(
+      { id: stockMove.id, toStatus: config.inventoryStatus, ...input },
+      {
+        onSuccess: () => {
+          showToast(`เปลี่ยนสถานะเป็น ${config.statusLabel(config.inventoryStatus)} แล้ว`);
+          setStockMove(null);
+        },
+        onError: (err) => setStockMoveError(err instanceof Error ? err.message : "ทำรายการไม่สำเร็จ"),
+      },
+    );
+  }
+
+  const stockMoveIs999 = stockMove ? isInvestmentGrade(purityById.get(stockMove.purityId)) : false;
 
   /**
    * A transaction as the report shows it. Every figure is the one the table beside it renders — the
@@ -165,7 +209,9 @@ function RetailListPage({ config }: { config: RetailUiConfig }) {
                   </TableCell>
                 </TableRow>
               )}
-              {rows.map((t) => (
+              {rows.map((t) => {
+                const next = config.happyNext(t.currentStatus);
+                return (
                 <TableRow key={t.id} hover>
                   {/* the day the trade happened, not the day it was typed in — the list is sorted
                       by it too, so a backdated write-up reads where it belongs */}
@@ -187,13 +233,27 @@ function RetailListPage({ config }: { config: RetailUiConfig }) {
                       color={statusColor(t.currentStatus)}
                     />
                   </TableCell>
-                  <TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
+                    {/* the happy-path next step, from the shared transition map — one click, or
+                        the modal when the step moves gold and needs its brand split */}
+                    {next && (
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        disabled={quickAdvance.isPending}
+                        onClick={() => handleQuick(t, next)}
+                        sx={{ mr: 1 }}
+                      >
+                        {config.statusLabel(next)}
+                      </Button>
+                    )}
                     <Button component={RouterLink} to={`${config.basePath}/${t.id}`} variant="text" size="small">
                       ดู
                     </Button>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
             {/* shown whenever the section has rows, even if every one is excluded — a section with
                 trades but no footer reads as a bug, where an explicit 0 plus the exclusion caption
@@ -315,6 +375,22 @@ function RetailListPage({ config }: { config: RetailUiConfig }) {
           {renderSection("ทอง 96.5%", nineSixFive, "gb")}
           {renderSection("ทอง 99.9%", nineNineNine, "kg")}
         </>
+      )}
+
+      {/* keyed by row so a half-typed split never carries over from one trade to the next */}
+      {stockMove && (
+        <QuickStockMoveDialog
+          key={stockMove.id}
+          title={config.statusLabel(config.inventoryStatus)}
+          summary={`${branchName(stockMove.branchCode)} · ${productTypeName(stockMove.productTypeId)} · ${formatWeight(displayWeight(stockMoveIs999, stockMove))} ${weightUnitLabel(stockMoveIs999)}`}
+          helper={config.splitHelper}
+          totalWeightGb={stockMove.weightGb}
+          brandApplicable={!stockMoveIs999}
+          isPending={quickAdvance.isPending}
+          error={stockMoveError}
+          onClose={() => setStockMove(null)}
+          onSubmit={submitStockMove}
+        />
       )}
     </Container>
   );

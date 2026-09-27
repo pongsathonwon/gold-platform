@@ -5,19 +5,27 @@ import {
   TableHead, TableRow, Paper, Chip, Box, TextField, MenuItem, Button, Alert, CircularProgress,
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
 } from "@mui/material";
-import { WHOLE_SELL_STATUSES, shiftBusinessDate, todayBusinessDate } from "@gold-platform/types";
+import {
+  WHOLE_SELL_INVENTORY_STATUS, WHOLE_SELL_STATUSES, shiftBusinessDate, todayBusinessDate,
+} from "@gold-platform/types";
 import { BusinessDatePicker } from "../components/BusinessDatePicker";
 import { useWholesaleSellList, type WholeSellTransaction } from "../hooks/useWholesaleSell";
-import { useConfirmAllWholesaleSell } from "../hooks/useWholesaleSellMutations";
+import {
+  useConfirmAllWholesaleSell, useQuickAdvanceWholesaleSellStatus,
+} from "../hooks/useWholesaleSellMutations";
 import { useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
 import { useAuth } from "../auth/AuthContext";
+import { QuickStockMoveDialog, type QuickStockMoveInput } from "../components/QuickStockMoveDialog";
 import { splitByPurity } from "../utils/inventoryVolume";
+import { displayWeight, isInvestmentGrade, weightUnitLabel } from "../utils/purityDisplay";
 import { downloadWorkbook } from "../utils/excel";
 import {
   buildTransactionWorkbook, transactionFileName, SELL_REPORT, type TransactionExportRow,
 } from "../utils/transactionExport";
-import { countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeSellStatus";
+import {
+  countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, happyNext, statusColor, statusLabel,
+} from "../utils/wholeSellStatus";
 
 // 96.5% is dealt in gold baht, 99.9% in kilograms — the same split the inventory pages use.
 // Sectioning by purity is what lets each table state one unit in its header instead of showing
@@ -65,6 +73,10 @@ export function WholesaleSellListPage() {
 
   const { data, isPending, isError, error } = useWholesaleSellList(filter);
   const confirmAll = useConfirmAllWholesaleSell();
+  const quickAdvance = useQuickAdvanceWholesaleSellStatus();
+  // the row whose stock-moving step is open in the modal; null when it is closed
+  const [stockMove, setStockMove] = useState<WholeSellTransaction | null>(null);
+  const [stockMoveError, setStockMoveError] = useState<string | null>(null);
   const { showToast } = useToast();
   const { isAdmin, user } = useAuth();
   const { data: suppliersRes } = useSuppliers();
@@ -86,6 +98,46 @@ export function WholesaleSellListPage() {
   const createdCount = (data ?? []).filter((t) => t.currentStatus === "CREATED").length;
 
   const windowLabel = `${formatBusinessDate(from)} – ${formatBusinessDate(to)}`;
+
+  /**
+   * The row's one-step advance. Confirming, shipping and recording the payment are a click — the
+   * quick path is the happy case, so PAID goes up without a settledAmount, meaning the buyer paid
+   * what was agreed. PACKED opens the modal instead: it is the move that takes gold out of a pool,
+   * and the moment the stamps handed over are decided.
+   */
+  function handleQuick(t: WholeSellTransaction, next: string) {
+    if (next === WHOLE_SELL_INVENTORY_STATUS) {
+      setStockMoveError(null);
+      setStockMove(t);
+      return;
+    }
+    quickAdvance.mutate(
+      { id: t.id, toStatus: next },
+      {
+        onSuccess: () => showToast(`เปลี่ยนสถานะเป็น ${statusLabel(next)} แล้ว`),
+        onError: (err) => showToast(err instanceof Error ? err.message : "ทำรายการไม่สำเร็จ", "error"),
+      },
+    );
+  }
+
+  // a pool short of stock is a 422 with the deal still CONFIRMED; it stays in the dialog so the
+  // split can be redrawn from a pool that has it
+  function submitStockMove(input: QuickStockMoveInput) {
+    if (!stockMove) return;
+    setStockMoveError(null);
+    quickAdvance.mutate(
+      { id: stockMove.id, toStatus: WHOLE_SELL_INVENTORY_STATUS, ...input },
+      {
+        onSuccess: () => {
+          showToast(`เปลี่ยนสถานะเป็น ${statusLabel(WHOLE_SELL_INVENTORY_STATUS)} แล้ว`);
+          setStockMove(null);
+        },
+        onError: (err) => setStockMoveError(err instanceof Error ? err.message : "ทำรายการไม่สำเร็จ"),
+      },
+    );
+  }
+
+  const stockMoveIs999 = stockMove ? isInvestmentGrade(purityById.get(stockMove.purityId)) : false;
 
   /**
    * The sweep is not scoped to what is on screen — it confirms *every* transaction still in
@@ -183,6 +235,7 @@ export function WholesaleSellListPage() {
                 const agreed = agreedWeight(t, unit);
                 const contested = contestedWeight(t, unit);
                 const mismatch = contested !== null && contested !== agreed;
+                const next = happyNext(t.currentStatus);
 
                 return (
                   <TableRow key={t.id} hover>
@@ -207,7 +260,20 @@ export function WholesaleSellListPage() {
                     <TableCell>
                       <Chip size="small" label={statusLabel(t.currentStatus)} color={statusColor(t.currentStatus)} />
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ whiteSpace: "nowrap" }}>
+                      {/* the happy-path next step, from the shared transition map — one click, or
+                          the modal when the step moves gold and needs its brand split */}
+                      {next && (
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          disabled={quickAdvance.isPending}
+                          onClick={() => handleQuick(t, next)}
+                          sx={{ mr: 1 }}
+                        >
+                          {statusLabel(next)}
+                        </Button>
+                      )}
                       <Button component={RouterLink} to={`/wholesale-sell/${t.id}`} variant="text" size="small">
                         ดู
                       </Button>
@@ -338,6 +404,23 @@ export function WholesaleSellListPage() {
           {renderSection("ทอง 96.5%", nineSixFive, "gb")}
           {renderSection("ทอง 99.9%", nineNineNine, "kg")}
         </>
+      )}
+
+      {/* keyed by row so a half-typed split never carries over from one deal to the next */}
+      {stockMove && (
+        <QuickStockMoveDialog
+          key={stockMove.id}
+          title={`เปลี่ยนสถานะเป็น ${statusLabel(WHOLE_SELL_INVENTORY_STATUS)}`}
+          summary={`${supplierName(stockMove.supplierId)} · ${productTypeName(stockMove.productTypeId)} · ${formatWeight(displayWeight(stockMoveIs999, stockMove))} ${weightUnitLabel(stockMoveIs999)}`}
+          helper="ระบุน้ำหนักตามยี่ห้อที่เบิกออกจากคลัง — ส่วนที่ไม่ระบุจะเบิกจากคลังอื่นๆ"
+          totalWeightGb={stockMove.weightGb}
+          brandApplicable={!stockMoveIs999}
+          supplierId={stockMove.supplierId}
+          isPending={quickAdvance.isPending}
+          error={stockMoveError}
+          onClose={() => setStockMove(null)}
+          onSubmit={submitStockMove}
+        />
       )}
 
       {/* The count on the button is what is visible under the current filter; the sweep is not

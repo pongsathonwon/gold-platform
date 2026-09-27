@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  buyCountsTowardTotal, buyNextStatuses, buyRequiresNote, buyStatusLabel,
-  sellCountsTowardTotal, sellNextStatuses, sellRequiresNote, sellStatusLabel,
+  buyCountsTowardTotal, buyHappyNext, buyNextStatuses, buyRequiresNote, buyStatusLabel,
+  sellCountsTowardTotal, sellHappyNext, sellNextStatuses, sellRequiresNote, sellStatusLabel,
   statusColor,
 } from "./retailStatus";
 
@@ -112,5 +112,25 @@ describe("labels and colours", () => {
     expect(statusColor("STOCKED")).toBe("success");
     expect(statusColor("PACKED")).toBe("info");
     expect(statusColor("CANCELLED")).toBe("error");
+  });
+});
+
+describe("the list's quick advance", () => {
+  it("moves a confirmed write-up onto the books, and a confirmed sale out of the vault", () => {
+    expect(buyHappyNext("CONFIRMED")).toBe("STOCKED");
+    expect(sellHappyNext("CONFIRMED")).toBe("PACKED");
+  });
+
+  it("never picks the void", () => {
+    // CANCELLED is a legal move from CONFIRMED, but a quick step is for the happy path only
+    expect(buyHappyNext("CONFIRMED")).not.toBe("CANCELLED");
+    expect(sellHappyNext("CONFIRMED")).not.toBe("CANCELLED");
+  });
+
+  it("offers nothing once the gold has moved, or on a voided record", () => {
+    expect(buyHappyNext("STOCKED")).toBeNull();
+    expect(sellHappyNext("PACKED")).toBeNull();
+    expect(buyHappyNext("CANCELLED")).toBeNull();
+    expect(sellHappyNext("CANCELLED")).toBeNull();
   });
 });

@@ -5,19 +5,27 @@ import {
   TableHead, TableRow, Paper, Chip, Box, TextField, MenuItem, Button, Alert, CircularProgress,
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
 } from "@mui/material";
-import { WHOLE_BUY_STATUSES, shiftBusinessDate, todayBusinessDate } from "@gold-platform/types";
+import {
+  WHOLE_BUY_INVENTORY_STATUS, WHOLE_BUY_STATUSES, shiftBusinessDate, todayBusinessDate,
+} from "@gold-platform/types";
 import { BusinessDatePicker } from "../components/BusinessDatePicker";
 import { useWholesaleBuyList, type WholeBuyTransaction } from "../hooks/useWholesaleBuy";
-import { useConfirmAllWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
+import {
+  useConfirmAllWholesaleBuy, useQuickAdvanceWholesaleBuyStatus, useQuickReceiveStockWholesaleBuy,
+} from "../hooks/useWholesaleBuyMutations";
 import { useProductTypes, usePurities, useSuppliers } from "../hooks/useMasterData";
 import { useToast } from "../components/ToastContext";
 import { useAuth } from "../auth/AuthContext";
+import { QuickStockMoveDialog, type QuickStockMoveInput } from "../components/QuickStockMoveDialog";
 import { splitByPurity } from "../utils/inventoryVolume";
+import { displayWeight, isInvestmentGrade, weightUnitLabel } from "../utils/purityDisplay";
 import { downloadWorkbook } from "../utils/excel";
 import {
   buildTransactionWorkbook, transactionFileName, BUY_REPORT, type TransactionExportRow,
 } from "../utils/transactionExport";
-import { countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, statusColor, statusLabel } from "../utils/wholeBuyStatus";
+import {
+  countsTowardTotal, formatBusinessDate, formatNumber, formatWeight, happyNext, statusColor, statusLabel,
+} from "../utils/wholeBuyStatus";
 
 // 96.5% is ordered in gold baht, 99.9% in kilograms — the same split the inventory pages use.
 // Sectioning by purity is what lets each table state one unit in its header instead of showing
@@ -42,6 +50,13 @@ const amountOf = (t: WholeBuyTransaction) => t.actualAmount ?? t.totalAmount;
 // the window to it would show almost nothing on a Friday morning.
 const DEFAULT_WINDOW_DAYS = 7;
 
+// The quick step from PAID. `happyNext` says RECEIVED, but receiving and stocking are one moment
+// on the floor (§9b), so the list offers the combined move the detail page does — and since it
+// is the move that puts gold in a pool, it goes through the modal for its brand split.
+const RECEIVE_STOCK_LABEL = "รับของและเข้าสต๊อก";
+const quickLabel = (next: string) => (next === "RECEIVED" ? RECEIVE_STOCK_LABEL : statusLabel(next));
+const movesStock = (next: string) => next === "RECEIVED" || next === WHOLE_BUY_INVENTORY_STATUS;
+
 export function WholesaleBuyListPage() {
   const [currentStatus, setCurrentStatus] = useState("");
   const [supplierId, setSupplierId] = useState("");
@@ -61,6 +76,12 @@ export function WholesaleBuyListPage() {
 
   const { data, isPending, isError, error } = useWholesaleBuyList(filter);
   const confirmAll = useConfirmAllWholesaleBuy();
+  const quickAdvance = useQuickAdvanceWholesaleBuyStatus();
+  const quickReceiveStock = useQuickReceiveStockWholesaleBuy();
+  const quickBusy = quickAdvance.isPending || quickReceiveStock.isPending;
+  // the row whose stock-moving step is open in the modal; null when it is closed
+  const [stockMove, setStockMove] = useState<WholeBuyTransaction | null>(null);
+  const [stockMoveError, setStockMoveError] = useState<string | null>(null);
   const { showToast } = useToast();
   const { isAdmin, user } = useAuth();
   const { data: suppliersRes } = useSuppliers();
@@ -82,6 +103,50 @@ export function WholesaleBuyListPage() {
   const createdCount = (data ?? []).filter((t) => t.currentStatus === "CREATED").length;
 
   const windowLabel = `${formatBusinessDate(from)} – ${formatBusinessDate(to)}`;
+
+  /**
+   * The row's one-step advance. Confirming and recording a payment are a click — the quick path
+   * is the happy case, so PAID goes up without a settledAmount, meaning the payment matched. The
+   * two routes into stock open the modal instead: they are the moment the brand is known.
+   */
+  function handleQuick(t: WholeBuyTransaction, next: string) {
+    if (movesStock(next)) {
+      setStockMoveError(null);
+      setStockMove(t);
+      return;
+    }
+    quickAdvance.mutate(
+      { id: t.id, toStatus: next },
+      {
+        onSuccess: () => showToast(`เปลี่ยนสถานะเป็น ${statusLabel(next)} แล้ว`),
+        onError: (err) => showToast(err instanceof Error ? err.message : "ทำรายการไม่สำเร็จ", "error"),
+      },
+    );
+  }
+
+  // a refusal stays in the dialog so the split can be corrected in place
+  function submitStockMove(input: QuickStockMoveInput) {
+    if (!stockMove) return;
+    setStockMoveError(null);
+    const onSuccess = () => {
+      showToast(`เปลี่ยนสถานะเป็น ${statusLabel(WHOLE_BUY_INVENTORY_STATUS)} แล้ว`);
+      setStockMove(null);
+    };
+    const onError = (err: unknown) =>
+      setStockMoveError(err instanceof Error ? err.message : "ทำรายการไม่สำเร็จ");
+
+    if (happyNext(stockMove.currentStatus) === "RECEIVED") {
+      quickReceiveStock.mutate({ id: stockMove.id, ...input }, { onSuccess, onError });
+    } else {
+      quickAdvance.mutate(
+        { id: stockMove.id, toStatus: WHOLE_BUY_INVENTORY_STATUS, ...input },
+        { onSuccess, onError },
+      );
+    }
+  }
+
+  const stockMoveIs999 = stockMove ? isInvestmentGrade(purityById.get(stockMove.purityId)) : false;
+  const stockMoveCombined = stockMove ? happyNext(stockMove.currentStatus) === "RECEIVED" : false;
 
   /**
    * The sweep is not scoped to what is on screen — it confirms *every* transaction still in
@@ -179,6 +244,7 @@ export function WholesaleBuyListPage() {
                 const delivered = deliveredWeight(t, unit);
                 const ordered = orderedWeight(t, unit);
                 const short = t.actualWeightGb !== null && delivered !== ordered;
+                const next = happyNext(t.currentStatus);
 
                 return (
                   <TableRow key={t.id} hover>
@@ -202,7 +268,20 @@ export function WholesaleBuyListPage() {
                     <TableCell>
                       <Chip size="small" label={statusLabel(t.currentStatus)} color={statusColor(t.currentStatus)} />
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ whiteSpace: "nowrap" }}>
+                      {/* the happy-path next step, from the shared transition map — one click, or
+                          the modal when the step moves gold and needs its brand split */}
+                      {next && (
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          disabled={quickBusy}
+                          onClick={() => handleQuick(t, next)}
+                          sx={{ mr: 1 }}
+                        >
+                          {quickLabel(next)}
+                        </Button>
+                      )}
                       <Button component={RouterLink} to={`/wholesale-buy/${t.id}`} variant="text" size="small">
                         ดู
                       </Button>
@@ -333,6 +412,27 @@ export function WholesaleBuyListPage() {
           {renderSection("ทอง 96.5%", nineSixFive, "gb")}
           {renderSection("ทอง 99.9%", nineNineNine, "kg")}
         </>
+      )}
+
+      {/* keyed by row so a half-typed split never carries over from one order to the next */}
+      {stockMove && (
+        <QuickStockMoveDialog
+          key={stockMove.id}
+          title={stockMoveCombined ? RECEIVE_STOCK_LABEL : `เปลี่ยนสถานะเป็น ${statusLabel(WHOLE_BUY_INVENTORY_STATUS)}`}
+          summary={`${supplierName(stockMove.supplierId)} · ${productTypeName(stockMove.productTypeId)} · ${formatWeight(displayWeight(stockMoveIs999, stockMove))} ${weightUnitLabel(stockMoveIs999)}`}
+          helper={
+            stockMoveCombined
+              ? "เข้าสต๊อกตามน้ำหนักที่สั่ง — หากของไม่ตรงกับเอกสาร ให้ปฏิเสธด้วย \"ตีกลับผู้ขาย\" จากหน้ารายละเอียดแทน"
+              : "ระบุน้ำหนักตามยี่ห้อที่ได้รับ — ส่วนที่ไม่ระบุจะเข้าคลังอื่นๆ"
+          }
+          totalWeightGb={stockMove.weightGb}
+          brandApplicable={!stockMoveIs999}
+          supplierId={stockMove.supplierId}
+          isPending={quickBusy}
+          error={stockMoveError}
+          onClose={() => setStockMove(null)}
+          onSubmit={submitStockMove}
+        />
       )}
 
       {/* The count on the button is what is visible under the current filter; the sweep is not

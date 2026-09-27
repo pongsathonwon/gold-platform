@@ -602,6 +602,46 @@ change — someone who has framed an interesting week should not lose it by look
 - Everything is computed client-side from the four list endpoints. **No summary endpoint exists** —
   see the note in `apps/api/CLAUDE.md`.
 
+## 9i. Quick advance on the four lists — `utils/happyPath.ts` + `components/QuickStockMoveDialog.tsx`
+
+Every row on `/wholesale-buy`, `/wholesale-sell`, `/retail-buy` and `/retail-sell` carries one button
+beside `ดู`: the happy-path next step. It is the operator's worklist move — confirm, pay, pack, ship,
+stock — without opening the detail page. The detail page is untouched and still offers every exit.
+
+| File | Role |
+| --- | --- |
+| `utils/happyPath.ts` | `happyNextStatus(statuses, transitions, current)` — the one rule, generic over a domain |
+| `utils/wholeBuyStatus.ts` / `wholeSellStatus.ts` / `retailStatus.ts` | `happyNext()` / `buyHappyNext()` / `sellHappyNext()` — the rule bound to each domain's shared map |
+| `components/QuickStockMoveDialog.tsx` | the modal for the one step that moves stock: brand split + note, keyed by row |
+| `hooks/use*Mutations.ts` | `useQuick*()` — the same status calls with the row id in the variables |
+
+- **The step comes from the shared transition map, by one rule**: the row's current status must be
+  `happy`, and the step is the first `happy` move the map allows from it. Nothing is hand-listed
+  per domain. The walks are pinned per domain in the status tests — `CREATED → CONFIRMED → PAID →
+  RECEIVED → STOCKED`, `CREATED → CONFIRMED → PACKED → SHIPPED → PAID`, `CONFIRMED → STOCKED` /
+  `PACKED` — so a reordered map entry fails a test rather than silently changing the button.
+- **A row in a failure branch gets no quick button.** `PAYMENT_FAILED → PAID` and `RETURNED →
+  RECEIVED` are legal, but each is a decision with a reason to record, and the detail page is where
+  every exit is offered with its note field. The void is never a quick step, for the same reason.
+- **A step that does not move gold is one click.** The row already holds everything the server
+  needs; the quick path is the happy case, so `PAID` goes up without a `settledAmount` (the payment
+  matched). A toast confirms or reports the refusal. Every quick button on the page disables while
+  one request is in flight.
+- **A step that moves gold opens the modal, on all four lists.** `STOCKED` / `PACKED` — and buy's
+  combined `รับของและเข้าสต๊อก` from `PAID`, offered here as on the detail page because receiving and
+  stocking are one moment on the floor (§9b) — are the moment the brand is known, so the modal
+  collects the split with the same `<BrandSplitFields>` the detail dialogs use (wholesale in supplier
+  mode, retail in all-brands mode, §9d) plus a note. It is also the one step that changes the
+  balance, so it stays a confirm even on 99.9%, where there is no split to type. A refusal — a pool
+  short of stock on a sell, which the API returns as a 422 with the deal still `CONFIRMED` — stays in
+  the dialog so the split can be redrawn. The dialog is mounted `key={row.id}` so a half-typed split
+  never carries from one trade to the next.
+- **The list mutations take the id in the variables** (`useQuickAdvanceWholesaleBuyStatus()` and
+  friends) rather than as a hook argument: a list does not know the row until the click, and a hook
+  cannot be called per row. The per-id hooks the detail pages use share the request function, so the
+  two cannot drift. The retail config carries `happyNext` and `useQuickAdvance` beside the existing
+  `nextStatuses` and `useAdvance`.
+
 ## 10. Current State
 
 The web app is a **scaffold**. Only one component exists (`UserList.tsx` — a user CRUD demo).
