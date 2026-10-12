@@ -3,7 +3,7 @@ import { Box, Container, Tab, Tabs, Typography, Alert, CircularProgress } from "
 import { Link as RouterLink, Outlet, useLocation, useOutletContext } from "react-router-dom";
 import { startOfBusinessMonth, todayBusinessDate } from "@gold-platform/types";
 import { BusinessDatePicker } from "../../components/BusinessDatePicker";
-import { useTrading } from "../../hooks/useTrading";
+import { useTransactionRows } from "../../hooks/useTransactionRows";
 import type { TradingRow } from "../../utils/trading";
 import { formatBusinessDate } from "../../utils/format";
 
@@ -17,19 +17,23 @@ import { formatBusinessDate } from "../../utils/format";
  *
  * It also means the window survives a tab change. Someone who has framed an interesting week should
  * not lose it by looking at that week a second way.
+ *
+ * Named กำไรขาดทุน / P&L, not "trading" (it was ภาพรวมการค้า at `/trading`, which still redirects
+ * here). Every figure on these tabs is a result over a window — what a baht was bought and sold at,
+ * what cash came in net — and "trading" read as a live position, which is the gold balance's job.
  */
 
 const tabs = [
-  { label: "ส่วนต่างราคา", to: "/trading" },
-  { label: "สรุปรายงวด", to: "/trading/periods" },
-  { label: "รายการทั้งหมด", to: "/trading/ledger" },
+  { label: "ส่วนต่างราคา", to: "/profit-loss" },
+  { label: "สรุปรายงวด", to: "/profit-loss/periods" },
+  { label: "รายการทั้งหมด", to: "/profit-loss/ledger" },
 ];
 
 // Opens month-to-date: the 1st of the current month through today.
 //
 // This is the one window in the app that is not the last seven days, and the reader is why. The
 // list pages are worklists — an operator is looking for a deal they handled this week. These three
-// views answer "how is the business trading", which is a question asked against the month someone
+// views answer "how is the business doing", which is a question asked against the month someone
 // is being measured on, and a rolling week answers it about a period nobody reports on.
 //
 // Still deliberately not snapped to the Fri–Thu งวด: that bucket is a management convention, and
@@ -39,7 +43,7 @@ const tabs = [
 // A window that starts on the 1st is short on the 1st — that is the honest state of the month, and
 // both ends stay editable for anyone who wants a longer run.
 
-export interface TradingContext {
+export interface ProfitLossContext {
   rows: TradingRow[];
   from: string;
   to: string;
@@ -48,24 +52,24 @@ export interface TradingContext {
   isNineNineNine: (purityId: string) => boolean;
 }
 
-export const useTradingContext = () => useOutletContext<TradingContext>();
+export const useProfitLossContext = () => useOutletContext<ProfitLossContext>();
 
-export function TradingLayout() {
+export function ProfitLossLayout() {
   const { pathname } = useLocation();
   const [from, setFrom] = useState(() => startOfBusinessMonth(todayBusinessDate()));
   const [to, setTo] = useState(() => todayBusinessDate());
 
-  const { rows, productTypeName, isNineNineNine, isPending, isError, error } = useTrading({ from, to });
+  const { rows, productTypeName, isNineNineNine, isPending, isError, error } = useTransactionRows({ from, to });
 
   const currentTab = tabs.find((tab) => tab.to === pathname)?.to ?? tabs[0]!.to;
   const windowLabel = `${formatBusinessDate(from)} – ${formatBusinessDate(to)}`;
 
-  const context: TradingContext = { rows, from, to, windowLabel, productTypeName, isNineNineNine };
+  const context: ProfitLossContext = { rows, from, to, windowLabel, productTypeName, isNineNineNine };
 
   return (
     <Container sx={{ py: 4 }}>
       <Typography variant="h2" sx={{ mb: 1 }}>
-        ภาพรวมการค้า
+        กำไรขาดทุน (P&amp;L)
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         ซื้อ–ขาย ทั้งปลีกและส่ง ในช่วงเวลาเดียวกัน

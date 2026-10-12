@@ -271,6 +271,17 @@ layout so they can be compared on identical data.
 in/out columns were dropped from สรุปรายงวด — the per-purity nets are the actual spec — and the
 ledger footer now splits on both axes. Pinned by `trading.test.ts` → *"the two pools are never mixed"*.
 
+# P&L rename + gold balance (2026-10-12)
+
+- [x] **ภาพรวมการค้า → กำไรขาดทุน (P&L).** `/trading` → `/profit-loss` (old path redirects),
+  `pages/trading/Trading*` → `pages/profit-loss/ProfitLoss*`, `useTrading` → `useTransactionRows`.
+  "Trading" read as a live position; every figure there is a result over a window.
+- [x] **`/gold-balance` งบดุลทองคำ** — on hand (inventory) + incoming (open buys) − owed out (open
+  sells not yet packed) = net gold position, per purity, each bucket grouped by status. Packed /
+  shipped sells and returned buys are a memo below the net: their gold is already off the books
+  and what is open is cash. Every status is placed explicitly; the test fails on an unplaced one.
+  See `apps/web/CLAUDE.md` §9j.
+
 ## Follow-ups not done
 
 - **BU has not picked a layout.** All three ship; whichever loses should be deleted rather than left

@@ -7,7 +7,8 @@ import {
   fromRetail, fromWholesaleBuy, fromWholesaleSell, type TradingRow,
 } from "../utils/trading";
 
-export interface TradingWindow {
+/** Business days bounding the window, inclusive. An empty end leaves that side open. */
+export interface TransactionWindow {
   from: string;
   to: string;
 }
@@ -16,14 +17,15 @@ export interface TradingWindow {
  * One window, read across all four transaction domains.
  *
  * The four list endpoints are queried in parallel and their rows normalised into `TradingRow`, which
- * is where every domain rule is applied. Everything downstream — all three trading views — reads
- * this one array, so they cannot show different numbers for the same week.
+ * is where every domain rule is applied. Everything downstream reads this one array — the three P&L
+ * views over a window, and the gold balance over all of history (both ends empty) — so they cannot
+ * show different numbers for the same transaction.
  *
  * There is no combined endpoint to call instead: none exists, and the per-domain queries are already
  * cached by the list pages under the same keys, so opening this page after browsing a domain costs
  * nothing extra.
  */
-export function useTrading({ from, to }: TradingWindow) {
+export function useTransactionRows({ from, to }: TransactionWindow) {
   const filter = useMemo(
     () => ({ ...(from ? { from } : {}), ...(to ? { to } : {}) }),
     [from, to],

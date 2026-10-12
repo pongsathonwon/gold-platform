@@ -4,7 +4,7 @@ import {
   type TradingDomain, type TradingRow, type TradingSummary,
 } from "../../utils/trading";
 import { formatNumber, formatWeight } from "../../utils/format";
-import { useTradingContext } from "./TradingLayout";
+import { useProfitLossContext } from "./ProfitLossLayout";
 
 /**
  * Approach A — the 2×2.
@@ -198,8 +198,8 @@ function Section({ title, rows, unit, windowLabel }: {
   );
 }
 
-export function TradingSpreadPage() {
-  const { rows, windowLabel, isNineNineNine } = useTradingContext();
+export function ProfitLossSpreadPage() {
+  const { rows, windowLabel, isNineNineNine } = useProfitLossContext();
   const { nineSixFive, nineNineNine } = splitPurity(rows, isNineNineNine);
 
   return (
