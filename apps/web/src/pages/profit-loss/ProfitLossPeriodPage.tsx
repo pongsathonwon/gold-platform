@@ -3,7 +3,7 @@ import {
 } from "@mui/material";
 import { byPeriod, netPosition, splitPurity, type TradingRow } from "../../utils/trading";
 import { formatNumber, formatWeight } from "../../utils/format";
-import { useTradingContext } from "./TradingLayout";
+import { useProfitLossContext } from "./ProfitLossLayout";
 
 /**
  * Approach B — one row per Fri–Thu งวด, the model root `CONTEXT.md` describes.
@@ -41,8 +41,8 @@ function NetCell({ value, kind, suffix }: { value: number; kind: "weight" | "mon
   );
 }
 
-export function TradingPeriodPage() {
-  const { rows, isNineNineNine } = useTradingContext();
+export function ProfitLossPeriodPage() {
+  const { rows, isNineNineNine } = useProfitLossContext();
   const periods = byPeriod(rows);
 
   const periodRow = (periodRows: TradingRow[]) => {

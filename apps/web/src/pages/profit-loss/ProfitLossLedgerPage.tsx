@@ -7,7 +7,7 @@ import {
   domainLabel, summarise, type TradingDomain, type TradingRow,
 } from "../../utils/trading";
 import { formatBusinessDate, formatNumber, formatWeight } from "../../utils/format";
-import { useTradingContext } from "./TradingLayout";
+import { useProfitLossContext } from "./ProfitLossLayout";
 
 /**
  * Approach C — every transaction from all four domains, newest first.
@@ -30,8 +30,8 @@ const DOMAINS: TradingDomain[] = ["RETAIL_BUY", "RETAIL_SELL", "WHOLESALE_BUY", 
 const chipColor = (row: TradingRow): "warning" | "success" =>
   row.direction === "in" ? "warning" : "success";
 
-export function TradingLedgerPage() {
-  const { rows, windowLabel, productTypeName, isNineNineNine } = useTradingContext();
+export function ProfitLossLedgerPage() {
+  const { rows, windowLabel, productTypeName, isNineNineNine } = useProfitLossContext();
   const [domain, setDomain] = useState<"" | TradingDomain>("");
 
   const filtered = domain ? rows.filter((r) => r.domain === domain) : rows;

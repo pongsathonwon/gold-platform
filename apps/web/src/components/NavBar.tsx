@@ -6,8 +6,10 @@ import { useAuth } from "../auth/AuthContext";
 // Buy beside buy and sell beside sell: the comparison the manager is here to make runs across the
 // wholesale/retail line, not along it.
 const navLinks = [
-  // first, because it is the one screen that reads across all four domains rather than into one
-  { to: "/trading", label: "ภาพรวมการค้า" },
+  // first, because these are the two screens that read across all four domains rather than into
+  // one: what the business made over a window, and what gold it holds and is owed right now
+  { to: "/profit-loss", label: "กำไรขาดทุน" },
+  { to: "/gold-balance", label: "งบดุลทองคำ" },
   { to: "/inventory", label: "คลังทองคำแท่ง" },
   { to: "/wholesale-buy", label: "ซื้อส่ง" },
   { to: "/wholesale-sell", label: "ขายส่ง" },

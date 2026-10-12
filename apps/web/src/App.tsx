@@ -14,7 +14,7 @@ import { LoginPage } from "./pages/LoginPage";
  * Every page below the login screen is loaded on demand.
  *
  * The whole app used to be one 739 KB script, so an operator opening the retail list downloaded
- * both wholesale detail pages, all three trading views and the three admin adjustment forms before
+ * both wholesale detail pages, all three P&L views and the three admin adjustment forms before
  * anything rendered. Nobody visits more than a handful of these in a session, and the ADMIN-only
  * pages are dead weight for the operators who make up most of the logins.
  *
@@ -52,16 +52,17 @@ const RetailBuyCreatePage = lazyPage(() => import("./pages/retail/RetailCreatePa
 const RetailSellCreatePage = lazyPage(() => import("./pages/retail/RetailCreatePage"), "RetailSellCreatePage");
 const RetailBuyDetailPage = lazyPage(() => import("./pages/retail/RetailDetailPage"), "RetailBuyDetailPage");
 const RetailSellDetailPage = lazyPage(() => import("./pages/retail/RetailDetailPage"), "RetailSellDetailPage");
-const TradingLayout = lazyPage(() => import("./pages/trading/TradingLayout"), "TradingLayout");
-const TradingSpreadPage = lazyPage(() => import("./pages/trading/TradingSpreadPage"), "TradingSpreadPage");
-const TradingPeriodPage = lazyPage(() => import("./pages/trading/TradingPeriodPage"), "TradingPeriodPage");
-const TradingLedgerPage = lazyPage(() => import("./pages/trading/TradingLedgerPage"), "TradingLedgerPage");
+const ProfitLossLayout = lazyPage(() => import("./pages/profit-loss/ProfitLossLayout"), "ProfitLossLayout");
+const ProfitLossSpreadPage = lazyPage(() => import("./pages/profit-loss/ProfitLossSpreadPage"), "ProfitLossSpreadPage");
+const ProfitLossPeriodPage = lazyPage(() => import("./pages/profit-loss/ProfitLossPeriodPage"), "ProfitLossPeriodPage");
+const ProfitLossLedgerPage = lazyPage(() => import("./pages/profit-loss/ProfitLossLedgerPage"), "ProfitLossLedgerPage");
+const GoldBalancePage = lazyPage(() => import("./pages/GoldBalancePage"), "GoldBalancePage");
 
 /**
  * Wraps one route element in its own Suspense boundary.
  *
  * Per route rather than once around `<Routes>`: a single outer boundary would blank the layout
- * chrome — the inventory and trading tab bars — every time someone switched tabs underneath it,
+ * chrome — the inventory and P&L tab bars — every time someone switched tabs underneath it,
  * because the nearest boundary above the suspending child would be outside the layout. Here the
  * layout stays mounted and only the panel it wraps shows the spinner.
  */
@@ -140,20 +141,26 @@ export function App() {
                 <Route path="/retail-sell" element={page(<RetailSellListPage />)} />
                 <Route path="/retail-sell/new" element={page(<RetailSellCreatePage />)} />
                 <Route path="/retail-sell/:id" element={page(<RetailSellDetailPage />)} />
-                {/* Three readings of one window, offered side by side because BU has not chosen
-                    between them. The layout owns the window and the data so the tabs cannot
-                    disagree — which is the whole point of showing all three. */}
                 {/* Account administration. Behind AdminGuard because every route it calls is
                     ADMIN-only on the API — issuing a login is how someone gets the ability to
                     move gold, so it belongs with the adjustments rather than with the day's work. */}
                 <Route element={<AdminGuard />}>
                   <Route path="/users" element={page(<UsersPage />)} />
                 </Route>
-                <Route path="/trading" element={page(<TradingLayout />)}>
-                  <Route index element={page(<TradingSpreadPage />)} />
-                  <Route path="periods" element={page(<TradingPeriodPage />)} />
-                  <Route path="ledger" element={page(<TradingLedgerPage />)} />
+                {/* Three readings of one window, offered side by side because BU has not chosen
+                    between them. The layout owns the window and the data so the tabs cannot
+                    disagree — which is the whole point of showing all three. */}
+                <Route path="/profit-loss" element={page(<ProfitLossLayout />)}>
+                  <Route index element={page(<ProfitLossSpreadPage />)} />
+                  <Route path="periods" element={page(<ProfitLossPeriodPage />)} />
+                  <Route path="ledger" element={page(<ProfitLossLedgerPage />)} />
                 </Route>
+                {/* The old name, kept so bookmarks land somewhere. Sub-tabs fall back to the first
+                    one rather than being mapped: three redirects for links nobody shares. */}
+                <Route path="/trading/*" element={<Navigate to="/profit-loss" replace />} />
+                {/* A point-in-time position, not a window — so it is its own page rather than a
+                    fourth tab under the P&L date pickers it would have to ignore. */}
+                <Route path="/gold-balance" element={page(<GoldBalancePage />)} />
               </Route>
             </Routes>
           </ToastProvider>

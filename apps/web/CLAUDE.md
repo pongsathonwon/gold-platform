@@ -132,9 +132,11 @@ Routes are declared in `App.tsx`. React Router v7 with `<Routes>` / `<Route>`.
 /retail-sell              — retail sell list (protected)
 /retail-sell/new          — create form (protected)
 /retail-sell/:id          — detail (protected)
-/trading                  — all four domains over one window: ส่วนต่างราคา (protected)
-/trading/periods          — net per Fri–Thu งวด (protected)
-/trading/ledger           — combined chronological ledger (protected)
+/profit-loss              — กำไรขาดทุน: all four domains over one window, ส่วนต่างราคา (protected)
+/profit-loss/periods      — net per Fri–Thu งวด (protected)
+/profit-loss/ledger       — combined chronological ledger (protected)
+/trading/*                — redirects to /profit-loss (the old name)
+/gold-balance             — งบดุลทองคำ: on hand + incoming − owed out, as of now (protected)
 ```
 
 Retail sits behind `AuthGuard` only, matching wholesale: recording the day's counter trades is
@@ -157,7 +159,7 @@ nobody on the other side of the transaction.
 
 `App.tsx` loads all 22 route components through `React.lazy`. The app used to build as a single
 739 KB script, so an operator opening the retail list downloaded both wholesale detail pages, all
-three trading views and the three ADMIN-only adjustment forms before anything rendered.
+three P&L views and the three ADMIN-only adjustment forms before anything rendered.
 
 | | cold load, gzipped |
 | --- | --- |
@@ -169,7 +171,7 @@ Page chunks are now 2–9 KB each and arrive on navigation.
 - **`LoginPage` is deliberately eager.** It is the one route an unauthenticated visitor always
   lands on; deferring it buys a second round trip on the critical path in exchange for nothing.
 - **The Suspense boundary is per route, not once around `<Routes>`.** A single outer boundary
-  would blank the inventory and trading tab bars every time someone switched tabs beneath them,
+  would blank the inventory and P&L tab bars every time someone switched tabs beneath them,
   because the nearest boundary above the suspending child would sit outside the layout. `page()`
   wraps each element so the layout stays mounted and only the panel shows the spinner.
 - **The retail pair keeps two component types.** Two `lazy()` calls on `RetailListPage` share one
@@ -257,7 +259,7 @@ and stock loss — opens with a **วันที่ทำรายการ** f
 
 MUI X `DatePicker`, `dd/MM/yyyy`, Thai months, **พ.ศ. year**. It replaced `<input type="date">`
 everywhere — both create forms via `DynamicFormField`, both wholesale lists, the retail lists, the
-movements ledger and the `/trading` window.
+movements ledger and the `/profit-loss` window.
 
 - **It reads and writes plain `YYYY-MM-DD` in ค.ศ.**, so no call site touches `Dayjs` or the era,
   and nothing downstream — `businessDateSchema`, the export builders, the query keys — changed.
@@ -553,18 +555,23 @@ typed twice, and two status utils would be one file typed twice.
 - The void dialog requires a reason and disables its confirm button until one is typed — the API
   rejects a blank note, so this saves the round trip and says why beforehand.
 
-## 9h. `/trading` — the four domains in one window
+## 9h. `/profit-loss` (กำไรขาดทุน) — the four domains in one window
 
 Three renderings of one window, offered side by side because BU has not chosen between them.
+
+Was ภาพรวมการค้า at `/trading`, which still redirects. Renamed because every figure here is a result
+over a window — spreads and net cash — and "trading" read as a live position, which is what
+`/gold-balance` (§9j) answers. The row model in `utils/trading.ts` kept its name: a `TradingRow` is a
+trade, which is accurate, and both pages read it.
 
 | File | Role |
 | --- | --- |
 | `utils/trading.ts` | `TradingRow` + per-domain normalisers, `summarise`, `spread`, `netPosition`, `byPeriod`, `splitPurity` |
-| `hooks/useTrading.ts` | the four list queries in parallel, normalised into one array |
-| `pages/trading/TradingLayout.tsx` | owns the window and the data; tab nav; passes rows down via `Outlet` context |
-| `pages/trading/TradingSpreadPage.tsx` | **ส่วนต่างราคา** — the 2×2 (approach A) |
-| `pages/trading/TradingPeriodPage.tsx` | **สรุปรายงวด** — net per Fri–Thu งวด (approach B) |
-| `pages/trading/TradingLedgerPage.tsx` | **รายการทั้งหมด** — combined chronological (approach C) |
+| `hooks/useTransactionRows.ts` | the four list queries in parallel, normalised into one array; shared with `/gold-balance` |
+| `pages/profit-loss/ProfitLossLayout.tsx` | owns the window and the data; tab nav; passes rows down via `Outlet` context |
+| `pages/profit-loss/ProfitLossSpreadPage.tsx` | **ส่วนต่างราคา** — the 2×2 (approach A) |
+| `pages/profit-loss/ProfitLossPeriodPage.tsx` | **สรุปรายงวด** — net per Fri–Thu งวด (approach B) |
+| `pages/profit-loss/ProfitLossLedgerPage.tsx` | **รายการทั้งหมด** — combined chronological (approach C) |
 
 **The layout owns the window and the data, not the children.** Three views only tell you anything if
 they cannot disagree, so they read one normalised array. It also means the window survives a tab
@@ -641,6 +648,43 @@ stock — without opening the detail page. The detail page is untouched and stil
   cannot be called per row. The per-id hooks the detail pages use share the request function, so the
   two cannot drift. The retail config carries `happyNext` and `useQuickAdvance` beside the existing
   `nextStatuses` and `useAdvance`.
+
+## 9j. `/gold-balance` (งบดุลทองคำ) — the gold position as of now
+
+A balance sheet in metal, per purity:
+
+| | | |
+| --- | --- | --- |
+| ก. ทองในคลัง | on hand — the inventory ledger, by product type, at WAC cost | the "cash" of the sheet |
+| ข. บวก ทองรอรับเข้า | open buys: รอชำระเงิน, ชำระแล้ว รอรับของ, รับของแล้ว รอเข้าสต๊อก, retail รอเข้าสต๊อก | owed to us |
+| ค. หัก ทองค้างส่งมอบ | open sells not yet pulled from the vault (wholesale + retail) | owed by us |
+| = ฐานะทองสุทธิ | ก + ข − ค | |
+
+Each bucket lists its deals grouped by status beneath it.
+
+| File | Role |
+| --- | --- |
+| `utils/goldBalance.ts` | `BALANCE_BUCKETS` (domain × status → side), `SETTLED`, `buildGoldBalance()` |
+| `pages/GoldBalancePage.tsx` | the sheet; reads `useTransactionRows` with no window plus `useInventoryVolume` |
+
+- **The inventory ledger is the boundary, and nothing sits on both sides of it.** A deal is on the
+  sheet only until its stock move runs — a buy until `STOCKED`, a sell until `PACKED`. After that its
+  gold is already inside ก, and listing it again would count it twice. So a packed or shipped sell is
+  **not** a liability: its gold left the books at `PACKED` and what it is owed now is money.
+- **Memo below the sheet, never in the net:** wholesale sells ตัดสต๊อกแล้ว รอรับเงิน (`PACKED`,
+  `SHIPPED`, `DISPUTED`, `PAYMENT_FAILED`) and wholesale buys ตีกลับผู้ขายแล้ว รอเงินคืน (`RETURNED`).
+  Real open items, but cash rather than gold.
+- **`CREATED` counts.** It auto-confirms at the midnight sweep, so it is an edit window on a deal
+  already struck. `DELIVERY_FAILED` and `PAYMENT_FAILED` on the buy side count too — late, not dead.
+- **Every status of every domain is placed explicitly**, in a bucket or in `SETTLED`, and
+  `goldBalance.test.ts` fails if one is added without being placed. Inferring placement from
+  `terminal`/`kind` would quietly put a new state on the wrong side.
+- **No date window.** A balance is a point in time; a six-week-old order still waiting for delivery
+  is as open as this morning's, and a window would hide exactly the ones most worth seeing. It
+  therefore reads every transaction from the four list endpoints — fine at today's volumes, and the
+  first thing to move server-side (an open-only filter) if they grow.
+- **The value column is never summed across sections.** ก is book cost at WAC; ข and ค are the
+  deals' own prices. The net is weight only.
 
 ## 10. Current State
 
