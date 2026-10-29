@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "crypto";
-import { roundMoney, BrandSplit, derivePricePerGb999, todayBusinessDate } from "@gold-platform/types";
+import { roundMoney, BrandSplit, quotePurities, todayBusinessDate } from "@gold-platform/types";
 import {
     AdvanceStatusReq, allowedTransitions, BOT_CONFIRM_ACTOR, CONTESTED_STATUS,
     CreateTransactionReq, INVENTORY_STATUS, InvalidTransitionError, ListFilter,
@@ -25,10 +25,15 @@ const wholeSellLive = Layer.effect(WholeSellRepository, makeWholeSellRepository)
 const ORIGIN = 'foreign' as const
 const REFERENCE_TYPE = 'WHOLESALE_SELL'
 
-// Which of the two recorded quotes applies. 99.9% gold (unitOfMeasure 'g') is priced off the
-// 96.5% quote by the purity ratio — the operator enters one, the item's purity picks which.
+// Which of the two stored quotes is the item's own. 99.9% gold (unitOfMeasure 'g') carries its
+// deal price on pricePerGb999, 96.5% on pricePerGb965; the other column is derived.
 const applicablePrice = (unitOfMeasure: 'g' | 'gb', pricePerGb965: number, pricePerGb999: number) =>
     unitOfMeasure === 'g' ? pricePerGb999 : pricePerGb965
+
+// The entered price is the quote at the item's own purity, and the other quote is derived from
+// it. `price` is the entered figure untouched — the only thing the amount multiplies.
+const quoteFor = (unitOfMeasure: 'g' | 'gb', pricePerGb: number) =>
+    quotePurities(pricePerGb, unitOfMeasure === 'g')
 
 // --- Commands ---
 
@@ -45,9 +50,9 @@ export const createTransaction = (req: CreateTransactionReq) =>
         const { weightGb, weightGm, conversionFactor, unitOfMeasure } =
             yield* resolveQuantity(req.productTypeId, req.purityId, req.weight);
 
-        // the operator enters one price; the 99.9% quote is arithmetic off it, never re-typed
-        const pricePerGb999 = derivePricePerGb999(req.pricePerGb965);
-        const price = applicablePrice(unitOfMeasure, req.pricePerGb965, pricePerGb999);
+        // the operator enters one price, at this item's purity; the other quote is arithmetic
+        // off it, never re-typed
+        const { pricePerGb965, pricePerGb999, price } = quoteFor(unitOfMeasure, req.pricePerGb);
 
         const transaction = yield* repo.createTransaction({
             id,
@@ -57,7 +62,7 @@ export const createTransaction = (req: CreateTransactionReq) =>
             weightGb,
             weightGm,
             conversionFactor,
-            pricePerGb965: req.pricePerGb965,
+            pricePerGb965,
             pricePerGb999,
             totalAmount: roundMoney(weightGb * price),
             actualWeightGb: null,
@@ -121,11 +126,9 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
         // moved, both the resolved weights and the amount are recomputed from the merged values
         const purityId = req.purityId ?? transaction.purityId;
         const productTypeId = req.productTypeId ?? transaction.productTypeId;
-        const pricePerGb965 = req.pricePerGb965 ?? transaction.pricePerGb965;
-        const pricePerGb999 = derivePricePerGb999(pricePerGb965);
         const pricingChanged =
             req.weight !== undefined || req.purityId !== undefined || req.productTypeId !== undefined ||
-            req.pricePerGb965 !== undefined;
+            req.pricePerGb !== undefined;
 
         if (pricingChanged) {
             // when the weight itself is unchanged it still has to be re-expressed in the target
@@ -138,6 +141,13 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
             const { weightGb, weightGm, conversionFactor, unitOfMeasure } =
                 yield* resolveQuantity(productTypeId, purityId, weight);
 
+            // no new price typed: keep the stored quote at the *target* purity, so a purity
+            // change without a retyped price reprices the deal at the quote already derived for it
+            const storedPriceAtPurity =
+                applicablePrice(unitOfMeasure, transaction.pricePerGb965, transaction.pricePerGb999);
+            const { pricePerGb965, pricePerGb999, price } =
+                quoteFor(unitOfMeasure, req.pricePerGb ?? storedPriceAtPurity);
+
             fields.purityId = purityId;
             fields.productTypeId = productTypeId;
             fields.weightGb = weightGb;
@@ -145,7 +155,7 @@ export const updateTransaction = (req: UpdateTransactionReq) =>
             fields.conversionFactor = conversionFactor;
             fields.pricePerGb965 = pricePerGb965;
             fields.pricePerGb999 = pricePerGb999;
-            fields.totalAmount = roundMoney(weightGb * applicablePrice(unitOfMeasure, pricePerGb965, pricePerGb999));
+            fields.totalAmount = roundMoney(weightGb * price);
         }
 
         return yield* repo.updateTransaction(transaction.id, fields);

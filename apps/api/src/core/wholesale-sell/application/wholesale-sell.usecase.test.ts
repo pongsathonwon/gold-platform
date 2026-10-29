@@ -57,6 +57,7 @@ vi.mock("../../../infrastructure/quantity.js", async () => {
 let repoState: ReturnType<typeof makeFakeSellRepo>["state"];
 
 const { decrementSplit, reverseDecrement } = await import("../../inventory/application/inventory.usecase.js");
+const { resolveQuantity } = await import("../../../infrastructure/quantity.js");
 const { advanceStatus, createTransaction, updateTransaction } = await import("./wholesale-sell.usecase.js");
 
 function given(overrides: Partial<WholeSellTransactionShape> = {}) {
@@ -240,7 +241,7 @@ describe("the picked business date and the insert timestamp", () => {
         purityId: "965",
         productTypeId: "BAR",
         weight: 12,
-        pricePerGb965: 48250,
+        pricePerGb: 48250,
         recordedBy: "tester",
     };
 
@@ -271,5 +272,56 @@ describe("the picked business date and the insert timestamp", () => {
 
         expect(updated.transactionDate).toBe("2026-06-11");
         expect(updated.settlementPeriod).toBe("2026-W23");
+    });
+});
+
+// The mirror of the buy suite's pricing coverage: the typed price is the quote at the purity of
+// the gold being sold, and the other quote is derived from it.
+describe("the entered price is the quote at the item's own purity", () => {
+
+    const RATIO = 99.9 / 96.5;
+
+    const createReq = {
+        supplierId: "11111111-1111-1111-1111-111111111111",
+        productTypeId: "BAR",
+        recordedBy: "tester",
+    };
+
+    const as999 = () => vi.mocked(resolveQuantity).mockReturnValueOnce(
+        Effect.succeed({ weightGb: 65.6, weightGm: 1000, conversionFactor: 15.244, unitOfMeasure: "g" as const }),
+    );
+
+    it("books a 99.9% deal at exactly the typed 99.9% price", async () => {
+        given();
+        as999();
+        const created = await expectSuccess(createTransaction({
+            ...createReq, purityId: "999", weight: 1, pricePerGb: 1035,
+        }));
+
+        expect(created.pricePerGb999).toBe(1035);
+        expect(created.pricePerGb965).toBeCloseTo(1035 / RATIO, 2);
+        expect(created.totalAmount).toBeCloseTo(65.6 * 1035, 2);
+    });
+
+    it("books a 96.5% deal at the typed 96.5% price and derives the 99.9% quote above it", async () => {
+        given();
+        const created = await expectSuccess(createTransaction({
+            ...createReq, purityId: "965", weight: 12, pricePerGb: 1000,
+        }));
+
+        expect(created.pricePerGb965).toBe(1000);
+        expect(created.pricePerGb999).toBeCloseTo(1000 * RATIO, 2);
+        expect(created.totalAmount).toBeCloseTo(12 * 1000, 2);
+    });
+
+    it("retypes a 99.9% deal's price as the 99.9% quote on edit", async () => {
+        const t = given({ currentStatus: "CREATED", purityId: "999" });
+        as999();
+        const updated = await expectSuccess(updateTransaction({
+            transactionId: t.id, pricePerGb: 1035, updatedBy: "tester",
+        }));
+
+        expect(updated.pricePerGb999).toBe(1035);
+        expect(updated.totalAmount).toBeCloseTo(65.6 * 1035, 2);
     });
 });

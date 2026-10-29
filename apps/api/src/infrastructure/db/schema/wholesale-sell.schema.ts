@@ -57,12 +57,12 @@ export const wholeSellTransactions = pgTable('whole_sell_transactions', {
     conversionFactor: factor().notNull(), // GB * factor = GM, snapshotted from unit_conversions
 
     // both quotes are recorded on every transaction whatever the item's purity. The operator
-    // enters only the 96.5% one; the 99.9% one is derived from it by the purity ratio.
-    // the 96.5% quote keeps its original physical column name (price_per_gb) — it was always
-    // this quote, the 965 suffix just makes that explicit now that a second one exists
+    // enters the one at the item's own purity; the other is derived by the purity ratio.
+    // the 96.5% quote keeps its original physical column name (price_per_gb); the 965 suffix
+    // makes the meaning explicit now that a second one exists
     pricePerGb965: money('price_per_gb').notNull(),
     pricePerGb999: money('price_per_gb_999').notNull(),
-    totalAmount: money().notNull(), // agreedWeightGb * the purity-matched price
+    totalAmount: money().notNull(), // agreedWeightGb * the entered (purity-matched) price
 
     // The weight the buyer contests, recorded when a shipped deal is moved to DISPUTED. Packing
     // records nothing here — we boxed our own gold from our own vault, so there is no second,

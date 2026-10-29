@@ -125,24 +125,38 @@ against it. It exists so the UI can tell an operator how long their order stays 
 
 ## 3. Pricing — One Entered Price, One Derived
 
-Gold is quoted per **gold baht (บาททอง)**. The operator enters exactly one number: the **96.5%
-quote**. The 99.9% quote is arithmetic off it and is derived server-side:
+Gold is quoted per **gold baht (บาททอง)**. The operator enters exactly one number, `pricePerGb`:
+the quote **at the purity of the item being ordered**. A 96.5% order is typed at the 96.5% board
+price, a 99.9% order at the 99.9% board price — the number the deal was actually struck at, never
+the other purity's. The other quote is arithmetic off it and is derived server-side:
 
 ```
-pricePerGb999 = pricePerGb965 × (99.9 / 96.5)
+pricePerGb999 = pricePerGb965 × (99.9 / 96.5)        (entered 96.5%, derived 99.9%)
+pricePerGb965 = pricePerGb999 ÷ (99.9 / 96.5)        (entered 99.9%, derived 96.5%)
 ```
 
-Both are stored on every transaction whatever the item's purity, and the item's own purity selects
-which one drives the amount:
+Both are stored on every transaction whatever the item's purity. The amount always multiplies the
+**entered** price, which is the column at the item's own purity:
 
-| Purity | `unitOfMeasure` | Price used | Amount |
-|---|---|---|---|
-| 96.5% | `gb` | `pricePerGb965` | `weightGb × pricePerGb965` |
-| 99.9% | `g` | `pricePerGb999` | `weightGb × pricePerGb999` |
+| Purity | `unitOfMeasure` | Entered price lands on | Derived | Amount |
+|---|---|---|---|---|
+| 96.5% | `gb` | `pricePerGb965` | `pricePerGb999` | `weightGb × pricePerGb965` |
+| 99.9% | `g` | `pricePerGb999` | `pricePerGb965` | `weightGb × pricePerGb999` |
 
-`createWholeBuySchema` does not accept `pricePerGb999` at all — two independently-entered prices
-could disagree, a derived one cannot. `derivePricePerGb999()` in `@gold-platform/types` is the
-single implementation, used by the server to store it and by the web form to preview it.
+`createWholeBuySchema` accepts one price and no purity-suffixed field — two independently-entered
+prices could disagree, a derived one cannot. `quotePurities()` in `@gold-platform/types` is the
+single implementation, used by the server to store both and by the web form to preview the derived
+one.
+
+**Why the entered price follows the purity.** Until this rule the one field was always read as the
+96.5% quote and a 99.9% order was marked up from it by the ratio. An operator entering a 99.9% deal
+types the 99.9% price — that is the only number on the dealer's board for that gold — so the markup
+was applied twice and every 99.9% order was booked 3.5% above what was agreed. 99.9% rows created
+before this change carry that overstated `pricePerGb999` and `totalAmount`, and need a one-off
+correction: the price actually typed is on `pricePerGb965`.
+
+On `PATCH`, a purity change without a retyped price keeps the stored quote *at the new purity* —
+the one already derived for it — so the amount moves with the purity.
 
 ---
 
@@ -310,7 +324,8 @@ the order being typed in is.
 
 `whole_buy_transactions` — one row per item. `price_per_gb` is the 96.5% quote (the column keeps
 its original name; the `pricePerGb965` field name just makes the meaning explicit),
-`price_per_gb_999` the derived 99.9% one. `actual_weight_gb` / `actual_weight_gm` / `actual_amount`
+`price_per_gb_999` the 99.9% one. Whichever matches the item's purity is the entered price and the
+other is derived. `actual_weight_gb` / `actual_weight_gm` / `actual_amount`
 hold an **outstanding discrepancy** only: written on a move into `DISPUTED`, cleared again if the
 shipment is later accepted. Null therefore always means "nobody is arguing".
 

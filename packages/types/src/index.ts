@@ -465,13 +465,43 @@ export const WHOLE_BUY_RETURN_STATUS = 'RETURNED' satisfies WholeBuyStatusValue
 export const WHOLE_BUY_EXCLUDED_FROM_TOTALS: readonly WholeBuyStatusValue[] =
   ['CANCELLED', 'REJECTED', 'RETURNED', 'REFUNDED', 'WRITTEN_OFF']
 
-// The operator enters exactly one price: the 96.5% quote per gold baht. The 99.9% quote is
-// pure arithmetic off it, so the server derives and stores it rather than accepting it —
-// two independently-entered prices could disagree, a derived one cannot.
+/**
+ * The operator enters exactly one price: the quote per gold baht **at the purity of the item they
+ * are entering**. A 96.5% order is typed at the 96.5% price, a 99.9% order at the 99.9% price —
+ * the number on the dealer's board for that gold, never the other purity's.
+ *
+ * The other quote is pure arithmetic off it, so the server derives and stores it rather than
+ * accepting it: two independently-entered prices could disagree, a derived one cannot.
+ *
+ * This used to read the entered number as the 96.5% quote whatever the item's purity, and mark a
+ * 99.9% order up by the ratio from there. An operator who typed the real 99.9% price — the only
+ * one a 99.9% deal is ever struck at — got a total 3.5% above what was agreed.
+ */
 export const PURITY_RATIO_999_TO_965 = 99.9 / 96.5
 
 export const derivePricePerGb999 = (pricePerGb965: number) =>
   roundMoney(pricePerGb965 * PURITY_RATIO_999_TO_965)
+
+export const derivePricePerGb965 = (pricePerGb999: number) =>
+  roundMoney(pricePerGb999 / PURITY_RATIO_999_TO_965)
+
+export interface PurityQuotes {
+  pricePerGb965: number
+  pricePerGb999: number
+  /** The entered price, untouched — the one the item's own amount is computed from. */
+  price: number
+}
+
+/**
+ * Both stored quotes from the one entered price. `investmentGrade` is whether the item is 99.9%
+ * (the kilogram purity, `unitOfMeasure 'g'`); that purity's quote is the entered one and the
+ * other is derived. The entered side is never rounded or recomputed — it is what the operator
+ * agreed to, and the amount must multiply exactly that.
+ */
+export const quotePurities = (pricePerGb: number, investmentGrade: boolean): PurityQuotes =>
+  investmentGrade
+    ? { pricePerGb965: derivePricePerGb965(pricePerGb), pricePerGb999: pricePerGb, price: pricePerGb }
+    : { pricePerGb965: pricePerGb, pricePerGb999: derivePricePerGb999(pricePerGb), price: pricePerGb }
 
 // No brand here. What stamp the gold carries is not known when the order is placed — it is what
 // physically turns up, and it can be a mix. Brand is recorded on the transition that moves stock
@@ -482,9 +512,10 @@ export const createWholeBuySchema = z.object({
   productTypeId: z.string().min(1),
   // in the unit product_type_purities defines for this pairing (kg or gold baht)
   weight: z.number().int().positive(),
-  // the only price the operator enters. The 99.9% quote is derived from it server-side;
-  // both end up stored, and the item's purity decides which one drives the amount.
-  pricePerGb965: z.number().positive(),
+  // the only price the operator enters, per gold baht **at this item's purity**. The other
+  // purity's quote is derived from it server-side (`quotePurities`); both end up stored, and the
+  // amount is always weight × this entered price.
+  pricePerGb: z.number().positive(),
   // The day the order was actually placed, which on day one is routinely not the day it is being
   // typed in. Omit and the server files it under today. **This is what the settlement period is
   // derived from** — backdating that did not move the period would be decoration.
@@ -631,8 +662,8 @@ export const WHOLE_SELL_RETURN_STATUS = 'RETURNED' satisfies WholeSellStatusValu
 export const WHOLE_SELL_EXCLUDED_FROM_TOTALS: readonly WholeSellStatusValue[] =
   ['CANCELLED', 'REJECTED', 'RETURNED']
 
-// Same one-price rule as wholesale-buy: the operator enters the 96.5% quote per gold baht and
-// the server derives the 99.9% one with `derivePricePerGb999()`.
+// Same one-price rule as wholesale-buy: the operator enters the quote per gold baht at the item's
+// own purity and the server derives the other one with `quotePurities()`.
 // No brand here either, and for the mirror-image reason: which stamps we hand over is decided
 // when the vault is opened and the box is packed, out of whatever is actually on the shelf.
 export const createWholeSellSchema = z.object({
@@ -641,9 +672,9 @@ export const createWholeSellSchema = z.object({
   productTypeId: z.string().min(1),
   // in the unit product_type_purities defines for this pairing (kg or gold baht)
   weight: z.number().int().positive(),
-  // the only price the operator enters. The 99.9% quote is derived from it server-side;
-  // both end up stored, and the item's purity decides which one drives the amount.
-  pricePerGb965: z.number().positive(),
+  // the only price the operator enters, per gold baht at this item's purity. The other purity's
+  // quote is derived server-side; both end up stored, and the amount is weight × this price.
+  pricePerGb: z.number().positive(),
   // as on the buy side: the day the deal was struck, defaulting to today, and the value the
   // settlement period is derived from
   transactionDate: businessDateSchema.optional(),

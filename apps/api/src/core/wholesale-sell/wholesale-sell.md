@@ -155,20 +155,28 @@ Null on those columns therefore always means "nobody is arguing".
 
 ## 4. Pricing — One Entered Price, One Derived
 
-Same rule as wholesale-buy. The operator enters exactly one number: the **96.5% quote** per gold
-baht. The 99.9% quote is arithmetic off it and is derived server-side:
+Same rule as wholesale-buy. The operator enters exactly one number, `pricePerGb`: the quote per
+gold baht **at the purity of the item being sold** — a 99.9% deal is typed at the 99.9% price, a
+96.5% deal at the 96.5% one. The other quote is arithmetic off it and is derived server-side via
+`quotePurities()`:
 
 ```
-pricePerGb999 = pricePerGb965 × (99.9 / 96.5)
+pricePerGb999 = pricePerGb965 × (99.9 / 96.5)        (entered 96.5%, derived 99.9%)
+pricePerGb965 = pricePerGb999 ÷ (99.9 / 96.5)        (entered 99.9%, derived 96.5%)
 ```
 
-| Purity | `unitOfMeasure` | Price used | Amount |
-|---|---|---|---|
-| 96.5% | `gb` | `pricePerGb965` | `weightGb × pricePerGb965` |
-| 99.9% | `g` | `pricePerGb999` | `weightGb × pricePerGb999` |
+| Purity | `unitOfMeasure` | Entered price lands on | Derived | Amount |
+|---|---|---|---|---|
+| 96.5% | `gb` | `pricePerGb965` | `pricePerGb999` | `weightGb × pricePerGb965` |
+| 99.9% | `g` | `pricePerGb999` | `pricePerGb965` | `weightGb × pricePerGb999` |
 
-`createWholeSellSchema` does not accept `pricePerGb999` at all — two independently-entered prices
-could disagree, a derived one cannot.
+`createWholeSellSchema` accepts one price and no purity-suffixed field — two independently-entered
+prices could disagree, a derived one cannot. The contested-weight path on `DISPUTED` reprices at
+the stored quote for the item's purity, which is the entered one.
+
+Before this rule the field was always read as the 96.5% quote and 99.9% deals were marked up from
+it, so a 99.9% deal typed at its real price was booked 3.5% high. See wholesale-buy §3 for the
+correction note on rows created before the change.
 
 `totalAmount` is the **sale price** — revenue. It is not the cost basis removed from stock; that
 comes from the pool's live WAC at decrement time. The margin between them is the period's business
@@ -266,7 +274,8 @@ date re-derives it, and is accepted only while the transaction is still `CREATED
 ## 9. Tables
 
 `whole_sell_transactions` — one row per item. `price_per_gb` is the 96.5% quote,
-`price_per_gb_999` the derived one. `actual_weight_gb` / `actual_weight_gm` / `actual_amount` hold
+`price_per_gb_999` the 99.9% one; whichever matches the item's purity was entered, the other is
+derived. `actual_weight_gb` / `actual_weight_gm` / `actual_amount` hold
 **the buyer's contested weight** only, set on a `DISPUTED` move. Null means nobody is arguing.
 
 `settled_amount` — what the buyer actually paid, when it differed from `total_amount`. Null means
