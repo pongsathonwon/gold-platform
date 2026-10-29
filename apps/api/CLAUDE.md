@@ -201,10 +201,12 @@ CREATED ─┬─> CONFIRMED ─┬─> PAID ─┬─> RECEIVED ─┬─> STOC
   that is one operator action and BU wants it to stay one. It takes no weight. Both status rows are
   still written, so splitting the steps later needs no migration. This is deliberately *not*
   mirrored on the sell side — see below.
-- **One price in, two stored.** The operator enters `pricePerGb965` only; the server derives
-  `pricePerGb999 = 965 × 99.9/96.5` via the shared `derivePricePerGb999()`. The create schema does
-  not accept the 99.9% quote — two typed prices could disagree, a derived one cannot. The item's
-  purity picks which drives `totalAmount`.
+- **One price in, two stored.** The operator enters `pricePerGb` only — the quote **at the item's
+  own purity** (a 99.9% order is typed at the 99.9% price, 96.5% at the 96.5% one). The server
+  derives the other via the shared `quotePurities()` (`999 = 965 × 99.9/96.5`, and the inverse)
+  and stores both; `totalAmount` always multiplies the entered price. The create schema takes no
+  purity-suffixed price — two typed prices could disagree, a derived one cannot. The field used to
+  be read as the 96.5% quote whatever the purity, which booked every 99.9% order 3.5% high.
 
 The transition map is `WHOLE_BUY_TRANSITIONS` in `@gold-platform/types`, shared with the web app so
 the UI offers exactly the moves the API accepts; the port re-types it against the DB enum, so any
@@ -228,8 +230,8 @@ decrement on entering PACKED · reversed on entering RETURNED
 ```
 
 Everything structural is shared with buy — two tables, append-only status log, note required on
-every failure branch, bulk `confirm-all` sweep as the edit lock, one entered price with the 99.9%
-quote derived, two goods states behind one endpoint. **The real difference is that a sell's two
+every failure branch, bulk `confirm-all` sweep as the edit lock, one entered price at the item's
+purity with the other quote derived, two goods states behind one endpoint. **The real difference is that a sell's two
 irreversible events happen in the opposite order**: we hand over gold first and get paid after.
 
 - **Inventory decrements on entering `PACKED`** — when gold leaves the vault to be boxed, not when

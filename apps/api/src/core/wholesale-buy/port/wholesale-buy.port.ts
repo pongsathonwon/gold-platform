@@ -100,8 +100,9 @@ export interface CreateTransactionReq {
     purityId: string
     productTypeId: string
     weight: number
-    // the only price supplied; the 99.9% quote is derived from it
-    pricePerGb965: number
+    // the only price supplied, per gold baht at the item's own purity; the other quote is
+    // derived from it
+    pricePerGb: number
     // `YYYY-MM-DD`, the day the order was placed. Optional: omitted means today, which is what a
     // shop working in real time sends. What it is *not* is the insert timestamp — that is
     // recordedAt, written from the server clock and never accepted from a caller.
@@ -116,7 +117,7 @@ export interface UpdateTransactionReq {
     purityId?: string
     productTypeId?: string
     weight?: number
-    pricePerGb965?: number
+    pricePerGb?: number
     // correcting it re-derives the settlement period; only accepted while still CREATED, like
     // every other field here
     transactionDate?: string

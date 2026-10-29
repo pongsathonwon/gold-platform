@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Container, Typography, Card, CardContent, Button, Box, Alert,
 } from "@mui/material";
-import { createWholeBuySchema, derivePricePerGb999, todayBusinessDate } from "@gold-platform/types";
+import { createWholeBuySchema, quotePurities, todayBusinessDate } from "@gold-platform/types";
 import { useProductTypePurities, useProductTypes, useSuppliers } from "../hooks/useMasterData";
 import { useCreateWholesaleBuy } from "../hooks/useWholesaleBuyMutations";
 import { useToast } from "../components/ToastContext";
@@ -19,7 +19,7 @@ interface BuyValues extends Record<string, string> {
   productTypeId: string;
   purityId: string;
   weight: string;
-  pricePerGb965: string;
+  pricePerGb: string;
   notes: string;
 }
 
@@ -32,7 +32,7 @@ const initialValues: BuyValues = {
   productTypeId: "",
   purityId: "",
   weight: "",
-  pricePerGb965: "",
+  pricePerGb: "",
   notes: "",
 };
 
@@ -109,17 +109,26 @@ export function WholesaleBuyCreatePage() {
       },
     },
     {
-      // One price only. The 99.9% quote is arithmetic off this one, so the server derives it —
-      // two separately-typed prices could disagree, a derived one cannot. For a 99.9% order the
-      // helper text shows what it works out to, so the operator can sanity-check the conversion.
-      name: "pricePerGb965",
-      label: "ราคาต่อบาททอง (96.5%)",
+      // One price only, and it is the price *of the gold being ordered*: a 99.9% order is typed at
+      // the 99.9% quote, a 96.5% order at the 96.5% one. The other quote is arithmetic off it, so
+      // the server derives it — two separately-typed prices could disagree, a derived one cannot.
+      // The label names the purity so the operator never has to guess which board price to type,
+      // and the helper text shows the derived other quote as a sanity check.
+      name: "pricePerGb",
+      label: (v) => {
+        const percent = matchingRule(v)?.percent;
+        return percent ? `ราคาต่อบาททอง (${percent}%)` : "ราคาต่อบาททอง";
+      },
       kind: "number",
       required: true,
       helperText: (v) => {
-        const base = Number(v.pricePerGb965);
-        if (matchingRule(v)?.percent !== 99.9 || !(base > 0)) return undefined;
-        return `ทอง 99.9% = ${derivePricePerGb999(base).toLocaleString("en-US")} บาท/บาททอง`;
+        const percent = matchingRule(v)?.percent;
+        const entered = Number(v.pricePerGb);
+        if (!percent || !(entered > 0)) return undefined;
+        const is999 = percent === 99.9;
+        const quotes = quotePurities(entered, is999);
+        const other = is999 ? quotes.pricePerGb965 : quotes.pricePerGb999;
+        return `เทียบเท่าทอง ${is999 ? "96.5" : "99.9"}% = ${other.toLocaleString("en-US")} บาท/บาททอง`;
       },
     },
     {
@@ -138,7 +147,7 @@ export function WholesaleBuyCreatePage() {
       purityId: values.purityId,
       productTypeId: values.productTypeId,
       weight: Number(values.weight),
-      pricePerGb965: Number(values.pricePerGb965),
+      pricePerGb: Number(values.pricePerGb),
       transactionDate: values.transactionDate,
       notes: values.notes || undefined,
     };

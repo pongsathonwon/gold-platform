@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   WHOLE_BUY_EXCLUDED_FROM_TOTALS, WHOLE_BUY_STATUSES,
-  WHOLE_BUY_TRANSITIONS, derivePricePerGb999,
+  WHOLE_BUY_TRANSITIONS, derivePricePerGb965, derivePricePerGb999, quotePurities,
 } from "@gold-platform/types";
 import {
   countsTowardTotal, formatWeight, happyNext, isTerminal, nextStatuses, requiresNote, statusLabel,
@@ -205,6 +205,24 @@ describe("purity price derivation", () => {
 
   it("always quotes 99.9% above 96.5%", () => {
     expect(derivePricePerGb999(40000)).toBeGreaterThan(40000);
+  });
+
+  it("derives the 96.5% quote back down from a 99.9% one", () => {
+    expect(derivePricePerGb965(1035)).toBeCloseTo(1035 / (99.9 / 96.5), 2);
+  });
+
+  // the operator's number is the quote at the item's own purity and is never recomputed — the
+  // form used to read it as the 96.5% quote whatever the item, marking 99.9% orders up twice
+  it("keeps the entered price untouched on the entered purity and derives the other", () => {
+    const at999 = quotePurities(1035, true);
+    expect(at999.price).toBe(1035);
+    expect(at999.pricePerGb999).toBe(1035);
+    expect(at999.pricePerGb965).toBeCloseTo(999.77, 2);
+
+    const at965 = quotePurities(1000, false);
+    expect(at965.price).toBe(1000);
+    expect(at965.pricePerGb965).toBe(1000);
+    expect(at965.pricePerGb999).toBeCloseTo(1035.23, 2);
   });
 });
 

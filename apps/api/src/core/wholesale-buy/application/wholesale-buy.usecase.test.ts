@@ -65,6 +65,7 @@ vi.mock("../../../infrastructure/quantity.js", async () => {
 let repoState: ReturnType<typeof makeFakeBuyRepo>["state"];
 
 const { incrementSplit } = await import("../../inventory/application/inventory.usecase.js");
+const { resolveQuantity } = await import("../../../infrastructure/quantity.js");
 const {
     advanceStatus, createTransaction, receiveAndStock, updateTransaction,
 } = await import("./wholesale-buy.usecase.js");
@@ -290,7 +291,7 @@ describe("the picked business date and the insert timestamp", () => {
         purityId: "965",
         productTypeId: "BAR",
         weight: 12,
-        pricePerGb965: 48250,
+        pricePerGb: 48250,
         recordedBy: "tester",
     };
 
@@ -350,5 +351,77 @@ describe("the picked business date and the insert timestamp", () => {
         // confirmation is the lock on every field, and the period assignment is what it protects
         expect(error).toMatchObject({ _tag: "WholeBuyNotEditableError", currentStatus: "CONFIRMED" });
         expect(repoState.transaction.settlementPeriod).toBe("2026-W24");
+    });
+});
+
+/**
+ * The one price the operator types is the quote at the purity of the gold being ordered. This
+ * used to be read as the 96.5% quote whatever the item, so a 99.9% order typed at its real price
+ * was marked up by the ratio a second time and booked 3.5% above what was agreed.
+ */
+describe("the entered price is the quote at the item's own purity", () => {
+
+    const RATIO = 99.9 / 96.5;
+
+    const createReq = {
+        supplierId: "11111111-1111-1111-1111-111111111111",
+        productTypeId: "BAR",
+        recordedBy: "tester",
+    };
+
+    // the resolver is what says which purity an item is, via its unit: 'g' is the 99.9% kilogram
+    // purity, 'gb' is 96.5%
+    const as999 = () => vi.mocked(resolveQuantity).mockReturnValueOnce(
+        Effect.succeed({ weightGb: 65.6, weightGm: 1000, conversionFactor: 15.244, unitOfMeasure: "g" as const }),
+    );
+
+    it("books a 99.9% order at exactly the typed 99.9% price", async () => {
+        given();
+        as999();
+        const created = await expectSuccess(createTransaction({
+            ...createReq, purityId: "999", weight: 1, pricePerGb: 1035,
+        }));
+
+        // the typed figure is the 99.9% quote and the amount multiplies it, untouched
+        expect(created.pricePerGb999).toBe(1035);
+        expect(created.totalAmount).toBeCloseTo(65.6 * 1035, 2);
+        // the 96.5% quote is the derived one, below it by the ratio
+        expect(created.pricePerGb965).toBeCloseTo(1035 / RATIO, 2);
+    });
+
+    it("books a 96.5% order at the typed 96.5% price and derives the 99.9% quote above it", async () => {
+        given();
+        const created = await expectSuccess(createTransaction({
+            ...createReq, purityId: "965", weight: 12, pricePerGb: 1000,
+        }));
+
+        expect(created.pricePerGb965).toBe(1000);
+        expect(created.pricePerGb999).toBeCloseTo(1000 * RATIO, 2);
+        expect(created.totalAmount).toBeCloseTo(12 * 1000, 2);
+    });
+
+    it("retypes a 99.9% order's price as the 99.9% quote on edit", async () => {
+        const t = given({ currentStatus: "CREATED", purityId: "999" });
+        as999();
+        const updated = await expectSuccess(updateTransaction({
+            transactionId: t.id, pricePerGb: 1035, updatedBy: "tester",
+        }));
+
+        expect(updated.pricePerGb999).toBe(1035);
+        expect(updated.pricePerGb965).toBeCloseTo(1035 / RATIO, 2);
+        expect(updated.totalAmount).toBeCloseTo(65.6 * 1035, 2);
+    });
+
+    it("reprices at the stored quote for the new purity when only the purity changes", async () => {
+        // the fixture holds 48,250 at 96.5% and 49,950 at 99.9%; switching the order to 99.9%
+        // without retyping a price keeps the 99.9% quote it already carries
+        const t = given({ currentStatus: "CREATED", purityId: "965" });
+        as999();
+        const updated = await expectSuccess(updateTransaction({
+            transactionId: t.id, purityId: "999", updatedBy: "tester",
+        }));
+
+        expect(updated.pricePerGb999).toBe(49950);
+        expect(updated.totalAmount).toBeCloseTo(65.6 * 49950, 2);
     });
 });

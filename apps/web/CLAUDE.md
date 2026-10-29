@@ -290,7 +290,7 @@ Three pages plus one shared helper:
 | File | Role |
 | --- | --- |
 | `pages/WholesaleBuyListPage.tsx` | split into `ทอง 96.5%` (บาท) and `ทอง 99.9%` (กก.) sections like the inventory pages, each with its own `รวม` footer. Date-window/status/supplier filters. Shows the delivered weight, with the ordered one beside it when they differ |
-| `pages/WholesaleBuyCreatePage.tsx` | create form on the shared `useDynamicForm` / `DynamicFormField` pattern. **One price field only** — the 96.5% quote; `derivePricePerGb999()` previews the 99.9% figure in helper text, and the server does the real conversion. **No brand field** — see below |
+| `pages/WholesaleBuyCreatePage.tsx` | create form on the shared `useDynamicForm` / `DynamicFormField` pattern. **One price field only** — `pricePerGb`, the quote **at the selected purity** (the label names it: a 99.9% order is typed at the 99.9% price); `quotePurities()` previews the derived other-purity figure in helper text, and the server does the real conversion. **No brand field** — see below |
 | `pages/WholesaleBuyDetailPage.tsx` | summary, status timeline, action buttons + confirm dialog |
 | `utils/wholeBuyStatus.ts` | chip colours, Thai labels, `nextStatuses()`, `requiresNote()` |
 | `utils/format.ts` | `formatNumber()` / `formatWeight()` / `formatBusinessDate()` — domain-agnostic, shared with wholesale-sell and re-exported from both status utils |
