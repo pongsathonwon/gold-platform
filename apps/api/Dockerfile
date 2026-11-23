@@ -36,7 +36,7 @@ FROM node:22-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Never as root. Cloud Run does not require it, but a container that does not need write access to
+# Never as root. Nothing requires it, and a container that does not need write access to
 # its own filesystem should not have it either.
 RUN addgroup -S app && adduser -S app -G app
 
@@ -48,7 +48,7 @@ COPY --from=build --chown=app:app /repo/apps/api/drizzle ./drizzle
 
 USER app
 
-# Documentation only. Cloud Run injects PORT and the server reads it; it is not fixed at 3000.
+# Documentation only. deploy/compose.yml sets PORT=3000 and the server reads it.
 EXPOSE 3000
 
 CMD ["node", "dist/index.js"]

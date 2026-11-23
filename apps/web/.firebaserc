@@ -1,6 +1,0 @@
-{
-  "//": "Hosting lives in the same GCP project as the API and Cloud SQL -- there is no separate Firebase project, and the goldoffice site is registered here. Pinned in the repo because the Firebase CLI otherwise takes the project from machine-global state (~/.config, per directory), which a fresh clone has no way to know and which has already sent one deploy at the wrong project. The site id itself is in firebase.json.",
-  "projects": {
-    "default": "project-6ae60f7c-b11d-492a-bf9"
-  }
-}

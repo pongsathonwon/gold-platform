@@ -1,0 +1,6 @@
+# Run on the Linux droplet: CRLF here breaks the shebang ("bash\r: not found") and the nginx/compose parsers.
+*.sh          text eol=lf
+Jenkinsfile   text eol=lf
+*.Jenkinsfile text eol=lf
+deploy/**     text eol=lf
+Dockerfile    text eol=lf
