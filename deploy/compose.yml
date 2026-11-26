@@ -1,0 +1,95 @@
+# Production stack on the DigitalOcean droplet (Jenkins agent `g99`). See docs/DEPLOY.md.
+#
+# Do not run `docker compose` on this file directly: go through ./gold.sh, which fixes the project
+# name and supplies the env file (secrets) and the nginx-proxy-manager network. The Jenkinsfile copies
+# this file to /home/dev/jenkins-deploy/prod/gold-platform/ on every deploy; edit it in git, not there.
+#
+# No service publishes a port. Docker's published ports bypass host firewalls such as ufw, so a
+# published port should be assumed to be a port on the internet. nginx-proxy-manager reaches `web`
+# over its own network instead, and only `web` is on that network.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gold_app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the env file}
+      POSTGRES_DB: gold_platform
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gold_app -d gold_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+
+  api:
+    image: gold-platform-api:${IMAGE_TAG:-current}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: postgres://gold_app:${POSTGRES_PASSWORD:?}@postgres:5432/gold_platform
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in the env file}
+      # The SPA and the API share one origin (web proxies /api/), so this is that origin.
+      CORS_ORIGIN: ${PUBLIC_URL:?set PUBLIC_URL in the env file}
+      WHOLESALE_BUY_AUTO_CONFIRM_HOUR: ${WHOLESALE_BUY_AUTO_CONFIRM_HOUR:-0}
+      WHOLESALE_SELL_AUTO_CONFIRM_HOUR: ${WHOLESALE_SELL_AUTO_CONFIRM_HOUR:-0}
+      # No TZ, on purpose: the container runs in UTC and every business date is computed against
+      # Asia/Bangkok explicitly. docs/DEPLOY.md, "Do not set TZ".
+    networks:
+      backend:
+        # web proxies to this name. Unique on purpose: web also sits on the shared proxy network,
+        # where a plain `api` could resolve to somebody else's container.
+        aliases: [gold-platform-api]
+    healthcheck:
+      # The server refuses to listen until it has proven the database connection, so healthy
+      # here also means the database is reachable.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging: *logging
+
+  web:
+    image: gold-platform-web:${IMAGE_TAG:-current}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      backend: {}
+      proxy:
+        # what the nginx-proxy-manager proxy host forwards to: http://gold-platform-web:80
+        aliases: [gold-platform-web]
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *logging
+
+volumes:
+  pgdata:
+    # Created once by the Jenkinsfile. External so `docker compose down -v` cannot delete the ledger.
+    external: true
+    name: gold-platform-pgdata
+
+networks:
+  backend: {}
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:?run compose through gold.sh, which finds the proxy network}

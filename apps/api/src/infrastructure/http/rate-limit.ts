@@ -95,8 +95,11 @@ export class FailureRateLimiter {
 /**
  * The caller's address, as far as it can be known.
  *
- * Cloud Run appends the connecting address to any `X-Forwarded-For` the caller supplied, so the
- * **last** entry is the one Google wrote and the earlier ones are whatever the client claimed.
+ * nginx-proxy-manager on the droplet appends the connecting address to any `X-Forwarded-For` the
+ * caller supplied, and the SPA's nginx passes that header through unchanged
+ * (deploy/nginx/web.conf), so the **last** entry is the one our proxy wrote and the earlier ones
+ * are whatever the client claimed. Add a proxy hop that appends, or put a CDN in front, and this
+ * becomes that hop's address: one shared bucket for every caller.
  * Reading the first entry — the usual advice, and correct behind a load balancer that overwrites
  * the header — would let an attacker reset their own budget on every request by rotating a spoofed
  * value.
